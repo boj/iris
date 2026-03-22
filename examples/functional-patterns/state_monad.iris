@@ -1,0 +1,59 @@
+-- State Monad Pattern
+-- Thread state through a computation without explicit passing.
+-- A "stateful computation" is a function: State -> (result, State).
+-- We chain them with bind (>>=).
+--
+-- In IRIS, we use tuples (result, state) and higher-order functions.
+
+-- Run a stateful computation with an initial state.
+-- A computation is: state -> (value, new_state)
+let run_state comp init_state : (State -> Tuple) -> State -> Tuple [cost: Unknown] =
+  comp init_state
+
+-- Return: wrap a value in the state monad (state passes through unchanged).
+let state_return val state : Int -> State -> Tuple [cost: Const(1)] =
+  (val, state)
+
+-- Bind: chain two stateful computations.
+-- comp1: state -> (val1, state2)
+-- f: val1 -> (state -> (val2, state3))
+let state_bind comp1 f state : (State -> Tuple) -> (Int -> State -> Tuple) -> State -> Tuple [cost: Unknown] =
+  let result1 = comp1 state in
+  let val1 = result1.0 in
+  let state2 = result1.1 in
+  f val1 state2
+
+-- Get: read the current state.
+let state_get state : State -> Tuple [cost: Const(1)] =
+  (state, state)
+
+-- Put: replace the entire state.
+let state_put new_state old_state : State -> State -> Tuple [cost: Const(1)] =
+  (0, new_state)
+
+-- Modify: apply a function to the state.
+let state_modify f state : (State -> State) -> State -> Tuple [cost: Unknown] =
+  (0, f state)
+
+-- Example: a counter that tracks how many operations were performed.
+-- State is a map with "count" key.
+
+-- Increment the counter.
+let inc_counter state : State -> Tuple [cost: Const(2)] =
+  let count = map_get state "count" in
+  let new_count = count + 1 in
+  (new_count, map_insert state "count" new_count)
+
+-- Get the counter value.
+let get_counter state : State -> Tuple [cost: Const(1)] =
+  let count = map_get state "count" in
+  (count, state)
+
+-- Test: run a sequence of counter operations
+let test_state_monad x : Int -> Tuple =
+  let init = map_insert (state_empty) "count" 0 in
+  let s1 = inc_counter init in
+  let s2 = inc_counter s1.1 in
+  let s3 = inc_counter s2.1 in
+  let final_count = get_counter s3.1 in
+  (s1.0, s2.0, s3.0, final_count.0)

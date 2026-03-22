@@ -1,0 +1,153 @@
+-- Match lowering: convert Match nodes to predicated MaskGen + Select chains (Compiler Pass 3)
+--
+-- 2-arm Match  -> single MaskGen(VCMP_EQ with tag) + Select(VBLEND)
+-- N-arm Match  -> cascading priority-encoded MaskGen + Select chain
+--
+-- Match (kind 4) is replaced by:
+--   MaskGen   -- Prim(VCMP_EQ=0x06) generates a comparison mask
+--   Select    -- Prim(VBLEND=0x09) predicated blend of true/false branches
+--
+-- Max 7 arms per match for Gen1.
+-- Result: graph with no Match nodes remaining.
+--
+-- Strategy:
+--   For each Match node:
+--     1. Get arm count from outgoing edges (children count - 1 for scrutinee)
+--     2. For N > 7 arms: return error sentinel (-1)
+--     3. For 2-arm: single MaskGen + Select pair
+--     4. For N-arm: cascading chain of MaskGen + Select pairs
+--        Process arms in reverse order. Last arm is default (no mask check).
+--        For each arm from N-1 down to 1:
+--          Create MaskGen(VCMP_EQ) with tag index
+--          Create Select(VBLEND) choosing between this arm body and the previous result
+--        The first Select reuses the Match node's ID.
+
+-- Check if a node is a Match node (kind 4)
+let is_match program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 4 then 1 else 0
+
+-- Count Match nodes in a program
+let count_matches program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 4 then acc + 1 else acc)
+    nodes
+
+-- Lower a 2-arm match: create MaskGen + Select
+-- match_id: the Match node to replace
+-- Returns transformed graph
+let lower_2arm_match program match_id : Int -> Int -> Int [cost: Const(10)] =
+  -- Get the match node's children (scrutinee at port 0, arm0 at port 1, arm1 at port 2)
+  let children = graph_outgoing program match_id in
+  -- Create a MaskGen node (Prim with VCMP_EQ opcode = 6)
+  let added_mask = graph_add_node_rt program 0 in
+  let g1 = added_mask.0 in
+  let mask_id = added_mask.1 in
+  let g2 = graph_set_prim_op g1 mask_id 6 in
+  let g3 = g2.0 in
+  let mask_new_id = g2.1 in
+  -- Replace the Match node itself with a Select (Prim with VBLEND opcode = 9)
+  let g4 = graph_set_prim_op g3 match_id 9 in
+  let g5 = g4.0 in
+  let select_id = g4.1 in
+  -- Wire: scrutinee -> MaskGen (port 0)
+  let g6 = if list_len children > 0 then
+    graph_connect g5 mask_new_id (list_nth children 0) 0
+  else g5 in
+  -- Wire: MaskGen -> Select (port 0 = mask)
+  let g7 = graph_connect g6 select_id mask_new_id 0 in
+  -- Arms are already wired from original edges at ports 1 and 2
+  g7
+
+-- Lower an N-arm match (3-7 arms): cascading priority-encoded MaskGen + Select chain
+-- match_id: the Match node to replace
+-- arm_count: number of arms
+-- Returns transformed graph
+let lower_narm_match program match_id arm_count : Int -> Int -> Int -> Int [cost: Const(30)] =
+  let children = graph_outgoing program match_id in
+  -- children[0] = scrutinee, children[1..arm_count] = arm bodies
+  -- Process: arm 0 is the default (last in the cascade).
+  -- Build from the bottom up: start with arm 0 (default result),
+  -- then for each arm i from 1 to arm_count-1, create MaskGen+Select.
+  -- The final Select reuses match_id.
+  --
+  -- We fold from arm index 1 up to arm_count-1, accumulating
+  -- (graph, current_result_id) where current_result_id is the
+  -- node that represents the "else" branch so far.
+  let default_arm = if list_len children > 1 then list_nth children 1 else 0 in
+  let result = fold (program, default_arm)
+    (\state arm_idx ->
+      let g = state.0 in
+      let prev_result = state.1 in
+      if arm_idx < 2 then state  -- skip arm index 0 and 1 (default already used)
+      else if arm_idx > list_len children - 1 then state  -- bounds check
+      else
+        let arm_body = list_nth children arm_idx in
+        -- Create MaskGen (VCMP_EQ with tag = arm_idx - 1)
+        let added_mask = graph_add_node_rt g 0 in
+        let g2 = added_mask.0 in
+        let mask_id = added_mask.1 in
+        let g3 = graph_set_prim_op g2 mask_id 6 in
+        let g4 = g3.0 in
+        let mask_new = g3.1 in
+        -- Wire scrutinee -> MaskGen
+        let g5 = if list_len children > 0 then
+          graph_connect g4 mask_new (list_nth children 0) 0
+        else g4 in
+        -- For the last arm (highest index), reuse the match node's id for Select
+        if arm_idx == arm_count then
+          -- Reuse match_id as the final Select
+          let g6 = graph_set_prim_op g5 match_id 9 in
+          let g7 = g6.0 in
+          let select_id = g6.1 in
+          -- Wire: MaskGen -> Select (port 0)
+          let g8 = graph_connect g7 select_id mask_new 0 in
+          -- Wire: arm body -> Select (port 1 = true branch)
+          let g9 = graph_connect g8 select_id arm_body 1 in
+          -- Wire: prev result -> Select (port 2 = false branch)
+          let g10 = graph_connect g9 select_id prev_result 2 in
+          (g10, select_id)
+        else
+          -- Create a new Select node
+          let added_sel = graph_add_node_rt g5 0 in
+          let g6 = added_sel.0 in
+          let sel_id = added_sel.1 in
+          let g7 = graph_set_prim_op g6 sel_id 9 in
+          let g8 = g7.0 in
+          let sel_new = g7.1 in
+          -- Wire: MaskGen -> Select (port 0)
+          let g9 = graph_connect g8 sel_new mask_new 0 in
+          -- Wire: arm body -> Select (port 1 = true)
+          let g10 = graph_connect g9 sel_new arm_body 1 in
+          -- Wire: prev result -> Select (port 2 = false)
+          let g11 = graph_connect g10 sel_new prev_result 2 in
+          (g11, sel_new))
+    (list_range 2 (arm_count + 1)) in
+  result.0
+
+-- Lower all matches in a program
+-- Iterates over all nodes, lowering each Match found
+-- Returns the transformed program, or -1 if any match has > 7 arms
+let lower_matches program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let match_count = count_matches program in
+  if match_count == 0 then program
+  else
+    fold program
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 4 then
+          -- Determine arm count from outgoing edges
+          let children = graph_outgoing g nid in
+          let arm_count = list_len children - 1 in
+          -- Reject matches with > 7 arms
+          if arm_count > 7 then 0 - 1  -- error sentinel
+          else if arm_count <= 2 then
+            lower_2arm_match g nid
+          else
+            lower_narm_match g nid arm_count
+        else g)
+      nodes

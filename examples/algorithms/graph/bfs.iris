@@ -1,0 +1,48 @@
+-- Breadth-First Search (BFS)
+-- Explore a graph level by level using a queue.
+-- Graph represented as adjacency lists: graph[i] = tuple of neighbor indices.
+
+-- Check if a value exists in a tuple.
+let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =
+  fold false (\found x -> if x == val then true else found) xs
+
+-- BFS from a start node. Returns visited nodes in BFS order.
+-- Uses a tuple as a FIFO queue (dequeue from front, enqueue at back).
+let rec bfs_aux graph queue visited : Tuple -> Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let n = list_len queue in
+  if n == 0 then visited
+  else
+    let node = list_nth queue 0 in           -- dequeue from front
+    let rest_queue = list_drop queue 1 in
+    if contains visited node then
+      bfs_aux graph rest_queue visited
+    else
+      let new_visited = list_append visited node in
+      let neighbors = list_nth graph node in
+      -- Enqueue unvisited neighbors
+      let new_queue = fold rest_queue (\q nb ->
+        if contains new_visited nb then q
+        else list_append q nb
+      ) neighbors in
+      bfs_aux graph new_queue new_visited
+
+let bfs graph start : Tuple -> Int -> Tuple [cost: Unknown] =
+  bfs_aux graph (start,) ()
+
+-- BFS with distance tracking: returns (node, distance) pairs.
+-- FIXME: Returning parallel tuples instead of pairs because IRIS tuples are flat.
+-- A proper tuple-of-tuples or record type would be cleaner here.
+let bfs_distances graph start : Tuple -> Int -> Tuple [cost: Unknown] =
+  let visited = bfs graph start in
+  -- Approximate: BFS order gives us the nodes, but computing exact distances
+  -- requires tracking the level during traversal.
+  visited
+
+-- Test: undirected graph (each edge listed in both directions)
+--   0 -- 1, 0 -- 2
+--   1 -- 3, 2 -- 3
+--   3 -- 4
+let test_bfs x : Int -> Tuple =
+  let graph = ((1, 2), (0, 3), (0, 3), (1, 2, 4), (3,)) in
+  let order = bfs graph 0 in
+  order

@@ -1,0 +1,86 @@
+-- String operations: wrappers and composed string primitives
+--
+-- These functions wrap the built-in string primitives (0xB0-0xC0)
+-- and compose them into higher-level operations.
+
+-- Reverse a string by splitting into chars and folding in reverse order
+let reverse s : Int -> Int [cost: Linear(s)] =
+  let chars = str_chars s in
+  let len = str_len s in
+  fold ""
+    (\acc i ->
+      let ch = str_slice s (len - i - 1) (len - i) in
+      str_concat acc ch)
+    len
+
+-- Repeat a string n times
+let repeat s n : Int -> Int -> Int [cost: Linear(n)] =
+  fold ""
+    (\acc _i -> str_concat acc s)
+    n
+
+-- Pad a string on the left with a given character to reach target length
+let pad_left s target_len pad_char : Int -> Int -> Int -> Int [cost: Linear(target_len)] =
+  let current_len = str_len s in
+  if current_len >= target_len then s
+  else
+    let padding = repeat pad_char (target_len - current_len) in
+    str_concat padding s
+
+-- Pad a string on the right with a given character to reach target length
+let pad_right s target_len pad_char : Int -> Int -> Int -> Int [cost: Linear(target_len)] =
+  let current_len = str_len s in
+  if current_len >= target_len then s
+  else
+    let padding = repeat pad_char (target_len - current_len) in
+    str_concat s padding
+
+-- Count occurrences of a substring in a string.
+-- Splits on needle; N occurrences produce N+1 parts.
+let count_occurrences haystack needle : Int -> Int -> Int [cost: Linear(haystack)] =
+  let parts = str_split haystack needle in
+  list_len parts - 1
+
+-- Replace the first occurrence only (split on needle, rejoin with replacement).
+-- If needle not found (< 2 parts), returns input unchanged.
+-- Otherwise: parts[0] + replacement + rejoin(parts[1..], old_needle).
+let replace_first s old new : Int -> Int -> Int -> Int [cost: Linear(s)] =
+  let parts = str_split s old in
+  let n = list_len parts in
+  if n < 2 then s
+  else
+    let first = list_nth parts 0 in
+    let rest = fold ""
+      (\acc i ->
+        let part = list_nth parts (i + 1) in
+        if i == 0 then part
+        else str_concat (str_concat acc old) part)
+      (n - 1) in
+    str_concat (str_concat first new) rest
+
+-- Check if a string is empty
+let is_empty s : Int -> Int [cost: Const(1)] =
+  if str_len s == 0 then 1 else 0
+
+-- Check if a string is all whitespace
+let is_blank s : Int -> Int [cost: Const(2)] =
+  is_empty (str_trim s)
+
+-- Convert a char code (Int) back to a single-character string.
+-- Uses an ASCII lookup table for printable characters (codes 32-126).
+-- Returns empty string for codes outside this range.
+let char_from_code code : Int -> Int [cost: Const(1)] =
+  let ascii_table = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~" in
+  if code >= 32 then
+    if code <= 126 then
+      str_slice ascii_table (code - 32) (code - 31)
+    else ""
+  else ""
+
+-- Index of first occurrence of needle in haystack (-1 if not found).
+-- Splits on needle; if found, str_len of first part = index.
+let index_of haystack needle : Int -> Int -> Int [cost: Linear(haystack)] =
+  if str_contains haystack needle == 0 then -1
+  else
+    let parts = str_split haystack needle in
+    str_len (list_nth parts 0)

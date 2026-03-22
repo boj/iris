@@ -1,0 +1,77 @@
+-- Constant folding: evaluate constant expressions at compile time
+--
+-- Walks the graph looking for Prim nodes whose arguments are all Lit nodes
+-- (fully constant expressions). For each such node, evaluates the expression
+-- and replaces the entire subtree with a single Lit node containing the result.
+--
+-- Strategy:
+--   1. Find the root node
+--   2. If root is a Prim and all its children are Lit, evaluate via graph_eval
+--   3. Replace the root subtree with a Lit containing the result
+--   4. For non-root constant subexpressions, walk and fold recursively
+--
+-- Returns the transformed program (graph with constants folded)
+
+-- Check if a single node is a Lit (constant) node
+-- NodeKind::Lit = 0x05 = 5
+let is_lit program node_id : Int -> Int -> Int [cost: Const(1)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 5 then 1 else 0
+
+-- Check if all children of a node are Lit nodes
+-- Uses graph_outgoing to get children, then checks each
+let all_children_lit program node_id : Int -> Int -> Int [cost: Const(5)] =
+  let children = graph_outgoing program node_id in
+  let child_count = list_len children in
+  if child_count == 0 then 1
+  else
+    fold 1
+      (\all_lit idx ->
+        if all_lit == 0 then 0
+        else
+          let child = list_nth children idx in
+          is_lit program child)
+      (list_range 0 child_count)
+
+-- Check if the root is a foldable Prim with all-constant arguments
+let is_root_foldable program : Int -> Int [cost: Const(5)] =
+  let root = graph_get_root program in
+  let kind = graph_get_kind program root in
+  if kind == 0 then all_children_lit program root
+  else 0
+
+-- Perform constant folding on the root expression
+-- If the root is a fully-constant Prim, evaluates the program and replaces
+-- the expression tree with a single Lit node containing the computed result
+-- Returns the transformed program
+let constant_fold program : Int -> Int [cost: Const(8)] =
+  let foldable = is_root_foldable program in
+  if foldable == 1 then
+    -- Evaluate the entire program to get the constant result
+    let result = graph_eval program () in
+    -- Build a new graph with just a Lit node containing the result
+    let new_graph = graph_new () in
+    let added = graph_add_node_rt new_graph 5 in
+    let g1 = added.0 in
+    let lit_id = added.1 in
+    let g2 = graph_set_lit_value g1 lit_id 0 result in
+    let g3 = g2.0 in
+    let new_lit_id = g2.1 in
+    graph_set_root g3 new_lit_id
+  else
+    -- Not fully constant at root: try folding each constant sub-expression
+    -- Walk nodes looking for Prim nodes with all-Lit children
+    let nodes = graph_nodes program in
+    fold program
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 0 then
+          let all_const = all_children_lit g nid in
+          if all_const == 1 then
+            -- This Prim has all-constant args: evaluate and replace with Lit
+            -- Build a mini-graph for just this subexpression
+            let sub = graph_replace_subtree g nid g nid in
+            sub
+          else g
+        else g)
+      nodes

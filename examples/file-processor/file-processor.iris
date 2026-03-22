@@ -1,0 +1,42 @@
+-- File Processor
+-- Reads a file, processes each line (counts words, computes statistics),
+-- and writes results to an output file.
+
+-- Count words in a single line by splitting on spaces.
+let count_words line : String -> Int [cost: Linear(line)] =
+  let parts = str_split line " " in
+  fold 0 (\acc part ->
+    if str_len (str_trim part) > 0 then acc + 1 else acc
+  ) parts
+
+-- Count characters in a line (excluding newlines).
+let count_chars line : String -> Int [cost: Const(1)] =
+  str_len line
+
+-- Format a stats line as "Line N: W words, C chars"
+let format_stats line_num words chars : Int -> Int -> Int -> String [cost: Const(5)] =
+  str_concat "Line "
+    (str_concat (int_to_string line_num)
+      (str_concat ": "
+        (str_concat (int_to_string words)
+          (str_concat " words, "
+            (str_concat (int_to_string chars) " chars")))))
+
+-- Process entire file: read, analyze each line, write results.
+let process_file input_path output_path : String -> String -> Int [cost: Unknown] =
+  let h_in = file_open input_path 0 in
+  let content = file_read_bytes h_in 16777216 in
+  let c1 = file_close h_in in
+  let lines = str_split content "\n" in
+  let h_out = file_open output_path 1 in
+  let total_words = fold 0 (\acc line -> acc + count_words line) lines in
+  let total_lines = fold 0 (\acc line -> acc + 1) lines in
+  let total_chars = fold 0 (\acc line -> acc + str_len line) lines in
+  let summary = str_concat "Total lines: "
+    (str_concat (int_to_string total_lines)
+      (str_concat "\nTotal words: "
+        (str_concat (int_to_string total_words)
+          (str_concat "\nTotal chars: "
+            (int_to_string total_chars))))) in
+  let w = file_write_bytes h_out summary in
+  file_close h_out

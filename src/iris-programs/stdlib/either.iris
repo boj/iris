@@ -1,0 +1,80 @@
+-- Either monad: computation that can fail.
+--
+-- Uses the Either<A, B> ADT:
+--   Right(value) = Ok / Success
+--   Left(error)  = Err / Failure
+--
+-- Short-circuits on failure: once an error occurs, subsequent
+-- binds propagate it without calling the continuation.
+
+type Either<A, B> = Left(A) | Right(B)
+
+-- Wrap a success value.
+let either_return val = Right(val)
+
+-- Wrap a failure value.
+let either_fail err = Left(err)
+
+-- True if the either is a success.
+let either_is_ok ea =
+  match ea with
+  | Right(v) -> true
+  | Left(e) -> false
+
+-- True if the either is a failure.
+let either_is_err ea =
+  match ea with
+  | Left(e) -> true
+  | Right(v) -> false
+
+-- Extract the success value, or return a default.
+let either_unwrap_or ea default_val =
+  match ea with
+  | Right(v) -> v
+  | Left(e) -> default_val
+
+-- Chain: if ea is Ok, apply f to its value. If Err, propagate.
+let either_bind ea f =
+  match ea with
+  | Left(e) -> Left(e)
+  | Right(v) -> f v
+
+-- Map a function over the success value, leaving errors unchanged.
+let either_map ea f =
+  match ea with
+  | Left(e) -> Left(e)
+  | Right(v) -> Right(f v)
+
+-- Map a function over the error value, leaving successes unchanged.
+let either_map_err ea f =
+  match ea with
+  | Right(v) -> Right(v)
+  | Left(e) -> Left(f e)
+
+-- Apply a function wrapped in Either to a value wrapped in Either.
+-- both must be Right for the result to be Right.
+let either_ap ef ea =
+  match ef with
+  | Left(e) -> Left(e)
+  | Right(f) ->
+    match ea with
+    | Left(e) -> Left(e)
+    | Right(v) -> Right(f v)
+
+-- Flatten nested Either: Right(Right(x)) -> Right(x), Right(Left(e)) -> Left(e), Left(e) -> Left(e).
+let either_flatten eea =
+  match eea with
+  | Left(e) -> Left(e)
+  | Right(inner) -> inner
+
+-- Try a computation; if it fails, try the alternative.
+let either_or_else ea fallback =
+  match ea with
+  | Right(v) -> Right(v)
+  | Left(e) -> fallback e
+
+-- Convert an Either to a default-or-value.
+let either_to_int ea default_val =
+  match ea with
+  | Right(v) -> v
+  | Left(e) -> default_val

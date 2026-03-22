@@ -1,0 +1,46 @@
+-- Evaluate a Match node: pattern matching dispatch.
+--
+-- Mirrors the match handling from iris-exec interpreter.rs eval_match.
+--
+-- The Rust interpreter supports three kinds of scrutinee:
+--   1. Tagged(tag, inner) — select arm by tag index
+--   2. Bool(b) — arm 0 = false, arm 1 = true
+--   3. Other — select first arm (wildcard match)
+--
+-- In the surface language we encode tag-based dispatch as integer
+-- comparison. The scrutinee is an integer tag, and arms are selected
+-- by matching against known tag values.
+--
+-- Inputs:
+--   scrutinee : Int (the value to match on)
+--   arm0      : Int (value to return for tag 0 / false)
+--   arm1      : Int (value to return for tag 1 / true)
+--   default   : Int (value to return for unmatched tags)
+--
+-- Output: Int (the selected arm's value)
+
+let eval_match scrutinee arm0 arm1 default : Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  if scrutinee == 0 then arm0
+  else if scrutinee == 1 then arm1
+  else default
+
+-- Boolean match: dispatch on true/false.
+-- The Rust interpreter uses arm index 0 = false, 1 = true.
+let eval_match_bool cond false_branch true_branch : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if cond == 0 then false_branch
+  else true_branch
+
+-- 4-way match: dispatch on tag values 0..3.
+-- For sum types with up to 4 variants.
+let eval_match_4 scrutinee arm0 arm1 arm2 arm3 : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  if scrutinee == 0 then arm0
+  else if scrutinee == 1 then arm1
+  else if scrutinee == 2 then arm2
+  else arm3
+
+-- Match with wildcard binding: when the scrutinee doesn't match
+-- any specific pattern, the wildcard arm receives the scrutinee value.
+-- The Rust interpreter binds the scrutinee to the arm's Lambda binder.
+let eval_match_wildcard scrutinee known_tag known_result : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if scrutinee == known_tag then known_result
+  else scrutinee

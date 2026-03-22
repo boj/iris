@@ -1,0 +1,161 @@
+-- Autoregressive graph decoder: latent vector -> SemanticGraph
+
+let sigmoid_approx x : Int -> Int [cost: Const(5)] =
+  if x > 6000 then 1000
+  else if x < (0 - 6000) then 0
+  else 500 + x * 1000 / 12000
+
+let argmax_list values : Int -> Int [cost: Linear(values)] =
+  let result = fold (0, 0, 0 - 999999999)
+    (\state v ->
+      let idx = state.0 in
+      let best_idx = state.1 in
+      let best_val = state.2 in
+      if v > best_val then (idx + 1, idx, v)
+      else (idx + 1, best_idx, best_val))
+    values in
+  result.1
+
+let predict_num_nodes z_val max_nodes : Int -> Int -> Int [cost: Const(4)] =
+  let sig = sigmoid_approx z_val in
+  let scaled = sig * max_nodes / 1000 in
+  if scaled < 1 then 1
+  else if scaled > max_nodes then max_nodes
+  else scaled
+
+let predict_node_kind ctx_hash bias : Int -> Int -> Int [cost: Const(3)] =
+  let mixed = ctx_hash * 2654435761 + bias in
+  let abs_h = if mixed < 0 then 0 - mixed else mixed in
+  -- Restrict to kinds the interpreter supports: 0-5 (Prim, Apply, Lambda, Ref, Match, Lit)
+  abs_h % 6
+
+let predict_opcode ctx opcode_bias : Int -> Int -> Int [cost: Const(3)] =
+  let mixed = ctx * 2246822519 + opcode_bias in
+  let abs_h = if mixed < 0 then 0 - mixed else mixed in
+  abs_h % 50
+
+let predict_lit_value ctx : Int -> Int [cost: Const(2)] =
+  (ctx * 1103515245 + 12345) % 256
+
+let predict_payload kind ctx opcode_bias : Int -> Int -> Int -> Int [cost: Const(4)] =
+  if kind == 0 then predict_opcode ctx opcode_bias
+  else if kind == 5 then predict_lit_value ctx
+  else if kind == 4 then 2
+  else 0
+
+let predict_edge_attention ctx emb_i emb_j : Int -> Int -> Int -> Int [cost: Const(4)] =
+  let score = emb_i * emb_j / 1000 + ctx / 100 in
+  if score > 0 then 1 else 0
+
+let update_context prev_ctx node_kind payload z_slice : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  prev_ctx * 31 + node_kind * 1000 / 20 * 7 + payload * 100 + z_slice * 50
+
+let embed_node kind payload : Int -> Int -> Int [cost: Const(3)] =
+  kind * 1000 + payload
+
+-- ===================================================================
+-- Autoregressive graph decode: latent vector -> SemanticGraph
+-- ===================================================================
+
+-- Decode a latent vector z into a new SemanticGraph
+-- Uses graph_new, graph_add_node_rt, graph_connect, graph_set_root
+let graph_decode z max_nodes : Int -> Int -> Int [cost: Linear(max_nodes)] =
+  -- Step 0: z -> hidden -> predict number of nodes
+  let z_val = fold 0 (\acc x -> acc + x) z in
+  let num_nodes = predict_num_nodes z_val max_nodes in
+  -- Create empty graph
+  let g0 = graph_new in
+  -- Autoregressively generate nodes and edges (max 8 iterations)
+  let iters = (0, 1, 2, 3, 4, 5, 6, 7) in
+  let result = fold (g0, 0, z_val, 0)
+    (\state _iter ->
+      let step = state.1 in
+      if step >= num_nodes then state
+      else
+        let g = state.0 in
+        let ctx = state.2 in
+        let prev_emb = state.3 in
+        -- Predict node kind for payload selection (0-5)
+        let kind = predict_node_kind ctx step in
+        -- Add node to graph (always kind=0 per bootstrap)
+        let add_result = graph_add_node_rt g 0 in
+        let g1 = add_result.0 in
+        let new_nid = add_result.1 in
+        -- Set root to first node
+        let g2 = if step == 0 then graph_set_root g1 new_nid else g1 in
+        -- Predict payload and set opcode on the Prim node
+        let opcode_bias = fold 0 (\acc x -> acc + x * 31) z in
+        let payload_val = predict_payload kind ctx opcode_bias in
+        let spo = graph_set_prim_op g2 new_nid payload_val in
+        let g3 = spo.0 in
+        let new_nid = spo.1 in
+        -- Connect to previous node based on edge attention
+        let g4 = if step > 0 then
+          let emb_new = embed_node kind payload_val in
+          if predict_edge_attention ctx emb_new prev_emb == 1
+          then
+            let prior_nodes = graph_nodes g3 in
+            let prior_nid = fold 0 (\found n ->
+              if n != new_nid then n else found) prior_nodes in
+            graph_connect g3 prior_nid new_nid 0
+          else g3
+        else g3 in
+        -- Update context
+        let z_slice = fold 0 (\acc x -> acc + x) z in
+        let new_ctx = update_context ctx kind payload_val (z_slice + step) in
+        (g4, step + 1, new_ctx, embed_node kind payload_val))
+    iters in
+  result.0
+
+
+let reconstruction_loss orig_program recon_program : Int -> Int -> Int [cost: Linear(orig_program)] =
+  let orig_nodes = graph_nodes orig_program in
+  let recon_nodes = graph_nodes recon_program in
+  let orig_count = fold 0 (\acc x -> acc + 1) orig_nodes in
+  let recon_count = fold 0 (\acc x -> acc + 1) recon_nodes in
+  let size_diff = if orig_count > recon_count then orig_count - recon_count else recon_count - orig_count in
+  let size_loss = if orig_count > 0 then size_diff * 1000 / orig_count else 1000 in
+  let orig_edges = fold 0 (\eacc en -> let ech = graph_outgoing orig_program en in let ecc = fold 0 (\ea x -> ea + 1) ech in eacc + ecc) (graph_nodes orig_program) in
+  let recon_edges = fold 0 (\eacc en -> let ech = graph_outgoing recon_program en in let ecc = fold 0 (\ea x -> ea + 1) ech in eacc + ecc) (graph_nodes recon_program) in
+  let edge_diff = if orig_edges > recon_edges then orig_edges - recon_edges else recon_edges - orig_edges in
+  let max_edges = max orig_edges recon_edges in
+  let edge_rate = if max_edges > 0 then 1000 - edge_diff * 1000 / max_edges else 1000 in
+  1000 - (edge_rate * 600 / 1000 + (1000 - min size_loss 1000) * 400 / 1000)
+
+-- Tests
+let test_sigmoid_zero : Int [cost: Const(1)] = if sigmoid_approx 0 == 500 then 1 else 0 - 1
+let test_sigmoid_high : Int [cost: Const(1)] = if sigmoid_approx 10000 == 1000 then 1 else 0 - 1
+let test_sigmoid_low : Int [cost: Const(1)] = if sigmoid_approx (0 - 10000) == 0 then 1 else 0 - 1
+let test_predict_num_nodes_clamp : Int [cost: Const(1)] =
+  let n1 = predict_num_nodes (0 - 10000) 32 in
+  let n2 = predict_num_nodes 10000 32 in
+  if n1 >= 1 then if n2 <= 32 then 1 else 0 - 1 else 0 - 1
+let test_node_kind_range : Int [cost: Const(1)] =
+  let k = predict_node_kind 12345 0 in
+  if k >= 0 then if k < 20 then 1 else 0 - 1 else 0 - 1
+let test_opcode_range : Int [cost: Const(1)] =
+  let op = predict_opcode 12345 0 in
+  if op >= 0 then if op < 50 then 1 else 0 - 1 else 0 - 1
+let test_payload_prim : Int [cost: Const(1)] =
+  let p = predict_payload 0 12345 0 in
+  if p >= 0 then if p < 50 then 1 else 0 - 1 else 0 - 1
+let test_embed_node : Int [cost: Const(1)] = if embed_node 0 5 == embed_node 0 5 then 1 else 0 - 1
+let test_embed_different : Int [cost: Const(1)] = if embed_node 0 0 != embed_node 5 0 then 1 else 0 - 1
+-- Test: graph_decode produces a graph with nodes
+let test_graph_decode : Int [cost: Const(1)] =
+  let z = (100, 200, 150, 50) in
+  let decoded = graph_decode z 4 in
+  let nodes = graph_nodes decoded in
+  let count = fold 0 (\acc x -> acc + 1) nodes in
+  if count >= 1 then 1 else 0 - 1
+let test_update_context : Int [cost: Const(1)] = if update_context 100 5 10 50 != update_context 100 0 0 50 then 1 else 0 - 1
+let test_recon_identical : Int [cost: Const(1)] =
+  let g = self_graph in
+  let loss = reconstruction_loss g g in
+  if loss == 0 then 1 else 0 - 1
+let test_argmax : Int [cost: Const(1)] = if argmax_list (10, 30, 20, 5) == 1 then 1 else 0 - 1
+let test_edge_connect : Int [cost: Const(1)] = if predict_edge_attention 1000 500 500 == 1 then 1 else 0 - 1
+let test_edge_disconnect : Int [cost: Const(1)] = if predict_edge_attention (0 - 10000) 1 1 == 0 then 1 else 0 - 1
+let test_payload_lit : Int [cost: Const(1)] =
+  let p = predict_payload 5 12345 0 in
+  if p >= 0 then if p < 256 then 1 else 0 - 1 else 0 - 1

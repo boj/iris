@@ -1,0 +1,109 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Inline helper: fold with early termination via (continue?, acc) pairs.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    if state.0 then step_fn state.1 elem else state
+  ) xs in
+  result.1
+
+-- Dijkstra's Shortest Path Algorithm
+-- Find shortest paths from a source vertex to all other vertices
+-- in a weighted graph with non-negative edge weights.
+--
+-- Graph representation: adjacency list where graph[i] is a tuple of
+-- (neighbor, weight) pairs for vertex i.
+
+-- Infinity sentinel.
+let inf x : Int -> Int = 999999
+
+-- Find the unvisited vertex with minimum distance.
+let find_min_unvisited dist visited n : Tuple -> Tuple -> Int -> Int [cost: Linear(n)] =
+  fold (-1, inf 0) (\state i ->
+    let best_idx = state.0 in
+    let best_dist = state.1 in
+    if list_nth visited i == 1 then state  -- skip visited
+    else
+      let d = list_nth dist i in
+      if d < best_dist then (i, d) else state
+  ) (list_range 0 n)
+  |> (\pair -> pair.0)
+
+-- Run Dijkstra from source vertex.
+-- Returns tuple of distances from source to each vertex.
+let dijkstra graph source : Tuple -> Int -> Tuple [cost: Unknown] =
+  let n = list_len graph in
+  -- Initialize distances to infinity, source to 0
+  let init_dist = map (\i -> if i == source then 0 else inf 0) (list_range 0 n) in
+  let init_visited = map (\i -> 0) (list_range 0 n) in
+  -- Process n vertices
+  let result = fold (init_dist, init_visited) (\state step ->
+    let dist = state.0 in
+    let visited = state.1 in
+    let u = find_min_unvisited dist visited n in
+    if u == -1 then state  -- all reachable vertices visited
+    else if list_nth dist u >= inf 0 then state  -- unreachable
+    else
+      -- Mark u as visited
+      let new_visited = list_set visited u 1 in
+      -- Relax all neighbors of u
+      let neighbors = list_nth graph u in
+      let new_dist = fold dist (\d edge ->
+        let v = list_nth edge 0 in
+        let w = list_nth edge 1 in
+        let alt = list_nth d u + w in
+        if alt < list_nth d v then list_set d v alt
+        else d
+      ) neighbors in
+      (new_dist, new_visited)
+  ) (list_range 0 n) in
+  result.0
+
+-- Reconstruct shortest path from source to target.
+-- Returns the path as a tuple of vertex indices.
+let shortest_path graph source target : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  let dist = dijkstra graph source in
+  let target_dist = list_nth dist target in
+  if target_dist >= inf 0 then ()  -- no path
+  else
+    -- Backtrack from target to source
+    let n = list_len graph in
+    let rec backtrack current path : Int -> Tuple -> Tuple [cost: Unknown] =
+      if current == source then list_concat (source,) path
+      else
+        -- Find the predecessor: neighbor u where dist[u] + weight(u,current) == dist[current]
+        let pred = fold_while -1 (\pair ->
+          let best = pair.0 in
+          let u = pair.1 in
+          let neighbors = list_nth graph u in
+          let found = fold false (\f edge ->
+            if f then true
+            else
+              let v = list_nth edge 0 in
+              let w = list_nth edge 1 in
+              v == current && list_nth dist u + w == list_nth dist current
+          ) neighbors in
+          if found then (false, u) else (true, best)
+        ) (list_range 0 n) in
+        backtrack pred (list_concat (current,) path) in
+    backtrack target ()
+
+-- Test: weighted graph
+--   0 --(4)--> 1 --(1)--> 3
+--   |          |          ^
+--   (1)       (2)        (3)
+--   v          v          |
+--   2 --(5)--> 4 -------->
+let test_dijkstra x : Int -> Tuple =
+  let graph = (
+    ((1, 4), (2, 1)),          -- 0 -> 1(4), 2(1)
+    ((3, 1), (4, 2)),          -- 1 -> 3(1), 4(2)
+    ((4, 5),),                 -- 2 -> 4(5)
+    (),                        -- 3 -> (none)
+    ((3, 3),)                  -- 4 -> 3(3)
+  ) in
+  let dist = dijkstra graph 0 in
+  let path = shortest_path graph 0 3 in
+  (dist, path)

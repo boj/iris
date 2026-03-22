@@ -1,0 +1,39 @@
+-- Pareto dominance checking for multi-objective optimization
+
+-- Check if fitness vector A dominates B
+-- A dominates B iff: A >= B on all objectives AND A > B on at least one
+-- Returns 1 if A dominates B, 0 otherwise
+let dominates a b =
+  let pairs = zip a b in
+  let all_geq = fold 1 (\acc pair -> acc * (if pair.0 >= pair.1 then 1 else 0)) pairs in
+  let any_gt = fold 0 (\acc pair -> acc + (if pair.0 > pair.1 then 1 else 0)) pairs in
+  all_geq * (if any_gt > 0 then 1 else 0)
+
+-- Check if two solutions are non-dominating (neither dominates the other)
+let non_dominating a b =
+  let a_dom_b = dominates a b in
+  let b_dom_a = dominates b a in
+  if a_dom_b == 0 then (if b_dom_a == 0 then 1 else 0) else 0
+
+-- Count how many solutions in a population dominate solution a
+let domination_count a population =
+  fold 0 (\count individual ->
+    let fitnesses = individual.0 in
+    count + (dominates fitnesses a)
+  ) population
+
+-- Assign Pareto rank (0 = first front, 1 = second front, etc.)
+-- Rank = number of solutions that dominate this one
+let pareto_rank fitnesses population =
+  domination_count fitnesses population
+
+-- Check if solution is on the Pareto front (rank 0)
+let is_pareto_optimal fitnesses population =
+  if pareto_rank fitnesses population == 0 then 1 else 0
+
+-- Epsilon-dominance: A eps-dominates B iff A+eps >= B on all objectives
+let epsilon_dominates a b epsilon =
+  let pairs = zip a b in
+  fold 1 (\acc pair ->
+    acc * (if pair.0 + epsilon >= pair.1 then 1 else 0)
+  ) pairs

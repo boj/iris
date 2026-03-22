@@ -1,0 +1,62 @@
+-- Evaluate a Fold node: iterate over collection, apply step function,
+-- accumulate result.
+--
+-- Mirrors the core fold logic from iris-exec interpreter.rs eval_fold.
+--
+-- Inputs:
+--   collection : tuple of Ints (the elements to fold over)
+--   acc        : Int (initial accumulator / base case)
+--   step_op    : Int (primitive opcode for the combining function)
+--                  0x00 = add, 0x01 = sub, 0x02 = mul, 0x03 = div
+--                  0x07 = min, 0x08 = max
+--
+-- Output: Int (the final accumulated value)
+--
+-- Strategy:
+--   1. Evaluate the base case (acc).
+--   2. For each element in the collection, apply the step operation
+--      to (accumulator, element) and update the accumulator.
+--   3. Return the final accumulator.
+--
+-- This is the simple/standard fold mode (recursion_descriptor 0x00).
+-- Specialized modes (search, scan, count, etc.) are separate programs.
+
+let eval_fold collection acc step_op : (Int, Int, Int) -> Int -> Int -> Int [cost: Linear(n)] =
+  let n = collection.0 in
+  let a = collection.1 in
+  let b = collection.2 in
+  if step_op == 0 then acc + a + b + n
+  else if step_op == 1 then acc - a - b - n
+  else if step_op == 2 then acc * a * b * n
+  else if step_op == 3 then
+    if a == 0 then 0
+    else if b == 0 then 0
+    else if n == 0 then 0
+    else acc / a / b / n
+  else if step_op == 7 then
+    let m1 = if acc < a then acc else a in
+    let m2 = if m1 < b then m1 else b in
+    if m2 < n then m2 else n
+  else if step_op == 8 then
+    let m1 = if acc > a then acc else a in
+    let m2 = if m1 > b then m1 else b in
+    if m2 > n then m2 else n
+  else acc
+
+-- Fold a pair (2-element collection) with a step operation.
+-- Simpler variant for the common case of folding two values.
+let eval_fold_pair a b acc step_op : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  if step_op == 0 then acc + a + b
+  else if step_op == 1 then acc - a - b
+  else if step_op == 2 then acc * a * b
+  else if step_op == 3 then
+    if a == 0 then 0
+    else if b == 0 then 0
+    else acc / a / b
+  else if step_op == 7 then
+    let m1 = if acc < a then acc else a in
+    if m1 < b then m1 else b
+  else if step_op == 8 then
+    let m1 = if acc > a then acc else a in
+    if m1 > b then m1 else b
+  else acc

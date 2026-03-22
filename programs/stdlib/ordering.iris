@@ -1,0 +1,76 @@
+-- Ordering type: result of comparisons
+type Ordering = Less | Equal | Greater
+
+-- Eq typeclass: equality comparison
+class Eq<A> where
+  eq : A -> A -> Bool
+
+-- Ord typeclass: ordered comparison (requires Eq)
+class Ord<A> requires Eq<A> where
+  compare : A -> A -> Ordering
+
+-- Eq instance for Int
+instance Eq<Int> where
+  eq = \a b -> a == b
+
+-- Ord instance for Int
+instance Ord<Int> where
+  compare = \a b ->
+    if a < b then Less
+    else if a == b then Equal
+    else Greater
+
+-- Compare two integers
+let compare_int a b =
+  if a < b then Less
+  else if a == b then Equal
+  else Greater
+
+-- Check if ordering is Less
+let is_lt ord =
+  match ord with
+  | Less -> true
+  | Equal -> false
+  | Greater -> false
+
+-- Check if ordering is Equal
+let is_eq ord =
+  match ord with
+  | Less -> false
+  | Equal -> true
+  | Greater -> false
+
+-- Check if ordering is Greater
+let is_gt ord =
+  match ord with
+  | Less -> false
+  | Equal -> false
+  | Greater -> true
+
+-- Check if ordering is Less or Equal
+let is_le ord =
+  match ord with
+  | Less -> true
+  | Equal -> true
+  | Greater -> false
+
+-- Check if ordering is Greater or Equal
+let is_ge ord =
+  match ord with
+  | Less -> false
+  | Equal -> true
+  | Greater -> true
+
+-- Reverse an ordering
+let reverse ord =
+  match ord with
+  | Less -> Greater
+  | Equal -> Equal
+  | Greater -> Less
+
+-- Convert ordering to an integer (-1, 0, 1)
+let to_int ord =
+  match ord with
+  | Less -> 0 - 1
+  | Equal -> 0
+  | Greater -> 1

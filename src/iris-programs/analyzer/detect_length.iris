@@ -1,0 +1,26 @@
+-- Detect length pattern: output = number of elements in input list
+--
+-- Takes a list of (list_input, expected_output) pairs and count n.
+-- We fold each inner list counting elements, then compare to expected output.
+-- Returns confidence score 0-100.
+
+-- Count elements in a list by folding with increment
+let list_length xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + 1) xs
+
+-- Check if a single test case's output matches the length of its input list
+-- pair.0 = input list, pair.1 = expected output
+let is_length_match pair : (Int, Int) -> Int [cost: Linear(pair)] =
+  if list_length pair.0 == pair.1 then 1 else 0
+
+-- Count how many test cases match the length pattern
+let count_length_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_length_match pair) pairs
+
+-- Detect length pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_length pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_length_matches pairs in
+    (matches * 100) / n

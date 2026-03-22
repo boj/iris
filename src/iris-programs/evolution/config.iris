@@ -1,0 +1,76 @@
+-- Evolution configuration: default parameters for the evolutionary loop
+--
+-- Mirrors the Rust EvolutionConfig in iris-evolve/src/config.rs.
+-- Defines default values for population, mutation, selection, and
+-- phase transition thresholds.
+
+-- Population defaults
+let default_population_size : Int [cost: Const(1)] = 64
+let default_max_generations : Int [cost: Const(1)] = 1000
+let default_num_demes : Int [cost: Const(1)] = 1
+
+-- Mutation and crossover rates (scaled by 1000: 800 = 0.8)
+let default_mutation_rate : Int [cost: Const(1)] = 800
+let default_crossover_rate : Int [cost: Const(1)] = 500
+
+-- Selection defaults
+let default_tournament_size : Int [cost: Const(1)] = 3
+
+-- Timing defaults
+let default_generation_time_ms : Int [cost: Const(1)] = 500
+
+-- Novelty search defaults (scaled by 1000)
+let default_novelty_k : Int [cost: Const(1)] = 15
+let default_novelty_threshold : Int [cost: Const(1)] = 100
+let default_novelty_weight : Int [cost: Const(1)] = 1000
+
+-- Phase transition thresholds
+-- exploration_min_improvement (scaled by 10000): 100 = 0.01
+-- stagnation_window: number of generations
+-- min_diversity (scaled by 1000): 100 = 0.1
+let default_exploration_min_improvement : Int [cost: Const(1)] = 100
+let default_stagnation_window : Int [cost: Const(1)] = 20
+let default_min_diversity : Int [cost: Const(1)] = 100
+
+-- Build a complete config as a tuple
+-- Returns (population_size, max_generations, mutation_rate,
+--          crossover_rate, tournament_size)
+let default_config : (Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (default_population_size, default_max_generations,
+   default_mutation_rate, default_crossover_rate,
+   default_tournament_size)
+
+-- Build phase threshold config
+-- Returns (exploration_min_improvement, stagnation_window, min_diversity)
+let default_phase_thresholds : (Int, Int, Int) [cost: Const(1)] =
+  (default_exploration_min_improvement,
+   default_stagnation_window,
+   default_min_diversity)
+
+-- Validate a config: check that all values are in acceptable ranges
+-- Returns 1 if valid, 0 if invalid
+let validate_config pop_size max_gen mut_rate cross_rate tourn_size : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(10)] =
+  let pop_ok = if pop_size >= 4 && pop_size <= 10000 then 1 else 0 in
+  let gen_ok = if max_gen >= 1 && max_gen <= 1000000 then 1 else 0 in
+  let mut_ok = if mut_rate >= 0 && mut_rate <= 1000 then 1 else 0 in
+  let cross_ok = if cross_rate >= 0 && cross_rate <= 1000 then 1 else 0 in
+  let tourn_ok = if tourn_size >= 1 && tourn_size <= pop_size then 1 else 0 in
+  pop_ok * gen_ok * mut_ok * cross_ok * tourn_ok
+
+-- Compute effective mutation rate based on generation
+-- Early generations get higher mutation rate for exploration
+-- Later generations get lower rate for exploitation
+let adaptive_mutation_rate base_rate generation stagnation_window : Int -> Int -> Int -> Int [cost: Const(4)] =
+  if generation < stagnation_window then
+    base_rate
+  else
+    let decay = generation / stagnation_window in
+    let reduced = base_rate - decay * 50 in
+    if reduced < 100 then 100 else reduced
+
+-- Check if migration should occur this generation
+-- Migration happens every 5 generations when num_demes > 1
+let should_migrate generation num_demes : Int -> Int -> Int [cost: Const(2)] =
+  if num_demes <= 1 then 0
+  else if generation % 5 == 0 then 1
+  else 0

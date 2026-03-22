@@ -1,0 +1,100 @@
+-- Binary Trees (Benchmarks Game)
+-- Allocate and deallocate many binary trees, computing checksums.
+--
+-- A binary tree of depth d is represented as nested tuples:
+--   Leaf:   (value, 0, 0)         -- 0 means no child
+--   Branch: (value, left, right)  -- left and right are subtrees
+--
+-- The benchmark:
+--   1. Build a complete binary tree of depth max_depth
+--   2. Compute its checksum: node.value + check(left) - check(right)
+--   3. For each depth from 4 to max_depth (step 2):
+--      - Create many trees and sum their checksums
+--
+-- Since IRIS has no recursion, we build trees bottom-up using fold:
+--   - Start with leaves at the deepest level
+--   - Fold upward, combining pairs into parent nodes
+
+-- Build a complete binary tree of given depth, rooted at item.
+-- Uses fold from depth down to 0.
+-- Each level creates 2^level nodes. We represent the tree as nested tuples.
+-- Without recursion, we build level by level.
+
+-- Bottom-up tree builder: fold from depth down to 0
+-- At each level, pair adjacent nodes into parents
+let make_tree depth =
+  -- Start with 2^depth leaves at the bottom level
+  let num_leaves = pow 2 depth in
+  let leaves = map (\i -> (i, 0, 0)) (list_range 0 num_leaves) in
+  -- Fold upward: at each level, pair adjacent elements
+  fold leaves (\nodes level ->
+    let n = pow 2 (depth - 1 - level) in
+    map (\i ->
+      let left = list_nth nodes (2 * i) in
+      let right = list_nth nodes (2 * i + 1) in
+      let v = i in
+      (v, left, right)
+    ) (list_range 0 n)
+  ) (list_range 0 depth)
+
+-- Compute checksum of a tree built as nested tuples.
+-- For a leaf (v, 0, 0): checksum = v
+-- For a branch (v, left, right): checksum = v + check(left) - check(right)
+--
+-- Since we cannot recurse, we process level by level from leaves up.
+-- Each tree at depth d has 2^d - 1 nodes stored as a flat array.
+-- But nested tuples make this hard without recursion.
+--
+-- Alternative: build a flat array representation and compute checksum via fold.
+
+-- Flat binary tree: array of (value, has_children) where children of node i
+-- are at 2*i+1 and 2*i+2.
+-- Size for depth d: 2^(d+1) - 1
+
+-- Build a flat complete binary tree as a tuple of item values
+-- Node at index i has value = item + i, children at 2*i+1, 2*i+2
+let make_flat_tree depth item =
+  let size = pow 2 (depth + 1) - 1 in
+  map (\i -> item + i) (list_range 0 size)
+
+-- Compute checksum of a flat binary tree (bottom-up via fold)
+-- Leaf checksum = value; Branch checksum = value + left_check - right_check
+-- Process from last level to root
+let flat_tree_check tree depth =
+  let size = pow 2 (depth + 1) - 1 in
+  -- Start with checksums = node values (correct for leaves)
+  let checks = map (\i -> list_nth tree i) (list_range 0 size) in
+  -- Process each level from deepest internal nodes up to root
+  fold checks (\acc level ->
+    let level_start = pow 2 level - 1 in
+    let level_end = pow 2 (level + 1) - 1 in
+    -- Update checksums at this level using children's checksums
+    map (\i ->
+      if i >= level_start then
+        if i < level_end then
+          let left_idx = 2 * i + 1 in
+          let right_idx = 2 * i + 2 in
+          if left_idx < size then
+            let v = list_nth tree i in
+            let lc = list_nth acc left_idx in
+            let rc = list_nth acc right_idx in
+            v + lc - rc
+          else list_nth acc i
+        else list_nth acc i
+      else list_nth acc i
+    ) (list_range 0 size)
+  ) (list_range 0 depth)
+
+-- Benchmark: create trees at various depths, compute checksums
+let binary_trees max_depth =
+  let tree = make_flat_tree max_depth 1 in
+  let checks = flat_tree_check tree max_depth in
+  -- Return the root checksum (index 0)
+  list_nth checks 0
+
+-- Simplified version for testing: just build and checksum one tree
+let bench depth =
+  let tree = make_flat_tree depth 1 in
+  let size = pow 2 (depth + 1) - 1 in
+  -- For a simple benchmark, sum all node values
+  fold 0 (+) tree

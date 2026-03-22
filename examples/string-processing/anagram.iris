@@ -1,0 +1,59 @@
+-- Anagram Checker
+-- Two sequences are anagrams if they contain the same elements
+-- in any order (same multiset).
+
+-- Sort-based anagram check: sort both and compare.
+let is_anagram xs ys : Tuple -> Tuple -> Bool [cost: Unknown] =
+  let sx = list_sort xs in
+  let sy = list_sort ys in
+  let nx = list_len sx in
+  let ny = list_len sy in
+  if nx != ny then false
+  else
+    fold true (\result i ->
+      if result == false then false
+      else list_nth sx i == list_nth sy i
+    ) (list_range 0 nx)
+
+-- Check if two strings are anagrams (by character codes).
+let is_anagram_str s1 s2 : String -> String -> Bool [cost: Unknown] =
+  is_anagram (str_chars s1) (str_chars s2)
+
+-- Group anagrams: given a list of integer-tuples, group those that are anagrams.
+-- Returns a list of groups (each group is a list of original tuples).
+-- FIXME: Without a proper hash-map keyed by sorted-tuples, grouping is O(n^2).
+-- We do pairwise comparison, which is simple but slow.
+let group_anagrams words : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len words in
+  -- For each word, find which group it belongs to
+  -- Simple approach: fold through, building groups
+  fold () (\groups i ->
+    let word = list_nth words i in
+    let sorted = list_sort word in
+    -- Check if any existing group matches
+    let found = fold (false, 0) (\state gi ->
+      if state.0 then state
+      else
+        let group = list_nth groups gi in
+        let first = list_nth group 0 in
+        if is_anagram first word then (true, gi)
+        else state
+    ) (list_range 0 (list_len groups)) in
+    if found.0 then
+      -- Add to existing group
+      let old_group = list_nth found.1 groups in
+      let new_group = list_append old_group word in
+      let prefix = list_take groups found.1 in
+      let suffix = list_drop groups (found.1 + 1) in
+      list_concat (list_append prefix new_group) suffix
+    else
+      -- Start new group
+      list_append groups (word,)
+  ) (list_range 0 n)
+
+-- Test
+let test_anagram x : Int -> Tuple =
+  let a1 = is_anagram (1, 2, 3) (3, 1, 2) in   -- true
+  let a2 = is_anagram (1, 2, 3) (1, 2, 4) in   -- false
+  let a3 = is_anagram (1, 1, 2) (1, 2, 2) in   -- false (different counts)
+  (a1, a2, a3)

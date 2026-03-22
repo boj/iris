@@ -1,0 +1,71 @@
+-- Extract feature vector from a program graph
+-- Returns (node_count, edge_count, max_depth) using real graph intrinsics
+-- edge_count: sum of outgoing edges across all nodes via graph_outgoing
+-- max_depth: path length from root following first-child chain
+let extract_features program : Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  -- Count real edges by summing outgoing edge counts per node
+  let edge_count = fold 0 (\acc n ->
+    let children = graph_outgoing program n in
+    let child_count = fold 0 (\a c -> a + 1) children in
+    acc + child_count) nodes in
+  -- Estimate max depth by following first-child chain from root
+  let root = graph_get_root program in
+  let depth_result = fold (root, 0)
+    (\state step ->
+      let curr = state.0 in
+      let depth = state.1 in
+      let children = graph_outgoing program curr in
+      let first_child = fold 0 (\found c -> if found == 0 then c else found) children in
+      if first_child == 0 then (curr, depth)
+      else (first_child, depth + 1))
+    node_count in
+  (node_count, edge_count, depth_result.1)
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: extract_features on self_graph returns positive node count
+let test_features_node_count : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  if feat.0 > 0 then 1 else 0 - 1
+
+-- Test: edge_count uses real graph_outgoing (non-negative)
+let test_features_edge_count : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  if feat.1 >= 0 then 1 else 0 - 1
+
+-- Test: depth estimate is non-negative and bounded by node count
+let test_features_depth_proxy : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  if feat.2 >= 0 then
+    if feat.2 <= feat.0 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: all feature components are non-negative
+let test_features_nonneg : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  if feat.0 >= 0 then
+    if feat.1 >= 0 then
+      if feat.2 >= 0 then 1 else 0 - 1
+    else 0 - 1
+  else 0 - 1
+
+-- Test: node count is at least 2 (program has definitions)
+let test_features_min_nodes : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  if feat.0 >= 2 then 1 else 0 - 1
+
+-- Test: extract_features result tuple has 3 components accessible
+let test_features_tuple_access : Int [cost: Const(1)] =
+  let g = self_graph in
+  let feat = extract_features g in
+  let sum = feat.0 + feat.1 + feat.2 in
+  if sum > 0 then 1 else 0 - 1

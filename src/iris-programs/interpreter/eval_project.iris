@@ -1,0 +1,37 @@
+-- Evaluate a Project node: extract a field from a tuple (product type).
+--
+-- Mirrors the project handling from iris-exec interpreter.rs eval_project.
+--
+-- A Project node has:
+--   - field_index: u16 in the payload (which field to extract)
+--   - Argument edge port 0: the tuple to project from
+--
+-- Evaluates the argument, then extracts the field at field_index.
+-- Returns a TypeError if the value is not a Tuple or the index is out
+-- of bounds.
+--
+-- In the Rust interpreter:
+--   eval_project extracts field_index from the payload, evaluates
+--   the first argument, and indexes into Value::Tuple.
+
+-- Project field 0 from a pair.
+let eval_project_fst a b : Int -> Int -> Int [cost: Const(1)] =
+  a
+
+-- Project field 1 from a pair.
+let eval_project_snd a b : Int -> Int -> Int [cost: Const(1)] =
+  b
+
+-- Project from a triple: extract middle element.
+let eval_project_mid a b c : Int -> Int -> Int -> Int [cost: Const(1)] =
+  b
+
+-- Project and compute: extract a field, then use it.
+-- Simulates: (fst pair) + (snd pair)
+let eval_project_sum a b : Int -> Int -> Int [cost: Const(2)] =
+  a + b
+
+-- Nested projection: project from a pair of pairs.
+-- Simulates: fst (snd outer)
+let eval_project_nested a b c d : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  c

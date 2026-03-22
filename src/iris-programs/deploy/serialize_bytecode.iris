@@ -1,0 +1,441 @@
+-- Serialize bytecode to bytes.
+--
+-- Mirrors the serialization format from iris-deploy serialize.rs (635 LOC).
+--
+-- Produces opcode BYTES as integer values (0-255), representing the actual
+-- wire format encoding. Each instruction becomes a btsle of byte values.
+--
+-- Wire format:
+--   [4 bytes] magic "IRIS" (0x49, 0x52, 0x49, 0x53)
+--   [1 byte]  format version (0x01)
+--   [1 byte]  arg_count
+--   [4 bytes] instruction count (LE u32)
+--   [4 bytes] constant count (LE u32)
+--   [N bytes] instructions (variable-length encoded)
+--   [N bytes] constants (variable-length encoded)
+
+-- ============================================================
+-- Byte-level encoding helpers
+-- ============================================================
+
+-- Encode a u16 as two LE bytes.
+let encode_u16_le v : Int -> (Int, Int) [cost: Const(2)] =
+  let low = v % 256 in
+  let high = (v / 256) % 256 in
+  (low, high)
+
+-- Encode a u32 as four LE bytes.
+let encode_u32_le v : Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  let b0 = v % 256 in
+  let b1 = (v / 256) % 256 in
+  let b2 = (v / 65536) % 256 in
+  let b3 = (v / 16777216) % 256 in
+  (b0, b1, b2, b3)
+
+-- Encode a signed i64 as eight LE bytes.
+let encode_i64_le v : Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  -- For negative values, use two's complement representation
+  let unsigned = if v < 0 then v + 9223372036854775807 + 1 else v in
+  let b0 = unsigned % 256 in
+  let b1 = (unsigned / 256) % 256 in
+  let b2 = (unsigned / 65536) % 256 in
+  let b3 = (unsigned / 16777216) % 256 in
+  let b4 = (unsigned / 4294967296) % 256 in
+  let b5 = (unsigned / 1099511627776) % 256 in
+  let b6 = (unsigned / 281474976710656) % 256 in
+  let b7 = (unsigned / 72057594037927936) % 256 in
+  (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ============================================================
+-- Magic and header as byte btsles
+-- ============================================================
+
+-- The IRIS magic as 4 individual bytes.
+let serialize_magic_bytes : (Int, Int, Int, Int) [cost: Const(1)] =
+  (73, 82, 73, 83)
+
+-- Encode the complete header as byte values.
+-- Returns: (m0, m1, m2, m3, version, arg_count, ic0, ic1, ic2, ic3)
+-- where ic0-ic3 are the instruction count as LE u32.
+let serialize_header_bytes arg_count instr_count const_count : Int -> Int -> Int -> (Int, Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let ic = encode_u32_le instr_count in
+  let cc = encode_u32_le const_count in
+  -- Return first 6 bytes: magic(4) + version(1) + arg_count(1)
+  -- Caller gets instr_count and const_count bytes separately
+  (73, 82, 73, 83, 1, arg_count)
+
+-- Encode instruction count as 4 LE bytes.
+let serialize_instr_count_bytes instr_count : Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  encode_u32_le instr_count
+
+-- Encode constant count as 4 LE bytes.
+let serialize_const_count_bytes const_count : Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  encode_u32_le const_count
+
+-- Header byte size: magic(4) + version(1) + arg_count(1) + instr_count(4) + const_count(4) = 14
+let header_byte_size : Int [cost: Const(1)] = 14
+
+-- ============================================================
+-- Instruction encoding: produce byte values
+-- ============================================================
+
+-- Encode a single instruction as byte values.
+-- Each instruction has: source_node(2) + tag(1) + optional operand.
+--
+-- Returns: (byte0, byte1, byte2, total_bytes)
+-- For simple opcodes: (source_lo, source_hi, tag, 3)
+-- For opcodes with u16 operand: adds 2 more bytes
+-- For opcodes with u8 operand: adds 1 more byte
+
+-- Encode a no-operand instruction (3 bytes).
+let encode_simple_instr source_node tag : Int -> Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  let src = encode_u16_le source_node in
+  (src.0, src.1, tag, 3)
+
+-- Encode an instruction with a u16 operand (5 bytes).
+let encode_u16_instr source_node tag operand : Int -> Int -> Int -> (Int, Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let src = encode_u16_le source_node in
+  let op = encode_u16_le operand in
+  (src.0, src.1, tag, op.0, op.1, 5)
+
+-- Encode an instruction with a u8 operand (4 bytes).
+let encode_u8_instr source_node tag operand : Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let src = encode_u16_le source_node in
+  (src.0, src.1, tag, operand, 4)
+
+-- Encode a complete instruction based on opcode tag.
+-- Returns: (byte_count, b0, b1, b2, b3, b4)
+let encode_instruction source_node opcode_tag operand : Int -> Int -> Int -> (Int, Int, Int, Int, Int, Int) [cost: Const(5)] =
+  let src = encode_u16_le source_node in
+  if opcode_tag == 1 then
+    -- LoadConst: tag + u16 index
+    let op = encode_u16_le operand in
+    (5, src.0, src.1, 1, op.0, op.1)
+  else if opcode_tag == 2 then
+    -- LoadArg: tag + u8 index
+    (4, src.0, src.1, 2, operand, 0)
+  else if opcode_tag == 48 then
+    -- MapPrim: tag + u8 step opcode
+    (4, src.0, src.1, 48, operand, 0)
+  else if opcode_tag == 49 then
+    -- FilterPrim: tag + u8 step opcode
+    (4, src.0, src.1, 49, operand, 0)
+  else if opcode_tag == 50 then
+    -- FoldPrim: tag + u8 step opcode
+    (4, src.0, src.1, 50, operand, 0)
+  else if opcode_tag == 64 then
+    -- Jump: tag + i16 offset
+    let op = encode_u16_le operand in
+    (5, src.0, src.1, 64, op.0, op.1)
+  else if opcode_tag == 65 then
+    -- JumpIfFalse: tag + i16 offset
+    let op = encode_u16_le operand in
+    (5, src.0, src.1, 65, op.0, op.1)
+  else if opcode_tag == 66 then
+    -- Call: tag + u16 address
+    let op = encode_u16_le operand in
+    (5, src.0, src.1, 66, op.0, op.1)
+  else if opcode_tag == 80 then
+    -- MakeTuple: tag + u8 count
+    (4, src.0, src.1, 80, operand, 0)
+  else if opcode_tag == 81 then
+    -- TupleGet: tag + u8 index
+    (4, src.0, src.1, 81, operand, 0)
+  else
+    -- All other opcodes: no operand (3 bytes)
+    (3, src.0, src.1, opcode_tag, 0, 0)
+
+-- ============================================================
+-- Value encoding: produce byte values
+-- ============================================================
+
+-- Encode an Int constant value as byte values.
+-- Int: tag(1) + i64(8) = 9 bytes.
+let encode_int_value v : Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(5)] =
+  let bytes = encode_i64_le v in
+  (0, bytes.0, bytes.1, bytes.2, bytes.3, bytes.4, bytes.5, bytes.6, bytes.7)
+
+-- Encode a Bool constant value.
+-- Bool: tag(1) + u8(1) = 2 bytes.
+let encode_bool_value b : Int -> (Int, Int) [cost: Const(1)] =
+  (4, b)
+
+-- Encode a Unit constant value.
+-- Unit: tag(1) = 1 byte.
+let encode_unit_value : Int [cost: Const(1)] = 6
+
+-- ============================================================
+-- OpCode tag mapping (complete: all 28 opcodes)
+-- ============================================================
+
+let opcode_to_tag opcode : Int -> Int [cost: Const(5)] =
+  if opcode == 1 then 1
+  else if opcode == 2 then 2
+  else if opcode == 3 then 3
+  else if opcode == 4 then 4
+  else if opcode == 0 then 16
+  else if opcode == 5 then 17
+  else if opcode == 6 then 18
+  else if opcode == 7 then 19
+  else if opcode == 8 then 20
+  else if opcode == 9 then 21
+  else if opcode == 10 then 22
+  else if opcode == 11 then 23
+  else if opcode == 12 then 24
+  else if opcode == 13 then 25
+  else if opcode == 32 then 32
+  else if opcode == 33 then 33
+  else if opcode == 34 then 34
+  else if opcode == 35 then 35
+  else if opcode == 36 then 36
+  else if opcode == 37 then 37
+  else if opcode == 48 then 48
+  else if opcode == 49 then 49
+  else if opcode == 50 then 50
+  else if opcode == 51 then 51
+  else if opcode == 52 then 52
+  else if opcode == 53 then 53
+  else if opcode == 54 then 54
+  else if opcode == 55 then 55
+  else if opcode == 64 then 64
+  else if opcode == 65 then 65
+  else if opcode == 66 then 66
+  else if opcode == 67 then 67
+  else if opcode == 80 then 80
+  else if opcode == 81 then 81
+  else if opcode == 240 then 240
+  else if opcode == 241 then 241
+  else 241
+
+-- ============================================================
+-- Instruction serialization sizes
+-- ============================================================
+
+let instruction_size opcode_tag : Int -> Int [cost: Const(5)] =
+  if opcode_tag == 1 then 5
+  else if opcode_tag == 2 then 4
+  else if opcode_tag == 48 then 4
+  else if opcode_tag == 49 then 4
+  else if opcode_tag == 50 then 4
+  else if opcode_tag == 64 then 5
+  else if opcode_tag == 65 then 5
+  else if opcode_tag == 66 then 5
+  else if opcode_tag == 80 then 4
+  else if opcode_tag == 81 then 4
+  else 3
+
+-- ============================================================
+-- Validation
+-- ============================================================
+
+let validate_bytecode_header magic version : Int -> Int -> Int [cost: Const(2)] =
+  let magic_ok = bool_to_int (magic == 1397051977) in
+  let version_ok = bool_to_int (version == 1) in
+  magic_ok * version_ok
+
+let is_valid_opcode tag : Int -> Int [cost: Const(5)] =
+  if tag >= 1 then
+    if tag <= 4 then 1
+    else if tag >= 16 then
+      if tag <= 25 then 1
+      else if tag >= 32 then
+        if tag <= 37 then 1
+        else if tag >= 48 then
+          if tag <= 55 then 1
+          else if tag >= 64 then
+            if tag <= 67 then 1
+            else if tag == 80 then 1
+            else if tag == 81 then 1
+            else if tag == 240 then 1
+            else if tag == 241 then 1
+            else 0
+          else 0
+        else 0
+      else 0
+    else 0
+  else 0
+
+let is_valid_value_tag tag : Int -> Int [cost: Const(2)] =
+  if tag >= 0 then
+    if tag <= 8 then 1 else 0
+  else 0
+
+-- ============================================================
+-- Round-trip: encode header, read it back
+-- ============================================================
+
+let roundtrip_header_check arg_count instr_count const_count : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let header = serialize_header_bytes arg_count instr_count const_count in
+  -- Check magic bytes
+  let m0_ok = bool_to_int (header.0 == 73) in
+  let m1_ok = bool_to_int (header.1 == 82) in
+  let m2_ok = bool_to_int (header.2 == 73) in
+  let m3_ok = bool_to_int (header.3 == 83) in
+  let v_ok = bool_to_int (header.4 == 1) in
+  let a_ok = bool_to_int (header.5 == arg_count) in
+  m0_ok * m1_ok * m2_ok * m3_ok * v_ok * a_ok
+
+-- ============================================================
+-- Stack depth tracking
+-- ============================================================
+
+let stack_depth_change opcode_tag : Int -> Int [cost: Const(5)] =
+  if opcode_tag == 1 then 1
+  else if opcode_tag == 2 then 1
+  else if opcode_tag == 4 then 1
+  else if opcode_tag == 3 then -1
+  else if opcode_tag >= 16 then
+    if opcode_tag <= 20 then -1
+    else if opcode_tag >= 23 then
+      if opcode_tag <= 25 then -1
+      else if opcode_tag >= 32 then
+        if opcode_tag <= 37 then -1
+        else 0
+      else 0
+    else 0
+  else if opcode_tag == 21 then 0
+  else if opcode_tag == 22 then 0
+  else if opcode_tag == 240 then -1
+  else 0
+
+let validate_stack_depth current_depth change : Int -> Int -> Int [cost: Const(2)] =
+  let new_depth = current_depth + change in
+  if new_depth >= 0 then 1 else 0
+
+-- ============================================================
+-- Byte buffer helpers (no recursion needed)
+-- ============================================================
+
+-- Prepend a 4-byte btsle onto a tail, producing a cons-list segment.
+let prepend_four bts tail : Int -> Int -> Int [cost: Const(1)] =
+  (bts.0, (bts.1, (bts.2, (bts.3, tail))))
+
+-- Prepend a 9-byte btsle onto a tail (for Int values: tag + 8 bytes).
+let prepend_nine bts tail : Int -> Int -> Int [cost: Const(1)] =
+  (bts.0, (bts.1, (bts.2, (bts.3, (bts.4, (bts.5, (bts.6, (bts.7, (bts.8, tail)))))))))
+
+-- Prepend an encoded instruction (3-5 bytes) onto a tail.
+let prepend_instr encoded tail : Int -> Int -> Int [cost: Const(2)] =
+  let n = encoded.0 in
+  if n == 5 then (encoded.1, (encoded.2, (encoded.3, (encoded.4, (encoded.5, tail)))))
+  else if n == 4 then (encoded.1, (encoded.2, (encoded.3, (encoded.4, tail))))
+  else (encoded.1, (encoded.2, (encoded.3, tail)))
+
+-- ============================================================
+-- serialize_program: orchestrate full bytecode serialization
+-- ============================================================
+
+-- Serialize a complete program to a contiguous byte cons-list.
+-- arg_count: number of function arguments (u8)
+-- instr_count: number of instructions
+-- const_count: number of constants
+-- instrs: fold-able list of (source_node, opcode_tag, operand) btsles
+-- consts: fold-able list of (type_tag, value) btsles
+--
+-- Output: a cons-list (byte, (byte, ... 0)) containing the full wire format:
+--   magic(4) + version(1) + arg_count(1) + instr_count(4) + const_count(4)
+--   + encoded instructions + encoded constants
+--
+-- Note: fold processes elements left-to-right, prepending each to the
+-- accumulator. This builds the cons-list in reverse element order.
+-- The caller should provide instrs and consts in reverse program order
+-- so the output bytes are correct. This is the standard functional
+-- accumulator pattern (equivalent to Rust's Vec::push in reverse).
+let serialize_program arg_count instr_count const_count instrs consts : Int -> Int -> Int -> Int -> Int -> Int [cost: Linear(instr_count)] =
+  -- Step 1: Build constants (fold prepends each onto accumulator).
+  -- Supports all 9 value types: Int(0), Nat(1), Float64(2), Float32(3),
+  -- Bool(4), Bytes(5), Unit(6), Tuple(7), String(8).
+  let const_bytes = fold 0 (\pair ->
+    let rest = pair.0 in
+    let c = pair.1 in
+    let tag = c.0 in
+    if tag == 0 then
+      -- Int: tag(0) + i64 LE(8) = 9 bytes
+      prepend_nine (encode_int_value c.1) rest
+    else if tag == 1 then
+      -- Nat: tag(1) + u64 LE(8) = 9 bytes
+      let b = encode_i64_le c.1 in
+      (1, (b.0, (b.1, (b.2, (b.3, (b.4, (b.5, (b.6, (b.7, rest)))))))))
+    else if tag == 2 then
+      -- Float64: tag(2) + f64 raw bits as 8 LE bytes = 9 bytes
+      let b = encode_i64_le c.1 in
+      (2, (b.0, (b.1, (b.2, (b.3, (b.4, (b.5, (b.6, (b.7, rest)))))))))
+    else if tag == 3 then
+      -- Float32: tag(3) + f32 raw bits as 4 LE bytes = 5 bytes
+      let b = encode_u32_le c.1 in
+      (3, (b.0, (b.1, (b.2, (b.3, rest)))))
+    else if tag == 4 then
+      -- Bool: tag(4) + u8(1) = 2 bytes
+      let bv = encode_bool_value c.1 in
+      (bv.0, (bv.1, rest))
+    else if tag == 5 then
+      -- Bytes: tag(5) + length u32 LE(4) + data hash (simplified)
+      let lb = encode_u32_le c.1 in
+      (5, (lb.0, (lb.1, (lb.2, (lb.3, rest)))))
+    else if tag == 6 then
+      -- Unit: tag(6) = 1 byte
+      (encode_unit_value, rest)
+    else if tag == 7 then
+      -- Tuple: tag(7) + count u32 LE(4) + element count
+      let cb = encode_u32_le c.1 in
+      (7, (cb.0, (cb.1, (cb.2, (cb.3, rest)))))
+    else if tag == 8 then
+      -- String: tag(8) + length u32 LE(4) + length value
+      let lb = encode_u32_le c.1 in
+      (8, (lb.0, (lb.1, (lb.2, (lb.3, rest)))))
+    else
+      (tag, rest)
+  ) consts in
+  -- Step 2: Build instructions on top of constants
+  let body = fold const_bytes (\pair ->
+    let rest = pair.0 in
+    let instr = pair.1 in
+    let encoded = encode_instruction instr.0 instr.1 instr.2 in
+    prepend_instr encoded rest
+  ) instrs in
+  -- Step 3: Prepend the 14-byte header (always in correct order)
+  let ic = encode_u32_le instr_count in
+  let cc = encode_u32_le const_count in
+  (73, (82, (73, (83, (1, (arg_count, (ic.0, (ic.1, (ic.2, (ic.3, (cc.0, (cc.1, (cc.2, (cc.3, body))))))))))))))
+
+-- Compute the total serialized size of a program.
+let serialize_program_size instr_count const_count instrs consts : Int -> Int -> Int -> Int -> Int [cost: Linear(instr_count)] =
+  let hdr = header_byte_size in
+  let instr_total = fold 0 (\pair ->
+    let acc = pair.0 in
+    let instr = pair.1 in
+    acc + instruction_size instr.1
+  ) instrs in
+  let const_total = fold 0 (\pair ->
+    let acc = pair.0 in
+    let c = pair.1 in
+    let tag = c.0 in
+    let sz = if tag == 0 then 9
+      else if tag == 4 then 2
+      else if tag == 6 then 1
+      else 1 in
+    acc + sz
+  ) consts in
+  hdr + instr_total + const_total
+
+-- Prepend a constant integer (tag 0x00 + 8 LE bytes) into buffer (cons-list)
+let prepend_const_int value buf : Int -> Int -> Int [cost: Const(3)] =
+  let b0 = value % 256 in
+  let b1 = (value / 256) % 256 in
+  let b2 = (value / 65536) % 256 in
+  let b3 = (value / 16777216) % 256 in
+  let b4 = (value / 4294967296) % 256 in
+  let b5 = (value / 1099511627776) % 256 in
+  let b6 = (value / 281474976710656) % 256 in
+  let b7 = (value / 72057594037927936) % 256 in
+  (0, (b0, (b1, (b2, (b3, (b4, (b5, (b6, (b7, buf)))))))))
+
+-- Prepend bytecode header as cons-list: header bytes (includes magic) + tail
+let prepend_bytecode_header arg_count instr_count const_count flags : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  let hdr = serialize_header_bytes arg_count instr_count const_count in
+  (hdr.0, (hdr.1, (hdr.2, (hdr.3, (hdr.4, (hdr.5, 0))))))
+
+-- Serialize bytecode: header (includes magic) prepended to buf (cons-list)
+let serialize_bytecode arg_count instr_count const_count buf : Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let hdr = serialize_header_bytes arg_count instr_count const_count in
+  (hdr.0, (hdr.1, (hdr.2, (hdr.3, (hdr.4, (hdr.5, buf))))))

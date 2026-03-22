@@ -1,0 +1,35 @@
+-- Island migration: ring topology between demes.
+--
+-- Every 5 generations, the top-2 individuals from each deme migrate
+-- to the next deme in a ring, replacing the worst-2 in the destination.
+--
+-- Selection: best = lowest Pareto rank, then highest crowding distance.
+-- Replacement: worst = highest Pareto rank, then lowest crowding distance.
+
+-- Check whether migration should occur this generation (every 5 gens)
+let should_migrate generation : Int -> Int [cost: Const(1)] =
+  if generation <= 0 then 0
+  else if generation % 5 == 0 then 1
+  else 0
+
+-- Compare two individuals by quality: (rank, crowding) pairs
+-- Returns 1 if a is better than b, 0 otherwise
+-- Better = lower rank; on tie, higher crowding distance wins
+let is_better rank_a crowd_a rank_b crowd_b : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  if rank_a < rank_b then 1
+  else if rank_a > rank_b then 0
+  else if crowd_a > crowd_b then 1
+  else 0
+
+-- Select top-k from a population of (rank, crowding, fitness) tuples
+-- Returns the best individual's fitness from the population
+let best_fitness population : Int -> Int [cost: Linear(population)] =
+  fold (999999999, 0, 0)
+    (\best ind ->
+      if is_better ind.0 ind.1 best.0 best.1 == 1 then ind
+      else best)
+    population
+
+-- Compute the ring destination index: (source + 1) % num_demes
+let ring_dest source num_demes : Int -> Int -> Int [cost: Const(1)] =
+  (source + 1) % num_demes

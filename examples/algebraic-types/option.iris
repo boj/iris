@@ -1,0 +1,46 @@
+-- Algebraic Data Types in IRIS
+-- Demonstrates sum type declarations, constructors, and pattern matching.
+
+-- Option: a value that may or may not be present.
+type Option<T> = Some(T) | None
+
+let unwrap_or x default_val : Int -> Int -> Int =
+    match x with
+      | Some(v) -> v
+      | None -> default_val
+
+-- Map a function over an optional value.
+let map_option x f : Int -> Int -> Int =
+    match x with
+      | Some(v) -> Some (f v)
+      | None -> None
+
+-- Chain two optional computations.
+let and_then x f : Int -> Int -> Int =
+    match x with
+      | Some(v) -> f v
+      | None -> None
+
+-- Color: a simple enum with no payloads.
+type Color = Red | Green | Blue
+
+let color_to_int c : Int -> Int =
+    match c with
+      | Red -> 0
+      | Green -> 1
+      | Blue -> 2
+
+let is_primary c : Int -> Bool =
+    match c with
+      | Red -> true
+      | Blue -> true
+      | _ -> false
+
+-- Result: success or failure with a payload.
+type Result<T, E> = Ok(T) | Err(E)
+
+let map_result r f : Int -> Int -> Int =
+    match r with
+      | Ok(v) -> Ok (f v)
+      | Err(e) -> Err e
+

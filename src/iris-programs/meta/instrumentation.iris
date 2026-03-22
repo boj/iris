@@ -1,0 +1,78 @@
+-- Telemetry collection: timing, step counts, memory usage, anomaly detection.
+--
+-- Provides primitives for the self-inspection loop:
+--   - Sliding window statistics (mean, p99)
+--   - Regression detection (mean > 2x baseline)
+--   - Anomaly classification (severity levels)
+--   - Audit chain verification (BLAKE3 hash links)
+
+-- Compute the sum of a timing window
+let timing_sum timings : Int -> Int [cost: Linear(timings)] =
+  fold 0 (\acc t -> acc + t) timings
+
+-- Count the number of measurements in a timing window
+let timing_count timings : Int -> Int [cost: Linear(timings)] =
+  fold 0 (\acc t -> acc + 1) timings
+
+-- Compute the mean of a timing window (sum / count)
+let compute_mean timings : Int -> Int [cost: Linear(timings)] =
+  let s = timing_sum timings in
+  let c = timing_count timings in
+  if c == 0 then 0
+  else s / c
+
+-- Compute p99 approximation: max value in the window
+-- (true p99 requires sorting; max is a conservative upper bound)
+let compute_p99 timings : Int -> Int [cost: Linear(timings)] =
+  fold 0 (\best t -> max best t) timings
+
+-- Detect regression: returns 1 if mean exceeds 2x baseline, 0 otherwise
+let detect_regression mean_ns baseline_ns : Int -> Int -> Int [cost: Const(1)] =
+  if baseline_ns == 0 then 0
+  else if mean_ns > baseline_ns * 2 then 1
+  else 0
+
+-- Classify severity based on slowdown ratio (ratio = actual * 100 / expected)
+-- Returns: 0 = Info, 1 = Warning, 2 = Critical
+let classify_severity ratio_pct : Int -> Int [cost: Const(2)] =
+  if ratio_pct > 500 then 2
+  else if ratio_pct > 200 then 1
+  else 0
+
+-- Record a timing measurement and update running statistics
+-- state: (sum, count, max_val, regression_flag, baseline)
+-- Returns updated state
+let record_timing state duration : (Int, Int, Int, Int, Int) -> Int -> (Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let new_sum = state.0 + duration in
+  let new_count = state.1 + 1 in
+  let new_max = max state.2 duration in
+  let new_mean = new_sum / new_count in
+  let regression = detect_regression new_mean state.4 in
+  (new_sum, new_count, new_max, regression, state.4)
+
+-- Check memory against limit: returns 1 if exceeded
+let memory_exceeded current_bytes limit_bytes : Int -> Int -> Int [cost: Const(1)] =
+  if limit_bytes == 0 then 0
+  else if current_bytes > limit_bytes then 1
+  else 0
+
+-- Verify that an audit entry's prev_hash matches the previous entry's hash
+-- Returns 1 if chain link is valid, 0 if broken
+let verify_chain_link prev_entry_hash current_prev_hash : Int -> Int -> Int [cost: Const(1)] =
+  if prev_entry_hash == current_prev_hash then 1 else 0
+
+-- Verify an entire audit chain: all links must be valid
+-- entries: tuple of (entry_hash, prev_hash) pairs
+let verify_chain entries : Int -> (Int, Int) [cost: Linear(entries)] =
+  fold (1, 0)
+    (\state entry ->
+      let valid = if state.1 == 0 then 1
+                  else verify_chain_link state.1 entry.1 in
+      (state.0 * valid, entry.0))
+    entries
+
+-- Compute performance delta: (before_ns - after_ns) * 100 / before_ns
+-- Positive = improvement, negative = regression
+let performance_delta before_ns after_ns : Int -> Int -> Int [cost: Const(1)] =
+  if before_ns == 0 then 0
+  else ((before_ns - after_ns) * 100) / before_ns

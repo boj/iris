@@ -1,0 +1,21 @@
+-- Insert a Filter node between a Fold and its collection input
+-- Creates: filter(collection, cmp_pred) then fold.port2 → filter
+let wrap_in_filter program fold_id collection_id cmp_opcode =
+  -- Create comparison predicate (Prim node)
+  let s1 = graph_add_node_rt program 0 in
+  let p1 = s1.0 in
+  let pred_id = s1.1 in
+  let p2_t = graph_set_prim_op p1 pred_id cmp_opcode in
+  let p2 = p2_t.0 in
+  -- Create Filter node (opcode 0x31)
+  let s2 = graph_add_node_rt p2 0 in
+  let p3 = s2.0 in
+  let filter_id = s2.1 in
+  let p4_t = graph_set_prim_op p3 filter_id 49 in
+  let p4 = p4_t.0 in
+  -- Disconnect fold from collection
+  let p5 = graph_disconnect p4 fold_id collection_id in
+  -- Wire: filter(collection, pred) and fold → filter
+  let p6 = graph_connect p5 filter_id collection_id 0 in
+  let p7 = graph_connect p6 filter_id pred_id 1 in
+  graph_connect p7 fold_id filter_id 2

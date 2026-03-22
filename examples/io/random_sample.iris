@@ -1,0 +1,4 @@
+-- Generate a random integer in range [lo, hi)
+-- Uses the random effect which takes min and max arguments
+let rand_range lo hi : Int -> Int -> Int [cost: Const(1)] =
+  random lo hi

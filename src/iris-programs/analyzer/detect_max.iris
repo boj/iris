@@ -1,0 +1,28 @@
+-- Detect max pattern: output = maximum element of input list
+--
+-- Takes a list of (list_input, expected_output) pairs and count n.
+-- We fold each inner list with max to find its maximum element,
+-- then compare to expected output.
+-- Returns confidence score 0-100.
+
+-- Find maximum element in a list
+-- Uses a very negative initial value as the base
+let max_list xs : Int -> Int [cost: Linear(xs)] =
+  fold (0 - 999999999) (\acc x -> max acc x) xs
+
+-- Check if a single test case's output matches the max of its input list
+-- pair.0 = input list, pair.1 = expected output
+let is_max_match pair : (Int, Int) -> Int [cost: Linear(pair)] =
+  if max_list pair.0 == pair.1 then 1 else 0
+
+-- Count how many test cases match the max pattern
+let count_max_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_max_match pair) pairs
+
+-- Detect max pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_max pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_max_matches pairs in
+    (matches * 100) / n

@@ -1,0 +1,192 @@
+-- Training corpus: generate diverse problem specs for codec training
+--
+-- Runs evolution on auto-generated problems, collecting all programs.
+-- The resulting dataset feeds the GIN-VAE codec's contrastive training.
+--
+-- Problem types (cycled):
+--   0: scalar arithmetic (a op b)
+--   1: fold problems (reduce lists)
+--   2: map problems (transform elements)
+--   3: filter problems (select elements)
+--   4: composition (f . g)
+--   5: conditional (if-then-else)
+--   6: multi-input (3+ inputs)
+--   7: iterative (loop patterns)
+--   8: predicate (boolean functions)
+--   9: pairwise (element pairs)
+
+-- =========================================================================
+-- Problem type classification
+-- =========================================================================
+
+-- Classify a problem spec by its type index
+-- Returns: problem type (0-9)
+let problem_type index : Int -> Int [cost: Const(2)] =
+  index - (index / 10) * 10
+
+-- Generate test case count for a problem type
+-- Arithmetic: 6 cases, fold/map: 8 cases, others: 6 cases
+let test_cases_for_type ptype : Int -> Int [cost: Const(2)] =
+  if ptype == 1 then 8   -- fold needs more examples
+  else if ptype == 2 then 8   -- map needs more examples
+  else 6
+
+-- =========================================================================
+-- ProblemSpec generation
+-- =========================================================================
+
+-- Generate test cases for a scalar arithmetic problem
+-- op_code: 0=add, 1=sub, 2=mul
+-- Returns list of (input_pair, expected_output) test cases
+let gen_arithmetic_tests op_code seed : Int -> Int -> Int [cost: Const(12)] =
+  let a0 = seed % 20 in
+  let b0 = (seed / 20) % 20 in
+  let a1 = (seed + 7) % 20 in
+  let b1 = (seed + 13) % 20 in
+  let a2 = (seed + 3) % 20 in
+  let b2 = (seed + 17) % 20 in
+  if op_code == 0 then
+    ((a0, b0, a0 + b0), (a1, b1, a1 + b1), (a2, b2, a2 + b2))
+  else if op_code == 1 then
+    ((a0, b0, a0 - b0), (a1, b1, a1 - b1), (a2, b2, a2 - b2))
+  else
+    ((a0, b0, a0 * b0), (a1, b1, a1 * b1), (a2, b2, a2 * b2))
+
+-- Generate test cases for a fold problem
+-- fold_op: 0=sum, 2=product, 8=max
+let gen_fold_tests fold_op seed : Int -> Int -> Int [cost: Const(10)] =
+  if fold_op == 0 then
+    -- Sum tests
+    (((1, 2, 3), 6), ((10,), 10), ((0, 0), 0))
+  else if fold_op == 8 then
+    -- Max tests
+    (((1, 5, 3), 5), ((10,), 10), ((0 - 1, 0 - 2), 0 - 1))
+  else
+    -- Product tests
+    (((1, 2, 3), 6), ((10,), 10), ((2, 2), 4))
+
+-- Generate test cases for a map problem
+-- map_op: applied elementwise
+let gen_map_tests map_op seed : Int -> Int -> Int [cost: Const(8)] =
+  if map_op == 0 then
+    -- Double (add x x)
+    (((1, 2, 3), (2, 4, 6)), ((0,), (0,)), ((5, 10), (10, 20)))
+  else
+    -- Square (mul x x)
+    (((1, 2, 3), (1, 4, 9)), ((0,), (0,)), ((4, 3), (16, 9)))
+
+-- Generate a ProblemSpec based on type and seed
+-- Returns: (problem_type, test_case_count, test_data)
+let generate_problem_spec index seed : Int -> Int -> (Int, Int, Int) [cost: Const(5)] =
+  let ptype = problem_type index in
+  let tc_count = test_cases_for_type ptype in
+  if ptype == 0 then
+    let op = seed % 3 in
+    let tests = gen_arithmetic_tests op seed in
+    (ptype, tc_count, tests)
+  else if ptype == 1 then
+    let op = if seed % 3 == 0 then 0 else if seed % 3 == 1 then 2 else 8 in
+    let tests = gen_fold_tests op seed in
+    (ptype, tc_count, tests)
+  else if ptype == 2 then
+    let op = if seed % 2 == 0 then 0 else 2 in
+    let tests = gen_map_tests op seed in
+    (ptype, tc_count, tests)
+  else
+    -- Default: arithmetic
+    let tests = gen_arithmetic_tests 0 seed in
+    (ptype, tc_count, tests)
+
+-- =========================================================================
+-- Corpus generation
+-- =========================================================================
+
+-- Estimate total programs produced from N problem specs
+-- Each problem spec yields ~population_size * survival_rate programs
+-- Survival rate ~10% of population across generations
+let estimated_programs spec_count population_size : Int -> Int -> Int [cost: Const(2)] =
+  spec_count * population_size / 10
+
+-- Compute pairwise similarity record count from N programs
+-- N choose 2 = N * (N-1) / 2
+let pairwise_count num_programs : Int -> Int [cost: Const(2)] =
+  num_programs * (num_programs - 1) / 2
+
+-- Estimate training dataset size in bytes
+-- Each program: ~1KB, each similarity pair: ~16 bytes
+let dataset_size_bytes num_programs num_pairs : Int -> Int -> Int [cost: Const(2)] =
+  num_programs * 1024 + num_pairs * 16
+
+-- Generate corpus training plan
+-- Returns (total_specs, estimated_programs, estimated_pairs, dataset_bytes)
+let corpus_plan spec_count population_size : Int -> Int -> (Int, Int, Int, Int) [cost: Const(4)] =
+  let progs = estimated_programs spec_count population_size in
+  let pairs = pairwise_count progs in
+  let bytes = dataset_size_bytes progs pairs in
+  (spec_count, progs, pairs, bytes)
+
+-- =========================================================================
+-- Corpus collection
+-- =========================================================================
+
+-- Collect programs from evolving a set of problems
+-- Runs evolution on each problem spec and collects resulting programs
+-- problems: list of (problem_type, test_case_count, test_data)
+-- Returns: cons-list of (program, fitness) pairs
+let collect_corpus problems max_gens pop_size : Int -> Int -> Int -> Int [cost: Unknown] =
+  fold ()
+    (\collected problem ->
+      let seed_prog = graph_new in
+      let tc = problem.2 in
+      -- Run a mini-evolution loop: mutate seed and keep best
+      let evolved = fold (seed_prog, 0)
+        (\es gen ->
+          let root = graph_get_root (es.0) in
+          let kind = graph_get_kind (es.0) root in
+          let rnd = (gen * 7 + 3) % 16 in
+          let mutant = if kind == 0 then
+            (graph_set_prim_op (es.0) root rnd).0
+          else
+            -- Insert a Prim node and connect it to root
+            let step = graph_add_node_rt (es.0) 0 in
+            let p = step.0 in
+            let nid = step.1 in
+            let p2 = if rnd != 0 then
+              (graph_set_prim_op p nid rnd).0
+            else p in
+            graph_connect p2 root nid 0
+          in
+          let score = graph_eval mutant tc in
+          if score > es.1 then (mutant, score) else es)
+        max_gens in
+      -- Cons this evolved program onto the collected list
+      ((evolved.0, evolved.1), collected))
+    problems
+
+-- Generate a full corpus of N problem specs with diverse types
+-- Returns: cons-list of problem specs
+let generate_corpus_specs n : Int -> Int [cost: Linear(n)] =
+  fold ()
+    (\specs i ->
+      let seed = i * 97 + 13 in
+      let spec = generate_problem_spec i seed in
+      (spec, specs))
+    n
+
+-- Corpus statistics
+-- Returns: (num_problems, num_types_covered, estimated_programs, dataset_size_bytes)
+let corpus_stats num_problems pop_size : Int -> Int -> (Int, Int, Int, Int) [cost: Const(5)] =
+  let types_covered = min num_problems 10 in
+  let progs = estimated_programs num_problems pop_size in
+  let pairs = pairwise_count progs in
+  let bytes = dataset_size_bytes progs pairs in
+  (num_problems, types_covered, progs, bytes)
+
+-- Full corpus pipeline: generate problems, evolve solutions, collect programs
+-- Returns: (corpus_data, plan, stats)
+let full_corpus_pipeline num_problems pop_size max_gens : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let specs = generate_corpus_specs num_problems in
+  let plan = corpus_plan num_problems pop_size in
+  let corpus = collect_corpus specs max_gens pop_size in
+  let stats = corpus_stats num_problems pop_size in
+  (corpus, plan, stats)

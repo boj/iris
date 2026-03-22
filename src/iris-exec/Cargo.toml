@@ -1,0 +1,20 @@
+[package]
+name = "iris-exec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+jit = []
+clcu = ["iris-clcu-sys"]
+
+[dependencies]
+iris-types = { path = "../iris-types" }
+iris-bootstrap = { path = "../iris-bootstrap", features = ["syntax"] }
+iris-clcu-sys = { path = "../iris-clcu-sys", optional = true }
+blake3.workspace = true
+serde_json = "1"
+rand = "0.8"
+stacker = "0.1"
+libc = "0.2"

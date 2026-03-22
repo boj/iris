@@ -1,0 +1,80 @@
+-- Count nodes by kind in a graph
+-- Returns a tuple of 20 counts, one per NodeKind:
+--   (Prim, Apply, Lambda, Ref, Match, Lit, Tuple, Project, Fold, Unfold,
+--    Sequence, Effect, Channel, Guard, Witness, Opaque, Compose, Cache,
+--    Partial, Extern)
+-- Uses graph_nodes to enumerate all node IDs, graph_get_kind to map each
+-- to its kind tag, then independent folds to count occurrences of each kind.
+-- Note: uses sub(acc, neg(1)) instead of acc+1 to avoid content-addressed
+-- node collision between the fold step and outer arithmetic.
+let node_histogram program : Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  let c0 = fold 0 (\a k -> if k == 0 then a - (neg 1) else a) kinds in
+  let c1 = fold 0 (\a k -> if k == 1 then a - (neg 1) else a) kinds in
+  let c2 = fold 0 (\a k -> if k == 2 then a - (neg 1) else a) kinds in
+  let c3 = fold 0 (\a k -> if k == 3 then a - (neg 1) else a) kinds in
+  let c4 = fold 0 (\a k -> if k == 4 then a - (neg 1) else a) kinds in
+  let c5 = fold 0 (\a k -> if k == 5 then a - (neg 1) else a) kinds in
+  let c6 = fold 0 (\a k -> if k == 6 then a - (neg 1) else a) kinds in
+  let c7 = fold 0 (\a k -> if k == 7 then a - (neg 1) else a) kinds in
+  let c8 = fold 0 (\a k -> if k == 8 then a - (neg 1) else a) kinds in
+  let c9 = fold 0 (\a k -> if k == 9 then a - (neg 1) else a) kinds in
+  let c10 = fold 0 (\a k -> if k == 10 then a - (neg 1) else a) kinds in
+  let c11 = fold 0 (\a k -> if k == 11 then a - (neg 1) else a) kinds in
+  let c12 = fold 0 (\a k -> if k == 12 then a - (neg 1) else a) kinds in
+  let c13 = fold 0 (\a k -> if k == 13 then a - (neg 1) else a) kinds in
+  let c14 = fold 0 (\a k -> if k == 14 then a - (neg 1) else a) kinds in
+  let c15 = fold 0 (\a k -> if k == 15 then a - (neg 1) else a) kinds in
+  let c16 = fold 0 (\a k -> if k == 16 then a - (neg 1) else a) kinds in
+  let c17 = fold 0 (\a k -> if k == 17 then a - (neg 1) else a) kinds in
+  let c18 = fold 0 (\a k -> if k == 18 then a - (neg 1) else a) kinds in
+  let c19 = fold 0 (\a k -> if k == 19 then a - (neg 1) else a) kinds in
+  (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19)
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: histogram sum (first 10 bins) is positive
+let test_histogram_sum_first10 : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h = node_histogram g in
+  let hsum = h.0 + h.1 + h.2 + h.3 + h.4 + h.5 + h.6 + h.7 + h.8 + h.9 in
+  if hsum > 0 then 1 else 0 - 1
+
+-- Test: all histogram bins are non-negative
+let test_histogram_nonneg : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h = node_histogram g in
+  let all_ok = if h.0 >= 0 then if h.1 >= 0 then if h.2 >= 0 then if h.3 >= 0 then if h.4 >= 0 then if h.5 >= 0 then 1 else 0 else 0 else 0 else 0 else 0 else 0 in
+  if all_ok == 1 then 1 else 0 - 1
+
+-- Test: self_graph has at least some Prim (kind 0) or Lit (kind 5) nodes
+let test_histogram_has_nodes : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h = node_histogram g in
+  if h.0 + h.5 > 0 then 1 else 0 - 1
+
+-- Test: histogram bins 10-19 are non-negative
+let test_histogram_upper_nonneg : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h = node_histogram g in
+  let all_ok = if h.10 >= 0 then if h.11 >= 0 then if h.12 >= 0 then if h.13 >= 0 then if h.14 >= 0 then if h.15 >= 0 then 1 else 0 else 0 else 0 else 0 else 0 else 0 in
+  if all_ok == 1 then 1 else 0 - 1
+
+-- Test: total histogram count is positive (self_graph has nodes)
+let test_histogram_positive_total : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h = node_histogram g in
+  let hsum = h.0 + h.1 + h.2 + h.3 + h.4 + h.5 + h.6 + h.7 + h.8 + h.9 in
+  if hsum > 0 then 1 else 0 - 1
+
+-- Test: histogram is deterministic (same graph gives same result)
+let test_histogram_deterministic : Int [cost: Const(1)] =
+  let g = self_graph in
+  let h1 = node_histogram g in
+  let h2 = node_histogram g in
+  if h1.0 == h2.0 then
+    if h1.5 == h2.5 then 1 else 0 - 1
+  else 0 - 1

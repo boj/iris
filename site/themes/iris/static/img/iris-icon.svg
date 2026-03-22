@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="iris-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F766E"/>
+      <stop offset="100%" style="stop-color:#14B8A6"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer ring representing the evolution loop -->
+  <circle cx="32" cy="32" r="28" fill="none" stroke="url(#iris-grad)" stroke-width="3"/>
+  <!-- Inner triangle representing the 4-layer stack -->
+  <polygon points="32,12 48,44 16,44" fill="none" stroke="url(#iris-grad)" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- Center circle representing the proof kernel -->
+  <circle cx="32" cy="34" r="6" fill="url(#iris-grad)"/>
+  <!-- Three dots for the 3 execution tiers -->
+  <circle cx="32" cy="18" r="2.5" fill="url(#iris-grad)"/>
+  <circle cx="21" cy="40" r="2.5" fill="url(#iris-grad)"/>
+  <circle cx="43" cy="40" r="2.5" fill="url(#iris-grad)"/>
+</svg>

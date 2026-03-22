@@ -1,0 +1,10 @@
+-- Naive recursive Fibonacci
+-- fib(0) = 0, fib(1) = 1, fib(n) = fib(n-1) + fib(n-2)
+let rec fib n : Int -> Int [cost: Unknown] =
+  if n <= 1 then n
+  else fib (n - 1) + fib (n - 2)
+
+-- Mutual recursion example
+-- fib_e computes Fibonacci via even/odd decomposition.
+let rec fib_e n = if n == 0 then 0 else fib_o (n - 1)
+and fib_o n = if n == 0 then 1 else fib_e (n - 1) + fib_o (n - 1)

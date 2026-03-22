@@ -1,0 +1,133 @@
+-- Lowering: convert parsed expression tree to SemanticGraph nodes
+--
+-- Mirrors the Rust LowerCtx in iris-syntax/src/lower.rs.
+-- Transforms expression AST nodes into SemanticGraph primitives:
+--   IntLit  -> Lit node (kind=5, type_tag=0x00, value in payload)
+--   Ident   -> InputRef (Lit with type_tag=0xFF) or Prim node
+--   BinOp   -> Prim node (opcode from operator)
+--   If      -> Guard node (kind=4)
+--   Let     -> inline (lower value, bind result, lower body)
+--
+-- SemanticGraph node kinds (from iris-repr):
+--   0 = Prim, 1 = Tuple, 2 = Project, 3 = Apply
+--   4 = Guard, 5 = Lit, 6 = Lambda, 7 = Neural
+--   8 = Fold, 9 = Unfold, 10 = Effect
+--
+-- Expression tree node kinds (from parse_expr.iris):
+--   0 = IntLit, 1 = Ident, 2 = BinOp, 3 = If, 4 = Let
+
+-- Lower an integer literal to a Lit node
+-- Creates a Lit node in the target program with type_tag=0x00
+-- Inputs:
+--   target  : SemanticGraph being built
+--   value   : integer value to embed
+-- Output: (updated_program, node_id) pair
+let lower_int_lit target value : Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let step = graph_add_node_rt target 5 in
+  let prog = step.0 in
+  let node_id = step.1 in
+  (prog, node_id)
+
+-- Lower a binary operator to a Prim node
+-- Maps operator kind to opcode:
+--   0 (add) -> 0x00, 1 (sub) -> 0x01, 2 (mul) -> 0x02, 3 (div) -> 0x03
+-- Inputs:
+--   target : SemanticGraph being built
+--   op     : operator kind (0-3)
+-- Output: (updated_program, node_id) pair
+let lower_binop target op : Int -> Int -> (Int, Int) [cost: Const(5)] =
+  let opcode = if op == 0 then 0
+    else if op == 1 then 1
+    else if op == 2 then 2
+    else 3 in
+  let step = graph_add_node_rt target 0 in
+  let prog = step.0 in
+  let prim_id = step.1 in
+  (prog, prim_id)
+
+-- Lower a guard (if/then/else) to a Guard node
+-- A Guard node (kind=4) has 3 arguments:
+--   port 0: condition
+--   port 1: then branch
+--   port 2: else branch
+-- Inputs:
+--   target   : SemanticGraph being built
+--   cond_id  : node ID of the condition expression
+--   then_id  : node ID of the then branch
+--   else_id  : node ID of the else branch
+-- Output: (updated_program, guard_node_id) pair
+let lower_guard target cond_id then_id else_id : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(8)] =
+  let step = graph_add_guard_rt target cond_id then_id else_id in
+  let prog = step.0 in
+  let guard_id = step.1 in
+  (prog, guard_id)
+
+-- Lower an input reference to a Lit node with type_tag=0xFF
+-- Used for function parameters and lambda-bound variables
+-- Inputs:
+--   target : SemanticGraph being built
+--   index  : parameter index (0-based)
+-- Output: (updated_program, node_id) pair
+let lower_input_ref target index : Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let step = graph_add_node_rt target 5 in
+  let prog = step.0 in
+  let node_id = step.1 in
+  (prog, node_id)
+
+-- Lower a Ref node (cross-fragment reference)
+-- Creates a Ref node (kind=11) pointing to another fragment
+-- Inputs:
+--   target      : SemanticGraph being built
+--   fragment_id : ID of the referenced fragment
+-- Output: (updated_program, ref_node_id) pair
+let lower_ref target fragment_id : Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let step = graph_add_ref_rt target fragment_id in
+  let prog = step.0 in
+  let ref_id = step.1 in
+  (prog, ref_id)
+
+-- Wire two nodes: connect source port to target node
+-- Wraps graph_connect for the lowering pipeline
+let wire target source_id target_id port : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  graph_connect target source_id target_id port
+
+-- Lower a full expression tree node
+-- Dispatches on node kind and recursively lowers children
+-- Inputs:
+--   target    : SemanticGraph being built
+--   expr_kind : expression node kind (0=IntLit, 1=Ident, 2=BinOp, 3=If, 4=Let)
+--   payload   : expression payload (value for IntLit, op for BinOp, etc.)
+-- Output: (updated_program, result_node_id)
+let lower_node target expr_kind payload : Int -> Int -> Int -> (Int, Int) [cost: Const(6)] =
+  if expr_kind == 0 then lower_int_lit target payload
+  else if expr_kind == 1 then lower_input_ref target payload
+  else if expr_kind == 2 then lower_binop target payload
+  else
+    let step = graph_add_node_rt target expr_kind in
+    (step.0, step.1)
+
+-- Set the cost bound on a lowered node
+-- Wraps graph_set_cost for annotating nodes with cost metadata
+-- Inputs:
+--   target  : SemanticGraph
+--   node_id : node to annotate
+--   cost    : cost value (0=Zero, 1=Const, 2=Linear, 3=Unknown)
+-- Output: updated program
+let set_cost_bound target node_id cost : Int -> Int -> Int -> Int [cost: Const(2)] =
+  graph_set_cost target node_id cost
+
+-- Lower and connect a binary operation with its two operands
+-- Combines lowering the Prim node and wiring the arguments
+-- Inputs:
+--   target  : SemanticGraph being built
+--   op      : operator kind (0=add, 1=sub, 2=mul, 3=div)
+--   left_id : node ID of left operand
+--   right_id: node ID of right operand
+-- Output: (updated_program, prim_node_id)
+let lower_connected_binop target op left_id right_id : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(8)] =
+  let result = lower_binop target op in
+  let prog = result.0 in
+  let prim_id = result.1 in
+  let prog2 = wire prog prim_id left_id 0 in
+  let prog3 = wire prog2 prim_id right_id 1 in
+  (prog3, prim_id)

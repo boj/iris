@@ -1,0 +1,9 @@
+{"plugins": [],
+ "package": "iris-kernel",
+ "options": {"autoImplicit": false},
+ "name": "IrisKernel.Eval",
+ "isModule": false,
+ "importArts":
+ {"IrisKernel.Types":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Types.olean"]},
+ "dynlibs": []}

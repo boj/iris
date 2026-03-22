@@ -1,0 +1,43 @@
+-- Lazy Streams
+-- Infinite sequences generated on demand using lazy_unfold and thunk_force.
+-- Demonstrates co-inductive data in IRIS.
+
+-- Natural numbers: 0, 1, 2, 3, ...
+let nats_stream start : Int -> Tuple [cost: Unknown] =
+  lazy_unfold start (\n -> (n, n + 1))
+
+-- Take the first n elements from a lazy stream.
+let stream_take stream n : Tuple -> Int -> Tuple [cost: Linear(n)] =
+  lazy_take stream n
+
+-- Fibonacci stream: each element is sum of previous two.
+let fib_stream x : Int -> Tuple [cost: Unknown] =
+  lazy_unfold (0, 1) (\(a, b) -> (a, (b, a + b)))
+
+-- Powers of 2: 1, 2, 4, 8, 16, ...
+let powers_of_2 x : Int -> Tuple [cost: Unknown] =
+  lazy_unfold 1 (\n -> (n, n * 2))
+
+-- Geometric series: a, a*r, a*r^2, ...
+let geometric a r : Int -> Int -> Tuple [cost: Unknown] =
+  lazy_unfold a (\n -> (n, n * r))
+
+-- Collatz sequence from a starting number (terminates at 1).
+let collatz_stream start : Int -> Tuple [cost: Unknown] =
+  lazy_unfold start (\n ->
+    if n <= 1 then (n, 1)
+    else if n % 2 == 0 then (n, n / 2)
+    else (n, 3 * n + 1)
+  )
+
+-- Map over a lazy stream.
+let stream_map stream f : Tuple -> (Int -> Int) -> Tuple [cost: Unknown] =
+  lazy_map stream f
+
+-- Test: take first 10 elements from various streams
+let test_streams x : Int -> Tuple =
+  let first_10_nats = stream_take (nats_stream 0) 10 in
+  let first_10_fibs = stream_take (fib_stream 0) 10 in
+  let first_10_pow2 = stream_take (powers_of_2 0) 10 in
+  let collatz_27 = stream_take (collatz_stream 27) 20 in
+  (first_10_nats, first_10_fibs, first_10_pow2, collatz_27)

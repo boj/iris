@@ -1,0 +1,3 @@
+-- A minimal interpreter: evaluate a program by dispatching on root kind
+let interpret program inputs =
+  graph_eval program inputs

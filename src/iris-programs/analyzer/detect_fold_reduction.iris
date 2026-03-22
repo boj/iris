@@ -1,0 +1,63 @@
+-- Detect fold reduction pattern: output = fold(base, op, input_list)
+--
+-- Takes a list of (list_input, expected_output) pairs and count n.
+-- Tests fold operations: sum (base=0, add), product (base=1, mul),
+-- max (base=MIN, max), min (base=MAX, min).
+-- Returns: (confidence, base, opcode, input_index)
+
+-- Fold a list with add (sum), base = 0
+let fold_sum xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + x) xs
+
+-- Fold a list with mul (product), base = 1
+let fold_product xs : Int -> Int [cost: Linear(xs)] =
+  fold 1 (\acc x -> acc * x) xs
+
+-- Fold a list with max, base = very negative
+let fold_max xs : Int -> Int [cost: Linear(xs)] =
+  fold (0 - 999999999) (\acc x -> max acc x) xs
+
+-- Fold a list with min, base = very positive
+let fold_min xs : Int -> Int [cost: Linear(xs)] =
+  fold 999999999 (\acc x -> min acc x) xs
+
+-- Check if all pairs match a fold operation
+-- fold_fn: 0=sum, 1=product, 2=max, 3=min
+let count_fold_matches pairs fold_fn : Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0
+    (\acc pair ->
+      let xs = pair.0 in
+      let expected = pair.1 in
+      let result = if fold_fn == 0 then fold_sum xs
+                   else if fold_fn == 1 then fold_product xs
+                   else if fold_fn == 2 then fold_max xs
+                   else fold_min xs in
+      if result == expected then acc + 1 else acc)
+    pairs
+
+-- Detect fold reduction pattern
+-- Returns: (confidence, base, opcode, input_index)
+-- Bases: sum=0, product=1, max=-999999999, min=999999999
+-- Opcodes: add=0, mul=2, max=8, min=7
+let detect_fold_reduction pairs n : Int -> Int -> (Int, Int, Int, Int) [cost: Linear(pairs)] =
+  if n == 0 then (0, 0, 0, 0)
+  else
+    -- Try sum
+    let sum_matches = count_fold_matches pairs 0 in
+    let sum_conf = (sum_matches * 100) / n in
+    -- Try product
+    let prod_matches = count_fold_matches pairs 1 in
+    let prod_conf = (prod_matches * 100) / n in
+    -- Try max
+    let max_matches = count_fold_matches pairs 2 in
+    let max_conf = (max_matches * 100) / n in
+    -- Try min
+    let min_matches = count_fold_matches pairs 3 in
+    let min_conf = (min_matches * 100) / n in
+    -- Pick the best
+    let best = (0, 0, 0, 0) in
+    let b1 = if sum_conf > best.0 then (sum_conf, 0, 0, 0) else best in
+    let b2 = if prod_conf > b1.0 then (prod_conf, 1, 2, 0) else b1 in
+    let b3 = if max_conf > b2.0 then (max_conf, 0 - 999999999, 8, 0) else b2 in
+    let b4 = if min_conf > b3.0 then (min_conf, 999999999, 7, 0) else b3 in
+    b4

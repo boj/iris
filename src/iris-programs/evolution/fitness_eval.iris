@@ -1,0 +1,45 @@
+-- Evaluate a program against test cases
+
+-- Evaluate a program on a single test case
+-- Returns 1 if output matches expected, 0 otherwise
+let eval_single program inputs expected =
+  let result = graph_eval program inputs in
+  if result == expected then 1 else 0
+
+-- Evaluate a program on multiple test cases
+-- test_cases is a list of (inputs, expected) pairs
+-- Returns (passes, total) count tuple
+let eval_batch program test_cases =
+  fold (0, 0) (\acc tc ->
+    let inputs = tc.0 in
+    let expected = tc.1 in
+    let result = graph_eval program inputs in
+    let pass = if result == expected then 1 else 0 in
+    (acc.0 + pass, acc.1 + 1)
+  ) test_cases
+
+-- Compute fitness as fraction of passed test cases (scaled to 0-1000)
+let fitness_score passes total =
+  if total == 0 then 0
+  else (passes * 1000) / total
+
+-- Compute error magnitude for a single test case (absolute difference)
+let eval_error program inputs expected =
+  let result = graph_eval program inputs in
+  let diff = result - expected in
+  if diff < 0 then 0 - diff else diff
+
+-- Sum of absolute errors across test cases
+let total_error program test_cases =
+  fold 0 (\acc tc ->
+    let inputs = tc.0 in
+    let expected = tc.1 in
+    let err = eval_error program inputs expected in
+    acc + err
+  ) test_cases
+
+-- Penalized fitness: accuracy minus complexity penalty
+let penalized_fitness passes total node_count penalty_weight =
+  let accuracy = (passes * 1000) / total in
+  let penalty = node_count * penalty_weight in
+  accuracy - penalty

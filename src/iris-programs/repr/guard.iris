@@ -1,0 +1,171 @@
+-- Guard system: GuardSpec, ErrorBound, BlobRef
+--
+-- Mirrors the Rust guard.rs (71 LOC) in iris-repr.
+--
+-- GuardSpec: contract for a neural computation node.
+--   input_type: TypeRef
+--   output_type: TypeRef
+--   preconditions: Vec<LIAFormula>
+--   postconditions: Vec<LIAFormula>
+--   error_bound: ErrorBound
+--   fallback: Option<FragmentRef>
+--
+-- ErrorBound (4 variants):
+--   0 = Exact           -- zero error (formal proof)
+--   1 = Statistical     -- confidence interval (confidence, epsilon)
+--   2 = Classification  -- accuracy bound (accuracy)
+--   3 = Unverified      -- no error guarantee
+--
+-- BlobRef: content-addressed reference to weight data
+--   hash: [u8; 32] (BLAKE3 of blob contents)
+--   size: u64
+
+-- ============================================================
+-- ErrorBound variant tags
+-- ============================================================
+
+let error_exact : Int [cost: Const(1)] = 0
+let error_statistical : Int [cost: Const(1)] = 1
+let error_classification : Int [cost: Const(1)] = 2
+let error_unverified : Int [cost: Const(1)] = 3
+
+-- ============================================================
+-- ErrorBound validation
+-- ============================================================
+
+-- Check if an ErrorBound tag is valid (0-3).
+let is_valid_error_bound tag : Int -> Int [cost: Const(2)] =
+  if tag >= 0 then
+    if tag <= 3 then 1 else 0
+  else 0
+
+-- Check if a Statistical error bound has valid parameters.
+-- confidence: should be in [0, 1000] (permille representation)
+-- epsilon: should be positive
+let validate_statistical confidence_permille epsilon_permille : Int -> Int -> Int [cost: Const(3)] =
+  let conf_ok = if confidence_permille >= 0 then
+      if confidence_permille <= 1000 then 1 else 0
+    else 0 in
+  let eps_ok = if epsilon_permille > 0 then 1 else 0 in
+  conf_ok * eps_ok
+
+-- Check if a Classification error bound has valid accuracy.
+-- accuracy: should be in [0, 1000] (permille representation)
+let validate_classification accuracy_permille : Int -> Int [cost: Const(2)] =
+  if accuracy_permille >= 0 then
+    if accuracy_permille <= 1000 then 1 else 0
+  else 0
+
+-- ============================================================
+-- ErrorBound comparison
+-- ============================================================
+
+-- Compare two error bounds for strictness.
+-- Exact < Statistical < Classification < Unverified
+-- Returns: -1 if a is stricter, 0 if equal, 1 if b is stricter.
+let compare_error_bounds tag_a tag_b : Int -> Int -> Int [cost: Const(3)] =
+  if tag_a == tag_b then 0
+  else if tag_a < tag_b then -1
+  else 1
+
+-- Check if an error bound meets a required strictness level.
+-- actual_tag: the error bound we have
+-- required_tag: the minimum acceptable error bound
+-- Returns: 1 if sufficient, 0 if insufficient.
+let error_bound_sufficient actual_tag required_tag : Int -> Int -> Int [cost: Const(1)] =
+  if actual_tag <= required_tag then 1 else 0
+
+-- ============================================================
+-- GuardSpec representation
+-- ============================================================
+
+-- A GuardSpec is represented as a flat structure:
+-- (input_type, output_type, pre_count, post_count, error_bound_tag, has_fallback)
+
+-- Validate a GuardSpec.
+-- input_type: must be nonzero (valid TypeRef)
+-- output_type: must be nonzero
+-- pre_count: number of preconditions (>= 0)
+-- post_count: number of postconditions (>= 0)
+-- error_bound_tag: must be valid (0-3)
+let validate_guard_spec input_type output_type pre_count post_count error_bound_tag : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let pre_ok = if pre_count >= 0 then 1 else 0 in
+  let post_ok = if post_count >= 0 then 1 else 0 in
+  let err_ok = is_valid_error_bound error_bound_tag in
+  pre_ok * post_ok * err_ok
+
+-- Estimate wire size of a GuardSpec serialization.
+-- input_type(8) + output_type(8) + pre_count(4) + formulas + post_count(4) + formulas
+-- + error_bound(1-17) + fallback_flag(1) + optional fallback(32)
+let guard_spec_wire_size pre_count post_count error_bound_tag has_fallback : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  let base = 8 + 8 + 4 + 4 + 1 in
+  -- Each LIA formula is ~5 bytes average
+  let pre_size = pre_count * 5 in
+  let post_size = post_count * 5 in
+  let err_size = if error_bound_tag == 0 then 1
+    else if error_bound_tag == 1 then 17
+    else if error_bound_tag == 2 then 9
+    else 1 in
+  let fallback_size = if has_fallback == 1 then 33 else 1 in
+  base + pre_size + post_size + err_size + fallback_size
+
+-- ============================================================
+-- BlobRef representation
+-- ============================================================
+
+-- A BlobRef is: hash(32 bytes) + size(8 bytes) = 40 bytes.
+let blob_ref_size : Int [cost: Const(1)] = 40
+
+-- Validate a BlobRef.
+-- hash_nonzero: 1 if the hash is not all-zeros
+-- size: must be non-negative
+let validate_blob_ref hash_nonzero size : Int -> Int -> Int [cost: Const(2)] =
+  let hash_ok = if hash_nonzero == 1 then 1 else 0 in
+  let size_ok = if size >= 0 then 1 else 0 in
+  hash_ok * size_ok
+
+-- Check if a BlobRef is the default (all-zero hash, size 0).
+let is_default_blob_ref hash_nonzero size : Int -> Int -> Int [cost: Const(2)] =
+  if hash_nonzero == 0 then
+    if size == 0 then 1 else 0
+  else 0
+
+-- ============================================================
+-- Neural node validation
+-- ============================================================
+
+-- Validate a Neural node's payload.
+-- Requires: valid guard_spec AND non-default blob_ref (or default for untrained).
+let validate_neural_node input_type output_type pre_count post_count error_bound_tag blob_hash_nonzero blob_size : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let guard_ok = validate_guard_spec input_type output_type pre_count post_count error_bound_tag in
+  -- BlobRef can be default (untrained) or valid
+  let blob_ok = if blob_hash_nonzero == 0 then
+      if blob_size == 0 then 1 else 0
+    else
+      if blob_size > 0 then 1 else 0
+  in
+  guard_ok * blob_ok
+
+-- ============================================================
+-- Guard precondition checking
+-- ============================================================
+
+-- Evaluate a set of preconditions against input values.
+-- Returns the number of satisfied preconditions.
+-- precondition_results: a packed integer where each bit indicates pass/fail
+-- pre_count: total number of preconditions
+let count_satisfied_preconditions precondition_results pre_count : Int -> Int -> Int [cost: Const(3)] =
+  -- Count set bits in precondition_results (up to pre_count)
+  if pre_count == 0 then 0
+  else
+    let b0 = precondition_results % 2 in
+    let rest = precondition_results / 2 in
+    if pre_count == 1 then b0
+    else
+      let b1 = (rest % 2) in
+      let b2 = if pre_count > 2 then (rest / 2) % 2 else 0 in
+      b0 + b1 + b2
+
+-- Check if all preconditions are satisfied.
+let all_preconditions_satisfied satisfied_count total_count : Int -> Int -> Int [cost: Const(1)] =
+  if satisfied_count == total_count then 1 else 0

@@ -1,0 +1,9 @@
+-- Copy a file from src path to dst path
+-- Mode 0 = read, mode 1 = write
+let copy src dst : Int -> Int -> Int [cost: Linear(src)] =
+  let h_in = file_open src 0 in
+  let contents = file_read_bytes h_in 1048576 in
+  let _ = file_close h_in in
+  let h_out = file_open dst 1 in
+  let _ = file_write_bytes h_out contents in
+  file_close h_out

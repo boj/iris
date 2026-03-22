@@ -1,0 +1,8 @@
+-- Producer-consumer pattern: producer writes work to atomic state,
+-- consumer reads it. Demonstrates shared state via atomics.
+let produce key value : Int -> Int -> Int [cost: Const(2)] =
+  let _ = atomic_write key value in
+  value
+
+let consume key : Int -> Int [cost: Const(1)] =
+  atomic_read key

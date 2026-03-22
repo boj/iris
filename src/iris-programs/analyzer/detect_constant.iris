@@ -1,0 +1,20 @@
+-- Detect constant pattern: all outputs are the same value
+--
+-- Takes a list of (input, output) pairs and the count n.
+-- Constant means every output is identical regardless of input.
+-- Returns confidence score 0-100.
+
+-- Check if all outputs in the pair list equal the first output
+-- first_output: the output from the first test case
+-- pairs: the full list of (input, output) pairs
+let count_constant_matches first_output pairs : Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + (if pair.1 == first_output then 1 else 0)) pairs
+
+-- Detect constant pattern across all test case pairs
+-- Returns confidence score 0-100
+-- first_output: output value from the first test case (caller extracts it)
+let detect_constant first_output pairs n : Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_constant_matches first_output pairs in
+    (matches * 100) / n

@@ -1,0 +1,54 @@
+-- Trie (Prefix Tree)
+-- Stores strings as sequences of integers (character codes).
+-- Uses State (map) for the trie structure.
+--
+-- Encoding: each trie node has a unique ID and stores:
+--   map key "N_C" -> child node ID for character C at node N
+--   map key "N_end" -> 1 if a word ends at node N
+--   "next_id" -> next available node ID
+--
+-- FIXME: This encoding requires int_to_string to build keys like "3_65".
+-- Without it, we use a simplified approach with integer-keyed State.
+-- If State only supports String keys, this needs str_concat + int_to_string.
+
+-- Simplified Trie: store complete words in a sorted list.
+-- Less efficient but demonstrates the interface.
+
+-- Create an empty trie.
+let trie_new x : Int -> Tuple [cost: Const(1)] = ()
+
+-- Insert a word (as a string).
+let trie_insert trie word : Tuple -> String -> Tuple [cost: Linear(trie)] =
+  if fold false (\found w -> if str_eq w word then true else found) trie then
+    trie  -- already present
+  else
+    list_append trie word
+
+-- Search for an exact word.
+let trie_search trie word : Tuple -> String -> Bool [cost: Linear(trie)] =
+  fold false (\found w -> if str_eq w word then true else found) trie
+
+-- Find all words with a given prefix.
+let trie_prefix trie prefix : Tuple -> String -> Tuple [cost: Linear(trie)] =
+  filter (\w -> str_starts_with w prefix) trie
+
+-- Count words with a given prefix.
+let trie_count_prefix trie prefix : Tuple -> String -> Int [cost: Linear(trie)] =
+  list_len (trie_prefix trie prefix)
+
+-- Remove a word.
+let trie_delete trie word : Tuple -> String -> Tuple [cost: Linear(trie)] =
+  filter (\w -> if str_eq w word then false else true) trie
+
+-- Test
+let test_trie x : Int -> Tuple =
+  let t = trie_new 0 in
+  let t = trie_insert t "apple" in
+  let t = trie_insert t "app" in
+  let t = trie_insert t "application" in
+  let t = trie_insert t "banana" in
+  let found = trie_search t "app" in
+  let not_found = trie_search t "ap" in
+  let prefix_app = trie_prefix t "app" in
+  let count = trie_count_prefix t "app" in
+  (found, not_found, prefix_app, count)

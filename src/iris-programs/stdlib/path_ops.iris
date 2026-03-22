@@ -1,0 +1,44 @@
+-- Path manipulation utilities
+-- Pure string operations for working with file paths
+
+-- Join two path segments with /
+-- Handles trailing slash on first segment
+let path_join a b : Int -> Int -> Int [cost: Linear(a)] =
+  if str_ends_with a "/" then str_concat a b
+  else str_concat (str_concat a "/") b
+
+-- Extract the file extension (including the dot)
+-- Returns empty string if no extension
+let rec find_last_dot s i last : Int -> Int -> Int -> Int [cost: Linear(s)] =
+  if i >= str_len s then last
+  else
+    let c = char_at s i in
+    if c == 46 then find_last_dot s (i + 1) i
+    else find_last_dot s (i + 1) last
+
+let path_extension path : Int -> Int [cost: Linear(path)] =
+  let dot_pos = find_last_dot path 0 (0 - 1) in
+  if dot_pos < 0 then ""
+  else str_slice path dot_pos (str_len path)
+
+-- Extract the basename (filename) from a path
+-- Returns everything after the last /
+let rec find_last_slash s i last : Int -> Int -> Int -> Int [cost: Linear(s)] =
+  if i >= str_len s then last
+  else
+    let c = char_at s i in
+    if c == 47 then find_last_slash s (i + 1) i
+    else find_last_slash s (i + 1) last
+
+let path_basename path : Int -> Int [cost: Linear(path)] =
+  let slash_pos = find_last_slash path 0 (0 - 1) in
+  if slash_pos < 0 then path
+  else str_slice path (slash_pos + 1) (str_len path)
+
+-- Extract the directory part of a path
+-- Returns everything before the last /
+let path_dirname path : Int -> Int [cost: Linear(path)] =
+  let slash_pos = find_last_slash path 0 (0 - 1) in
+  if slash_pos < 0 then "."
+  else if slash_pos == 0 then "/"
+  else str_slice path 0 slash_pos

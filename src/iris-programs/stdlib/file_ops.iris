@@ -1,0 +1,38 @@
+-- High-level file operations built on raw primitives
+-- Composes file_open, file_read_bytes, file_write_bytes, file_close, file_stat
+
+-- Read an entire file as a string
+-- Opens in read mode (0), reads up to 16MB, closes handle
+let read_file path : Int -> Int [cost: Linear(path)] =
+  let h = file_open path 0 in
+  let contents = file_read_bytes h 16777216 in
+  let unused = file_close h in
+  contents
+
+-- Write a string to a file (creates or truncates)
+-- Opens in write mode (1), writes content, closes handle
+let write_file path content : Int -> Int -> Int [cost: Linear(content)] =
+  let h = file_open path 1 in
+  let unused = file_write_bytes h content in
+  file_close h
+
+-- Append a string to a file (creates if not exists)
+-- Opens in append mode (2), writes content, closes handle
+let append_file path content : Int -> Int -> Int [cost: Linear(content)] =
+  let h = file_open path 2 in
+  let unused = file_write_bytes h content in
+  file_close h
+
+-- Check if a file exists by attempting file_stat
+-- Returns 1 (true) if stat succeeds, 0 (false) otherwise
+let file_exists path : Int -> Int [cost: Const(1)] =
+  let stat = file_stat path in
+  if stat >= 0 then 1 else 0
+
+-- Read a file and split into lines
+-- Opens file, reads contents, splits by newline
+let read_lines path : Int -> Int [cost: Linear(path)] =
+  let h = file_open path 0 in
+  let contents = file_read_bytes h 16777216 in
+  let unused = file_close h in
+  str_split contents "\n"

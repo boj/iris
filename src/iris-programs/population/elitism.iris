@@ -1,0 +1,23 @@
+-- Elitism: select top-k individuals by fitness
+--
+-- find_best: returns the maximum fitness value from a population (k=1 elitism)
+-- find_top_2: returns a tuple of (best, second_best) fitness values
+--
+-- population: collection of fitness values (Ints)
+
+-- Find the single best fitness value (k=1 elitism)
+-- Uses a very small base value so any real fitness beats it
+let find_best population : Int -> Int [cost: Linear(population)] =
+  fold (0 - 999999999) max population
+
+-- Find the second-best fitness, given the population and the known best value
+-- Skips the first occurrence of max1 and finds the next-highest value
+let find_second population max1 : Int -> Int -> Int [cost: Linear(population)] =
+  fold (0 - 999999999)
+    (\acc elem -> if elem == max1 then acc else max acc elem)
+    population
+
+-- Return top-2 as a tuple: (best, second_best)
+-- Takes population and the pre-computed best value as inputs
+let top_2 population max1 : Int -> Int -> (Int, Int) [cost: Linear(population)] =
+  (max1, find_second population max1)

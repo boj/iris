@@ -1,0 +1,1063 @@
+-- Production IRIS parser: Tokens -> AST
+--
+-- Takes tokenizer output (Tuple of token 4-tuples) and source string,
+-- producing an AST as nested tuples.
+--
+-- AST node: (kind, payload, children)
+--
+-- AST node kinds:
+--   0  = IntLit, 1  = FloatLit, 2  = StringLit, 3  = BoolLit
+--   4  = Var, 5  = UnitLit
+--   10 = BinOp, 11 = UnaryOp, 12 = App
+--   13 = Lambda, 14 = Let/in, 15 = If/then/else
+--   16 = OpSection (payload = op_ast id)
+--   17 = Tuple, 18 = TupleAccess, 19 = Pipe
+--   20 = Match (children = (scrutinee, arms_list))
+--   21 = ForAll (payload = var_hash, children = (body_expr))
+--   22 = CostExpr (payload = cost_kind, children = (cost_arg))
+--         cost_kind: 0=Unknown, 1=Zero, 2=Constant(arg), 3=Linear(arg), 4=NLogN(arg)
+--   30 = LetDecl, 31 = TypeDecl, 32 = ImportDecl
+--   33 = AllowDecl, 34 = DenyDecl
+--   35 = RequiresClause (payload = 0, children = (expr_list))
+--   36 = EnsuresClause (payload = 0, children = (expr_list))
+--   40 = Module
+--
+-- Uses a fold-based shunting-yard parser with cons-cell stacks:
+--   empty stack = 0 (sentinel)
+--   push val onto stack: (val, old_stack)
+--   pop: stack.0 = top value, stack.1 = rest
+--
+-- All logic inlined in a single function for bootstrap evaluator.
+
+let parse tokens src =
+  let n = list_len tokens in
+  if n == 0 then (40, 0, list_range 0 0)
+  else
+
+  let mt = list_range 0 0 in
+
+  -- Find boundaries of top-level items (let, type, import, allow, deny).
+  -- A top-level item starts with one of these keywords at paren depth 0.
+  -- Pass 1: Find all potential top-level item positions at paren depth 0.
+  -- Top-level keywords: let(10), type(14), import(15), allow(28), deny(29)
+  let all_items = fold (mt, 0, 0)
+    (\bs _i ->
+      if bs.1 >= n then bs
+      else
+        let t = list_nth tokens bs.1 in
+        let pd = bs.2 in
+        if t.0 == 50 then (bs.0, bs.1 + 1, pd + 1)
+        else if t.0 == 51 then (bs.0, bs.1 + 1, if pd > 0 then pd - 1 else 0)
+        else if pd == 0 then
+          -- Check if this is a top-level keyword
+          let is_toplevel =
+            if t.0 == 10 then 1
+            else if t.0 == 14 then 1
+            else if t.0 == 15 then 1
+            else if t.0 == 28 then 1
+            else if t.0 == 29 then 1
+            else 0 in
+          if is_toplevel == 1 then (list_append bs.0 bs.1, bs.1 + 1, pd)
+          else (bs.0, bs.1 + 1, pd)
+        else (bs.0, bs.1 + 1, pd))
+    n in
+  let all_item_pos = all_items.0 in
+  let num_all_items = list_len all_item_pos in
+
+  -- Pass 2: Filter to actual top-level declarations.
+  -- For 'let', check that it's not a let-in expression.
+  -- For type/import/allow/deny, they're always top-level.
+  let boundaries = fold (mt, 0)
+    (\bs _i ->
+      if bs.1 >= num_all_items then bs
+      else
+        let ipos = list_nth all_item_pos bs.1 in
+        let itok = list_nth tokens ipos in
+        -- type, import, allow, deny are always top-level
+        if itok.0 == 14 then (list_append bs.0 ipos, bs.1 + 1)
+        else if itok.0 == 15 then (list_append bs.0 ipos, bs.1 + 1)
+        else if itok.0 == 28 then (list_append bs.0 ipos, bs.1 + 1)
+        else if itok.0 == 29 then (list_append bs.0 ipos, bs.1 + 1)
+        else
+          -- 'let' keyword: check if it's top-level or part of let-in
+          if bs.1 == 0 then (list_append bs.0 ipos, bs.1 + 1)
+          else
+            -- Check: is there an 'in' at paren depth 0 between THIS let
+            -- and the next item (or EOF)? If yes, it's a let-in expr.
+            let end_range = if bs.1 + 1 < num_all_items then list_nth all_item_pos (bs.1 + 1) else n in
+            let has_in = fold (ipos + 1, 0, 0)
+              (\hi _j ->
+                if hi.1 == 1 then hi
+                else if hi.0 >= end_range then hi
+                else
+                  let t = list_nth tokens hi.0 in
+                  let pd = hi.2 in
+                  if t.0 == 50 then (hi.0 + 1, 0, pd + 1)
+                  else if t.0 == 51 then (hi.0 + 1, 0, if pd > 0 then pd - 1 else 0)
+                  else if t.0 == 12 then
+                    if pd == 0 then (hi.0 + 1, 1, pd)
+                    else (hi.0 + 1, 0, pd)
+                  else (hi.0 + 1, 0, pd))
+              n in
+            if has_in.1 == 1 then (bs.0, bs.1 + 1)
+            else (list_append bs.0 ipos, bs.1 + 1))
+    num_all_items in
+  let starts = boundaries.0 in
+  let nd = list_len starts in
+
+  -- Parse each item (let, type, import, allow, deny)
+  -- State: (items, counter, cap_entries)
+  -- cap_entries accumulates (is_allow, name_hash, name_len, arg_start, arg_end)
+  let items = fold (mt, 0, mt)
+    (\it _i ->
+      if it.1 >= nd then it
+      else
+        let dstart = list_nth starts it.1 in
+        let dend = if it.1 + 1 < nd then list_nth starts (it.1 + 1) else n in
+        let first_tok = list_nth tokens dstart in
+        let item_kind = first_tok.0 in
+
+        -- ========== type declaration ==========
+        -- type Name<params> = type_expr
+        -- We emit: (31, name_hash, mt)
+        if item_kind == 14 then
+          let name_tok = list_nth tokens (dstart + 1) in
+          let type_node = (31, name_tok.1, mt) in
+          (list_append it.0 type_node, it.1 + 1, it.2)
+
+        -- ========== import declaration ==========
+        -- import 0xHASH as name
+        -- We emit: (32, name_hash, mt) with hash info
+        else if item_kind == 15 then
+          -- Expect hex hash at dstart+1, 'as' at dstart+2, name at dstart+3
+          let hash_tok = list_nth tokens (dstart + 1) in
+          -- Skip 'as' token (kind 16)
+          let name_tok = list_nth tokens (dstart + 3) in
+          let import_node = (32, name_tok.1, mt) in
+          (list_append it.0 import_node, it.1 + 1, it.2)
+
+        -- ========== allow / deny declaration ==========
+        -- allow [Effect1, Effect2 "arg"]  or  deny [Effect1, Effect2]
+        -- Parse bracket contents into cap_entries.
+        -- Entry: (is_allow, name_hash, name_len, arg_start, arg_end)
+        else if item_kind == 28 then
+          let is_allow = 1 in
+          let cap_parse = fold (it.2, dstart + 1, 0, 0, 0)
+            (\cp _j ->
+              if cp.2 == 2 then cp
+              else if cp.1 >= dend then (cp.0, cp.1, 2, 0, 0)
+              else
+                let t = list_nth tokens cp.1 in
+                if cp.2 == 0 then
+                  if t.0 == 54 then (cp.0, cp.1 + 1, 1, 0, 0)
+                  else (cp.0, cp.1, 2, 0, 0)
+                else
+                  if t.0 == 55 then (cp.0, cp.1 + 1, 2, 0, 0)
+                  else if t.0 == 56 then (cp.0, cp.1 + 1, 1, 0, 0)
+                  else if t.0 == 2 then
+                    let nh = t.1 in
+                    let nl = t.3 - t.2 in
+                    if cp.1 + 1 < dend then
+                      let nt = list_nth tokens (cp.1 + 1) in
+                      if nt.0 == 4 then
+                        (list_append cp.0 (is_allow, nh, nl, nt.2, nt.3), cp.1 + 2, 1, 0, 0)
+                      else
+                        (list_append cp.0 (is_allow, nh, nl, 0, 0), cp.1 + 1, 1, 0, 0)
+                    else
+                      (list_append cp.0 (is_allow, nh, nl, 0, 0), cp.1 + 1, 1, 0, 0)
+                  else (cp.0, cp.1 + 1, 1, 0, 0))
+            dend in
+          (it.0, it.1 + 1, cap_parse.0)
+
+        else if item_kind == 29 then
+          let is_allow = 0 in
+          let cap_parse = fold (it.2, dstart + 1, 0, 0, 0)
+            (\cp _j ->
+              if cp.2 == 2 then cp
+              else if cp.1 >= dend then (cp.0, cp.1, 2, 0, 0)
+              else
+                let t = list_nth tokens cp.1 in
+                if cp.2 == 0 then
+                  if t.0 == 54 then (cp.0, cp.1 + 1, 1, 0, 0)
+                  else (cp.0, cp.1, 2, 0, 0)
+                else
+                  if t.0 == 55 then (cp.0, cp.1 + 1, 2, 0, 0)
+                  else if t.0 == 56 then (cp.0, cp.1 + 1, 1, 0, 0)
+                  else if t.0 == 2 then
+                    let nh = t.1 in
+                    let nl = t.3 - t.2 in
+                    if cp.1 + 1 < dend then
+                      let nt = list_nth tokens (cp.1 + 1) in
+                      if nt.0 == 4 then
+                        (list_append cp.0 (is_allow, nh, nl, nt.2, nt.3), cp.1 + 2, 1, 0, 0)
+                      else
+                        (list_append cp.0 (is_allow, nh, nl, 0, 0), cp.1 + 1, 1, 0, 0)
+                    else
+                      (list_append cp.0 (is_allow, nh, nl, 0, 0), cp.1 + 1, 1, 0, 0)
+                  else (cp.0, cp.1 + 1, 1, 0, 0))
+            dend in
+          (it.0, it.1 + 1, cap_parse.0)
+
+        -- ========== let declaration ==========
+        else
+
+        -- Parse declaration header
+        let t1 = list_nth tokens (dstart + 1) in
+        let is_rec = if t1.0 == 11 then 1 else 0 in
+        let name_pos = if is_rec == 1 then dstart + 2 else dstart + 1 in
+        let name_tok = list_nth tokens name_pos in
+        let name_hash = name_tok.1 in
+        let decl_payload = if is_rec == 1 then name_hash + 2147483648 else name_hash in
+
+        -- Collect params and find '='
+        -- Parse: type annotation (after ':'), cost annotation [cost: X],
+        -- requires/ensures expressions. State: (pos, params, done, cost_node, req_start, ens_start)
+        let pscan = fold (name_pos + 1, mt, 0, (0, 0, mt), 0, 0)
+          (\sc _j ->
+            if sc.2 == 1 then sc
+            else if sc.0 >= dend then (sc.0, sc.1, 1, sc.3, sc.4, sc.5)
+            else
+              let t = list_nth tokens sc.0 in
+              if t.0 == 35 then (sc.0, sc.1, 1, sc.3, sc.4, sc.5)
+              else if t.0 == 57 then
+                -- Type annotation: skip until '[' or requires/ensures or '='
+                let eqs = fold (sc.0 + 1, 0)
+                  (\e _k ->
+                    if e.1 == 1 then e
+                    else if e.0 >= dend then (e.0, 1)
+                    else
+                      let et = list_nth tokens e.0 in
+                      if et.0 == 35 then (e.0, 1)
+                      else if et.0 == 54 then (e.0, 1)
+                      else if et.0 == 26 then (e.0, 1)
+                      else if et.0 == 27 then (e.0, 1)
+                      else (e.0 + 1, 0))
+                  dend in
+                -- Check if we stopped at '['
+                if eqs.0 < dend then
+                  let nt = list_nth tokens eqs.0 in
+                  if nt.0 == 54 then
+                    -- Parse cost annotation: [cost: X]
+                    -- Skip 'cost' ident and ':'
+                    let cpos = eqs.0 + 1 in
+                    if cpos + 1 < dend then
+                      let ct = list_nth tokens cpos in
+                      -- skip 'cost' and ':'
+                      let vpos = cpos + 2 in
+                      if vpos < dend then
+                        let vt = list_nth tokens vpos in
+                        -- Parse cost kind by ident hash
+                        -- Unknown=752, Zero=416, Const=519, Linear=603, NLogN=446
+                        let cost_node =
+                          if vt.1 == 752 then (22, 0, mt)
+                          else if vt.1 == 416 then (22, 1, mt)
+                          else if vt.1 == 519 then
+                            -- Const(value): skip '(' read int ')'
+                            if vpos + 3 < dend then
+                              let iv = list_nth tokens (vpos + 2) in
+                              (22, 2, list_append mt (0, iv.1, mt))
+                            else (22, 0, mt)
+                          else if vt.1 == 603 then
+                            -- Linear(var): skip '(' read ident ')'
+                            if vpos + 3 < dend then
+                              let iv = list_nth tokens (vpos + 2) in
+                              (22, 3, list_append mt (4, iv.1, mt))
+                            else (22, 0, mt)
+                          else if vt.1 == 446 then
+                            -- NLogN(var)
+                            if vpos + 3 < dend then
+                              let iv = list_nth tokens (vpos + 2) in
+                              (22, 4, list_append mt (4, iv.1, mt))
+                            else (22, 0, mt)
+                          else (22, 0, mt) in
+                        -- Skip to ']'
+                        let rbs = fold (vpos + 1, 0)
+                          (\rb _k ->
+                            if rb.1 == 1 then rb
+                            else if rb.0 >= dend then (rb.0, 1)
+                            else if (list_nth tokens rb.0).0 == 55 then (rb.0 + 1, 1)
+                            else (rb.0 + 1, 0))
+                          dend in
+                        -- Continue scanning for requires/ensures/=
+                        let eqs2 = fold (rbs.0, 0)
+                          (\e _k ->
+                            if e.1 == 1 then e
+                            else if e.0 >= dend then (e.0, 1)
+                            else
+                              let et = list_nth tokens e.0 in
+                              if et.0 == 35 then (e.0, 1)
+                              else if et.0 == 26 then (e.0, 1)
+                              else if et.0 == 27 then (e.0, 1)
+                              else (e.0 + 1, 0))
+                          dend in
+                        (eqs2.0, sc.1, 1, cost_node, sc.4, sc.5)
+                      else (eqs.0, sc.1, 1, sc.3, sc.4, sc.5)
+                    else (eqs.0, sc.1, 1, sc.3, sc.4, sc.5)
+                  else if nt.0 == 26 then
+                    (eqs.0, sc.1, 0, sc.3, sc.4, sc.5)
+                  else if nt.0 == 27 then
+                    (eqs.0, sc.1, 0, sc.3, sc.4, sc.5)
+                  else (eqs.0, sc.1, 1, sc.3, sc.4, sc.5)
+                else (eqs.0, sc.1, 1, sc.3, sc.4, sc.5)
+              else if t.0 == 26 then
+                -- 'requires': record start position, skip until '=' or next annotation
+                let rstart = sc.0 + 1 in
+                let eqs = fold (sc.0 + 1, 0)
+                  (\e _k ->
+                    if e.1 == 1 then e
+                    else if e.0 >= dend then (e.0, 1)
+                    else
+                      let et = list_nth tokens e.0 in
+                      if et.0 == 35 then (e.0, 1)
+                      else if et.0 == 26 then (e.0, 1)
+                      else if et.0 == 27 then (e.0, 1)
+                      else (e.0 + 1, 0))
+                  dend in
+                -- Check what stopped us: if it's another annotation, don't set done
+                let stopped_at_eq = if eqs.0 < dend then
+                  if (list_nth tokens eqs.0).0 == 35 then 1 else 0
+                  else 1 in
+                if stopped_at_eq == 1 then
+                  (eqs.0, sc.1, 1, sc.3, rstart, sc.5)
+                else
+                  -- Stopped at another annotation, continue scanning
+                  (eqs.0, sc.1, 0, sc.3, rstart, sc.5)
+              else if t.0 == 27 then
+                -- 'ensures': record start position, skip until '='
+                let estart = sc.0 + 1 in
+                let eqs = fold (sc.0 + 1, 0)
+                  (\e _k ->
+                    if e.1 == 1 then e
+                    else if e.0 >= dend then (e.0, 1)
+                    else if (list_nth tokens e.0).0 == 35 then (e.0, 1)
+                    else (e.0 + 1, 0))
+                  dend in
+                (eqs.0, sc.1, 1, sc.3, sc.4, estart)
+              else if t.0 == 54 then
+                -- '[' = cost annotation: [cost: X]
+                let cpos = sc.0 + 1 in
+                if cpos + 2 < dend then
+                  let ct = list_nth tokens cpos in
+                  -- skip 'cost' (ident) and ':'
+                  let vpos = cpos + 2 in
+                  if vpos < dend then
+                    let vt = list_nth tokens vpos in
+                    let cost_node =
+                      if vt.1 == 752 then (22, 0, mt)
+                      else if vt.1 == 416 then (22, 1, mt)
+                      else if vt.1 == 519 then
+                        if vpos + 3 < dend then
+                          let iv = list_nth tokens (vpos + 2) in
+                          (22, 2, list_append mt (0, iv.1, mt))
+                        else (22, 0, mt)
+                      else if vt.1 == 603 then
+                        if vpos + 3 < dend then
+                          let iv = list_nth tokens (vpos + 2) in
+                          (22, 3, list_append mt (4, iv.1, mt))
+                        else (22, 0, mt)
+                      else if vt.1 == 446 then
+                        if vpos + 3 < dend then
+                          let iv = list_nth tokens (vpos + 2) in
+                          (22, 4, list_append mt (4, iv.1, mt))
+                        else (22, 0, mt)
+                      else (22, 0, mt) in
+                    -- Skip to ']'
+                    let rbs = fold (vpos + 1, 0)
+                      (\rb _k ->
+                        if rb.1 == 1 then rb
+                        else if rb.0 >= dend then (rb.0, 1)
+                        else if (list_nth tokens rb.0).0 == 55 then (rb.0 + 1, 1)
+                        else (rb.0 + 1, 0))
+                      dend in
+                    -- Continue scanning for requires/ensures/=
+                    let eqs2 = fold (rbs.0, 0)
+                      (\e _k ->
+                        if e.1 == 1 then e
+                        else if e.0 >= dend then (e.0, 1)
+                        else
+                          let et = list_nth tokens e.0 in
+                          if et.0 == 35 then (e.0, 1)
+                          else if et.0 == 26 then (e.0, 1)
+                          else if et.0 == 27 then (e.0, 1)
+                          else (e.0 + 1, 0))
+                      dend in
+                    (eqs2.0, sc.1, 1, cost_node, sc.4, sc.5)
+                  else (sc.0 + 1, sc.1, 0, sc.3, sc.4, sc.5)
+                else (sc.0 + 1, sc.1, 0, sc.3, sc.4, sc.5)
+              else if t.0 == 2 then
+                (sc.0 + 1, list_append sc.1 (4, t.1, mt), 0, sc.3, sc.4, sc.5)
+              else (sc.0 + 1, sc.1, 0, sc.3, sc.4, sc.5))
+          dend in
+
+        let params = pscan.1 in
+        let cost_node = pscan.3 in
+        let req_start = pscan.4 in
+        let ens_start = pscan.5 in
+        let expr_start = pscan.0 + 1 in
+
+        -- === Expression parser ===
+        -- State: (pos, vs, vsp, os, osp, phase, mbp, err)
+        -- vs = cons-cell value stack (0 = empty, (val, rest) = non-empty)
+        -- os = cons-cell operator stack
+        let expr_budget = dend * 10 + 32 in
+        let est = fold (expr_start, 0, 0, 0, 0, 0, 0, 0)
+          (\s _i ->
+            let pos = s.0 in
+            let vs = s.1 in
+            let vsp = s.2 in
+            let os = s.3 in
+            let osp = s.4 in
+            let phase = s.5 in
+            let mbp = s.6 in
+            let err = s.7 in
+
+            if err != 0 then s
+            else if phase == 2 then s
+            else if pos >= dend then
+              if phase == 1 then
+                -- Reduce all remaining ops
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          let node = (ak, top.1, (le, ri)) in
+                          ((node, rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          let node = (11, top.1, list_append mt operand) in
+                          ((node, rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 7 then
+                        if r.1 >= 1 then
+                          let bd = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          let node = (13, top.1, list_append mt bd) in
+                          ((node, rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else if top.0 == 10 then
+                        if r.1 >= 1 then
+                          let el = ((r.0).0) in
+                          -- Need to find cond and then values
+                          -- top.1 = cond_depth (how many pops from current)
+                          -- top.2 = then_depth
+                          -- Collect by popping
+                          let th = (((r.0).1).0) in
+                          let cd = ((((r.0).1).1).0) in
+                          let rest = ((((r.0).1).1).1) in
+                          let node = (15, 0, (cd, th, el)) in
+                          ((node, rest), r.1 - 2, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 11 then
+                        if r.1 >= 1 then
+                          let bd = ((r.0).0) in
+                          let vl = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let node = (14, top.1, (vl, bd)) in
+                          ((node, rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      -- ForAll reduce (12): pop body, create (21, var_hash, body)
+                      else if top.0 == 12 then
+                        if r.1 >= 1 then
+                          let bd = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          let node = (21, top.1, list_append mt bd) in
+                          ((node, rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 0)
+              else (pos, vs, vsp, os, osp, 2, mbp, 1)
+
+            -- Phase 0: expect atom or prefix
+            else if phase == 0 then
+              let tok = list_nth tokens pos in
+              let tk = tok.0 in
+              if tk == 1 then
+                (pos + 1, ((0, tok.1, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 2 then
+                (pos + 1, ((4, tok.1, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 3 then
+                (pos + 1, ((1, tok.1, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 4 then
+                (pos + 1, ((2, tok.2, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 5 then
+                -- HexHash: treat as integer 0 for expression contexts
+                (pos + 1, ((0, 0, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              -- forall (kind 23): forall <ident> . <expr>
+              -- Produces: (21, var_hash, body_expr) after body is parsed
+              else if tk == 23 then
+                if pos + 2 < dend then
+                  let vt = list_nth tokens (pos + 1) in
+                  if vt.0 == 2 then
+                    let at = list_nth tokens (pos + 2) in
+                    if at.0 == 58 then
+                      -- Push ForAll operator on ops stack (type 12)
+                      -- 12 = ForAll sentinel: pops body, creates (21, var_hash, body)
+                      let no = ((12, vt.1, 0), os) in
+                      let no2 = ((9, mbp, 0), no) in
+                      (pos + 3, vs, vsp, no2, osp + 2, 0, 0, 0)
+                    else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                  else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                else (pos, vs, vsp, os, osp, 2, mbp, 1)
+              else if tk == 24 then
+                (pos + 1, ((3, 1, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 25 then
+                (pos + 1, ((3, 0, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+              else if tk == 31 then
+                (pos + 1, vs, vsp, ((2, 0, 15), os), osp + 1, 0, mbp, 0)
+              else if tk == 63 then
+                (pos + 1, vs, vsp, ((2, 1, 15), os), osp + 1, 0, mbp, 0)
+              else if tk == 50 then
+                if pos + 1 < dend then
+                  let nx = list_nth tokens (pos + 1) in
+                  if nx.0 == 51 then
+                    -- () unit literal
+                    (pos + 2, ((5, 0, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+                  else if pos + 2 < dend then
+                    let nx2 = list_nth tokens (pos + 2) in
+                    if nx2.0 == 51 then
+                      -- Check if nx is an operator -> operator section
+                      let op_id =
+                        if nx.0 == 30 then 0
+                        else if nx.0 == 31 then 1
+                        else if nx.0 == 32 then 2
+                        else if nx.0 == 33 then 3
+                        else if nx.0 == 34 then 4
+                        else if nx.0 == 36 then 5
+                        else if nx.0 == 37 then 6
+                        else if nx.0 == 38 then 7
+                        else if nx.0 == 39 then 8
+                        else if nx.0 == 40 then 9
+                        else if nx.0 == 41 then 10
+                        else 999 in
+                      if op_id != 999 then
+                        -- Operator section: (op) -> OpSection node
+                        (pos + 3, ((16, op_id, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+                      else
+                        (pos + 1, vs, vsp, ((1, vsp, 0), os), osp + 1, 0, mbp, 0)
+                    else
+                      (pos + 1, vs, vsp, ((1, vsp, 0), os), osp + 1, 0, mbp, 0)
+                  else
+                    (pos + 1, vs, vsp, ((1, vsp, 0), os), osp + 1, 0, mbp, 0)
+                else (pos, vs, vsp, os, osp, 2, mbp, 1)
+              else if tk == 59 then
+                if pos + 2 < dend then
+                  let pt = list_nth tokens (pos + 1) in
+                  if pt.0 == 2 then
+                    let at = list_nth tokens (pos + 2) in
+                    if at.0 == 60 then
+                      let no = ((7, pt.1, 0), os) in
+                      let no2 = ((9, mbp, 0), no) in
+                      (pos + 3, vs, vsp, no2, osp + 2, 0, 0, 0)
+                    else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                  else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                else (pos, vs, vsp, os, osp, 2, mbp, 1)
+              else if tk == 20 then
+                let no = ((4, 0, 0), os) in
+                let no2 = ((9, mbp, 0), no) in
+                (pos + 1, vs, vsp, no2, osp + 2, 0, 0, 0)
+              else if tk == 10 then
+                if pos + 1 < dend then
+                  let nx = list_nth tokens (pos + 1) in
+                  let ir = if nx.0 == 11 then 1 else 0 in
+                  let np = if ir == 1 then pos + 2 else pos + 1 in
+                  if np < dend then
+                    let nt = list_nth tokens np in
+                    if nt.0 == 2 then
+                      let nh = nt.1 in
+                      let pl = if ir == 1 then nh + 2147483648 else nh in
+                      let ep = fold (np + 1, 0)
+                        (\es _j ->
+                          if es.1 == 1 then es
+                          else if es.0 >= dend then (es.0, 1)
+                          else if (list_nth tokens es.0).0 == 35 then (es.0, 1)
+                          else (es.0 + 1, 0))
+                        dend in
+                      let no = ((6, pl, 0), os) in
+                      let no2 = ((9, mbp, 0), no) in
+                      (ep.0 + 1, vs, vsp, no2, osp + 2, 0, 0, 0)
+                    else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                  else (pos, vs, vsp, os, osp, 2, mbp, 1)
+                else (pos, vs, vsp, os, osp, 2, mbp, 1)
+              else (pos, vs, vsp, os, osp, 2, mbp, 1)
+
+            -- Phase 1: expect infix, postfix, or end
+            else
+              let tok = list_nth tokens pos in
+              let tk = tok.0 in
+
+              -- Close paren
+              if tk == 51 then
+                -- Reduce until paren/comma
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 1 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 8 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                if rd.3 > 0 then
+                  -- Scan ops stack: skip commas to find open-paren
+                  let pscan = fold (rd.2, rd.3, 0, 0)
+                    (\ps _j ->
+                      if ps.2 == 1 then ps
+                      else if ps.1 <= 0 then (ps.0, ps.1, 1, 1)
+                      else
+                        let ptop = ((ps.0).0) in
+                        if ptop.0 == 1 then (ps.0, ps.1, 1, 0)
+                        else if ptop.0 == 8 then (((ps.0).1), ps.1 - 1, 0, ps.3)
+                        else (ps.0, ps.1, 1, 1))
+                    expr_budget in
+                  if pscan.3 != 0 then (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+                  else
+                    let ptop = ((pscan.0).0) in
+                    let pnos = ((pscan.0).1) in
+                    let bvsp = ptop.1 in
+                    let ec = rd.1 - bvsp in
+                    if ec == 1 then
+                      (pos + 1, rd.0, rd.1, pnos, pscan.1 - 1, 1, mbp, 0)
+                    else if ec > 1 then
+                      let collect = fold (mt, rd.0, 0)
+                        (\c _j ->
+                          if c.2 >= ec then c
+                          else (list_append c.0 ((c.1).0), ((c.1).1), c.2 + 1))
+                        ec in
+                      let rev_len = list_len collect.0 in
+                      let reversed = fold (mt, 0)
+                        (\rv _j ->
+                          if rv.1 >= rev_len then rv
+                          else (list_append rv.0 (list_nth collect.0 (rev_len - 1 - rv.1)), rv.1 + 1))
+                        rev_len in
+                      let tup_node = (17, 0, reversed.0) in
+                      (pos + 1, (tup_node, collect.1), bvsp + 1, pnos, pscan.1 - 1, 1, mbp, 0)
+                    else
+                      (pos + 1, ((5, 0, mt), rd.0), rd.1 + 1, pnos, pscan.1 - 1, 1, mbp, 0)
+                else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+
+              -- Comma
+              else if tk == 56 then
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 1 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 8 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                (pos + 1, rd.0, rd.1, ((8, 0, 0), rd.2), rd.3 + 1, 0, mbp, 0)
+
+              -- 'then'
+              else if tk == 21 then
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 4 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                if rd.3 > 0 then
+                  let top = ((rd.2).0) in
+                  if top.0 == 4 then
+                    -- cond is on top of value stack. Push if-then sentinel.
+                    let no = ((5, 0, 0), ((rd.2).1)) in
+                    let no2 = ((9, 0, 0), no) in
+                    (pos + 1, rd.0, rd.1, no2, rd.3 + 1, 0, 0, 0)
+                  else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+                else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+
+              -- 'else'
+              else if tk == 22 then
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 5 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                if rd.3 > 0 then
+                  let top = ((rd.2).0) in
+                  if top.0 == 5 then
+                    -- then-branch and cond are on value stack
+                    let no = ((10, 0, 0), ((rd.2).1)) in
+                    let no2 = ((9, 0, 0), no) in
+                    (pos + 1, rd.0, rd.1, no2, rd.3 + 1, 0, 0, 0)
+                  else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+                else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+
+              -- 'in'
+              else if tk == 12 then
+                let rd = fold (vs, vsp, os, osp, 0)
+                  (\r _j ->
+                    if r.4 != 0 then r
+                    else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                    else
+                      let top = ((r.2).0) in
+                      let nos = ((r.2).1) in
+                      if top.0 == 6 then (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 0 then
+                        if r.1 >= 2 then
+                          let ri = ((r.0).0) in
+                          let le = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          let ak = if top.1 == 100 then 19 else 10 in
+                          (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 2 then
+                        if r.1 >= 1 then
+                          let operand = ((r.0).0) in
+                          let rest = ((r.0).1) in
+                          (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 3 then
+                        if r.1 >= 2 then
+                          let ag = ((r.0).0) in
+                          let fn_ = (((r.0).1).0) in
+                          let rest = (((r.0).1).1) in
+                          (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                        else (r.0, r.1, r.2, r.3, 1)
+                      else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                      else (r.0, r.1, r.2, r.3, 1))
+                  expr_budget in
+                if rd.3 > 0 then
+                  let top = ((rd.2).0) in
+                  if top.0 == 6 then
+                    -- let value is on value stack
+                    let no = ((11, top.1, 0), ((rd.2).1)) in
+                    let no2 = ((9, 0, 0), no) in
+                    (pos + 1, rd.0, rd.1, no2, rd.3 + 1, 0, 0, 0)
+                  else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+                else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
+
+              -- Dot (tuple access)
+              else if tk == 58 then
+                if pos + 1 < dend then
+                  let ix = list_nth tokens (pos + 1) in
+                  if ix.0 == 1 then
+                    let base = vs.0 in
+                    let rest = vs.1 in
+                    (pos + 2, ((18, ix.1, list_append mt base), rest), vsp, os, osp, 1, mbp, 0)
+                  else (pos, vs, vsp, os, osp, 2, mbp, 0)
+                else (pos, vs, vsp, os, osp, 2, mbp, 0)
+
+              -- Infix operators
+              else
+                let lbp =
+                  if tk == 61 then 2
+                  else if tk == 43 then 4
+                  else if tk == 42 then 6
+                  else if tk == 36 then 8
+                  else if tk == 37 then 8
+                  else if tk == 38 then 8
+                  else if tk == 39 then 8
+                  else if tk == 40 then 8
+                  else if tk == 41 then 8
+                  else if tk == 30 then 10
+                  else if tk == 31 then 10
+                  else if tk == 32 then 12
+                  else if tk == 33 then 12
+                  else if tk == 34 then 12
+                  else 0 in
+                let op_ast =
+                  if tk == 61 then 100
+                  else if tk == 43 then 12
+                  else if tk == 42 then 11
+                  else if tk == 36 then 5
+                  else if tk == 37 then 6
+                  else if tk == 38 then 7
+                  else if tk == 39 then 8
+                  else if tk == 40 then 9
+                  else if tk == 41 then 10
+                  else if tk == 30 then 0
+                  else if tk == 31 then 1
+                  else if tk == 32 then 2
+                  else if tk == 33 then 3
+                  else if tk == 34 then 4
+                  else 0 in
+                if lbp > 0 then
+                  -- Pop higher-prec ops
+                  let rd = fold (vs, vsp, os, osp, 0)
+                    (\r _j ->
+                      if r.4 != 0 then r
+                      else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                      else
+                        let top = ((r.2).0) in
+                        let nos = ((r.2).1) in
+                        if top.0 >= 4 then (r.0, r.1, r.2, r.3, 1)
+                        else if top.0 == 1 then (r.0, r.1, r.2, r.3, 1)
+                        else if top.0 == 2 then
+                          if r.1 >= 1 then
+                            let operand = ((r.0).0) in
+                            let rest = ((r.0).1) in
+                            (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                          else (r.0, r.1, r.2, r.3, 1)
+                        else if top.2 >= lbp then
+                          if top.0 == 0 then
+                            if r.1 >= 2 then
+                              let ri = ((r.0).0) in
+                              let le = (((r.0).1).0) in
+                              let rest = (((r.0).1).1) in
+                              let ak = if top.1 == 100 then 19 else 10 in
+                              (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 3 then
+                            if r.1 >= 2 then
+                              let ag = ((r.0).0) in
+                              let fn_ = (((r.0).1).0) in
+                              let rest = (((r.0).1).1) in
+                              (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else (r.0, r.1, r.2, r.3, 1)
+                        else (r.0, r.1, r.2, r.3, 1))
+                    expr_budget in
+                  (pos + 1, rd.0, rd.1, ((0, op_ast, lbp), rd.2), rd.3 + 1, 0, mbp, 0)
+
+                -- Application (next token is atom)
+                else
+                  let is_at =
+                    if tk == 1 then 1
+                    else if tk == 2 then 1
+                    else if tk == 3 then 1
+                    else if tk == 4 then 1
+                    else if tk == 24 then 1
+                    else if tk == 25 then 1
+                    else if tk == 50 then 1
+                    else if tk == 59 then 1
+                    else 0 in
+                  if is_at == 1 then
+                    -- Pop higher-prec ops, push app
+                    let rd = fold (vs, vsp, os, osp, 0)
+                      (\r _j ->
+                        if r.4 != 0 then r
+                        else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                        else
+                          let top = ((r.2).0) in
+                          let nos = ((r.2).1) in
+                          if top.0 >= 4 then (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 1 then (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 2 then
+                            if r.1 >= 1 then
+                              let operand = ((r.0).0) in
+                              let rest = ((r.0).1) in
+                              (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.2 >= 16 then
+                            if top.0 == 0 then
+                              if r.1 >= 2 then
+                                let ri = ((r.0).0) in
+                                let le = (((r.0).1).0) in
+                                let rest = (((r.0).1).1) in
+                                let ak = if top.1 == 100 then 19 else 10 in
+                                (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                              else (r.0, r.1, r.2, r.3, 1)
+                            else if top.0 == 3 then
+                              if r.1 >= 2 then
+                                let ag = ((r.0).0) in
+                                let fn_ = (((r.0).1).0) in
+                                let rest = (((r.0).1).1) in
+                                (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                              else (r.0, r.1, r.2, r.3, 1)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else (r.0, r.1, r.2, r.3, 1))
+                      expr_budget in
+                    (pos, rd.0, rd.1, ((3, 0, 16), rd.2), rd.3 + 1, 0, mbp, 0)
+                  else
+                    -- Reduce all and finish
+                    let rd = fold (vs, vsp, os, osp, 0)
+                      (\r _j ->
+                        if r.4 != 0 then r
+                        else if r.3 <= 0 then (r.0, r.1, r.2, r.3, 1)
+                        else
+                          let top = ((r.2).0) in
+                          let nos = ((r.2).1) in
+                          if top.0 == 0 then
+                            if r.1 >= 2 then
+                              let ri = ((r.0).0) in
+                              let le = (((r.0).1).0) in
+                              let rest = (((r.0).1).1) in
+                              let ak = if top.1 == 100 then 19 else 10 in
+                              (((ak, top.1, (le, ri)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 2 then
+                            if r.1 >= 1 then
+                              let operand = ((r.0).0) in
+                              let rest = ((r.0).1) in
+                              (((11, top.1, list_append mt operand), rest), r.1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 3 then
+                            if r.1 >= 2 then
+                              let ag = ((r.0).0) in
+                              let fn_ = (((r.0).1).0) in
+                              let rest = (((r.0).1).1) in
+                              (((12, 0, (fn_, ag)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 7 then
+                            if r.1 >= 1 then
+                              let bd = ((r.0).0) in
+                              let rest = ((r.0).1) in
+                              (((13, top.1, list_append mt bd), rest), r.1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 9 then (r.0, r.1, nos, r.3 - 1, 0)
+                          else if top.0 == 10 then
+                            if r.1 >= 3 then
+                              let el = ((r.0).0) in
+                              let th = (((r.0).1).0) in
+                              let cd = ((((r.0).1).1).0) in
+                              let rest = ((((r.0).1).1).1) in
+                              (((15, 0, (cd, th, el)), rest), r.1 - 2, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else if top.0 == 11 then
+                            if r.1 >= 2 then
+                              let bd = ((r.0).0) in
+                              let vl = (((r.0).1).0) in
+                              let rest = (((r.0).1).1) in
+                              (((14, top.1, (vl, bd)), rest), r.1 - 1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          -- ForAll reduce (12)
+                          else if top.0 == 12 then
+                            if r.1 >= 1 then
+                              let bd = ((r.0).0) in
+                              let rest = ((r.0).1) in
+                              (((21, top.1, list_append mt bd), rest), r.1, nos, r.3 - 1, 0)
+                            else (r.0, r.1, r.2, r.3, 1)
+                          else (r.0, r.1, r.2, r.3, 1))
+                      expr_budget in
+                    (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 0)
+          )
+          expr_budget in
+
+        -- Extract result
+        let body_node =
+          if est.7 != 0 then (0, 0, mt)
+          else if est.2 >= 1 then ((est.1).0)
+          else (0, 0, mt) in
+
+        -- Build requires/ensures markers
+        let req_node = if req_start > 0 then (35, req_start, mt) else (0, 0, mt) in
+        let ens_node = if ens_start > 0 then (36, ens_start, mt) else (0, 0, mt) in
+        let decl_node = (30, decl_payload, (params, body_node, cost_node, req_node, ens_node)) in
+        (list_append it.0 decl_node, it.1 + 1, it.2))
+    nd in
+  let cap_entries = items.2 in
+  let cap_info = if (list_len cap_entries) == 0 then 0 else cap_entries in
+  (40, cap_info, items.0)

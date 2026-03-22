@@ -1,0 +1,56 @@
+-- Roman Numeral Converter
+-- Convert between integers and Roman numeral representations.
+-- Roman numerals encoded as integer codes for the string symbols.
+--
+-- FIXME: Ideally we'd return actual strings like "XIV", but building
+-- strings character by character is awkward without a char_from_code + fold approach.
+-- We return a tuple of symbol codes: M=1000, D=500, C=100, L=50, X=10, V=5, I=1.
+
+-- Convert integer to Roman numeral symbol codes (descending values).
+let rec int_to_roman_aux n : Int -> Tuple [cost: Unknown] =
+  if n <= 0 then ()
+  else if n >= 1000 then list_concat (1000,) (int_to_roman_aux (n - 1000))
+  else if n >= 900 then list_concat (100, 1000) (int_to_roman_aux (n - 900))
+  else if n >= 500 then list_concat (500,) (int_to_roman_aux (n - 500))
+  else if n >= 400 then list_concat (100, 500) (int_to_roman_aux (n - 400))
+  else if n >= 100 then list_concat (100,) (int_to_roman_aux (n - 100))
+  else if n >= 90 then list_concat (10, 100) (int_to_roman_aux (n - 90))
+  else if n >= 50 then list_concat (50,) (int_to_roman_aux (n - 50))
+  else if n >= 40 then list_concat (10, 50) (int_to_roman_aux (n - 40))
+  else if n >= 10 then list_concat (10,) (int_to_roman_aux (n - 10))
+  else if n >= 9 then list_concat (1, 10) (int_to_roman_aux (n - 9))
+  else if n >= 5 then list_concat (5,) (int_to_roman_aux (n - 5))
+  else if n >= 4 then list_concat (1, 5) (int_to_roman_aux (n - 4))
+  else list_concat (1,) (int_to_roman_aux (n - 1))
+
+let int_to_roman n : Int -> Tuple [cost: Unknown] =
+  if n <= 0 then ()
+  else if n > 3999 then ()  -- Roman numerals only go to 3999
+  else int_to_roman_aux n
+
+-- Convert Roman numeral codes back to integer.
+-- Rule: if a smaller value precedes a larger one, subtract it.
+let rec roman_to_int_aux codes i : Tuple -> Int -> Int [cost: Linear(codes)] =
+  let n = list_len codes in
+  if i >= n then 0
+  else
+    let current = list_nth codes i in
+    if i + 1 < n then
+      let next = list_nth codes (i + 1) in
+      if current < next then
+        (next - current) + roman_to_int_aux codes (i + 2)
+      else
+        current + roman_to_int_aux codes (i + 1)
+    else
+      current
+
+let roman_to_int codes : Tuple -> Int [cost: Linear(codes)] =
+  roman_to_int_aux codes 0
+
+-- Test
+let test_roman x : Int -> Tuple =
+  let r14 = int_to_roman 14 in       -- (10, 1, 5) = XIV
+  let r1994 = int_to_roman 1994 in   -- MCMXCIV
+  let back = roman_to_int r1994 in   -- 1994
+  let r42 = int_to_roman 42 in       -- XLII
+  (r14, r1994, back, r42)

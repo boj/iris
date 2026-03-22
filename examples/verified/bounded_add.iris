@@ -1,0 +1,8 @@
+-- Addition with overflow checking contracts
+let bounded_add x y : Int -> Int -> Int
+  requires x >= -500000 && x <= 500000
+  requires y >= -500000 && y <= 500000
+  ensures result >= -1000000
+  ensures result <= 1000000
+  ensures result == x + y
+  = x + y

@@ -1,0 +1,46 @@
+-- Daemon snapshot: full state save/restore for persistence across restarts
+--
+-- Captures:
+--   fragments: all known program fragments
+--   states: named state stores (key-value)
+--   evolution_results: named evolution run results
+--   timestamp: Unix seconds when snapshot was taken
+--
+-- Writes are atomic (tmp + rename) to prevent corruption on crash.
+
+-- Estimate snapshot size in bytes
+-- fragment_count: number of stored fragments
+-- state_count: number of named state stores
+-- result_count: number of evolution results
+let snapshot_size fragment_count state_count result_count : Int -> Int -> Int -> Int [cost: Const(3)] =
+  -- Each fragment: ~8KB (graph + boundary + metadata)
+  let frag_bytes = fragment_count * 8192 in
+  -- Each state: ~1KB (key-value store)
+  let state_bytes = state_count * 1024 in
+  -- Each result: ~4KB (fitness history + best individual)
+  let result_bytes = result_count * 4096 in
+  frag_bytes + state_bytes + result_bytes
+
+-- Check if snapshot should be taken (based on elapsed time)
+-- elapsed_secs: seconds since last snapshot
+-- interval_secs: snapshot interval
+-- Returns 1 if should snapshot, 0 otherwise
+let should_snapshot elapsed_secs interval_secs : Int -> Int -> Int [cost: Const(1)] =
+  if elapsed_secs >= interval_secs then 1 else 0
+
+-- Default snapshot interval: 300 seconds (5 minutes)
+let default_snapshot_interval : Int [cost: Const(1)] = 300
+
+-- Validate a loaded snapshot
+-- Returns 1 if valid (has at least one fragment and timestamp > 0)
+let is_valid_snapshot fragment_count timestamp : Int -> Int -> Int [cost: Const(2)] =
+  if fragment_count > 0 then
+    if timestamp > 0 then 1 else 0
+  else 0
+
+-- Snapshot statistics
+-- Returns (total_bytes, fragment_count, is_valid)
+let snapshot_stats fragment_count state_count result_count timestamp : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(4)] =
+  let size = snapshot_size fragment_count state_count result_count in
+  let valid = is_valid_snapshot fragment_count timestamp in
+  (size, fragment_count, valid)

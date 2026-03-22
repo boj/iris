@@ -1,0 +1,65 @@
+-- Inter-program messaging: named channels, send/receive values.
+--
+-- Mirrors the MessageBus from iris-exec message_bus.rs.
+--
+-- The Rust MessageBus:
+--   - Named channels, each with a bounded FIFO buffer
+--   - create_channel(name, capacity)
+--   - send(channel, value) -> Ok(()) | Err(ChannelFull | NoSuchChannel)
+--   - recv(channel) -> Ok(Some(value)) | Ok(None) | Err(NoSuchChannel)
+--   - try_recv(channel) -> Option<value>
+--   - pending_count(channel) -> usize
+--
+-- In IRIS surface syntax we model a fixed-size circular buffer.
+-- The buffer state is encoded as a tuple: (write_pos, read_pos, count, capacity).
+--
+-- Inputs/Outputs vary by operation.
+
+-- Check if a send operation is possible (channel not full).
+-- Returns 1 if send is OK, 0 if channel is full.
+let bus_can_send count capacity : Int -> Int -> Int [cost: Const(2)] =
+  if count >= capacity then 0
+  else 1
+
+-- Compute new buffer state after a send.
+-- Returns (new_write_pos, new_count).
+-- Circular buffer: write_pos wraps at capacity.
+let bus_send write_pos count capacity : Int -> Int -> Int -> (Int, Int) [cost: Const(3)] =
+  if count >= capacity then
+    -- Channel full: state unchanged
+    (write_pos, count)
+  else
+    let new_wp = write_pos + 1 in
+    let wrapped_wp = if new_wp >= capacity then 0 else new_wp in
+    (wrapped_wp, count + 1)
+
+-- Compute new buffer state after a receive.
+-- Returns (new_read_pos, new_count, has_value).
+-- has_value: 1 if a value was available, 0 if channel was empty.
+let bus_recv read_pos count capacity : Int -> Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  if count == 0 then
+    -- Channel empty: no value available
+    (read_pos, 0, 0)
+  else
+    let new_rp = read_pos + 1 in
+    let wrapped_rp = if new_rp >= capacity then 0 else new_rp in
+    (wrapped_rp, count - 1, 1)
+
+-- Return the number of pending messages.
+let bus_pending count : Int -> Int [cost: Const(1)] =
+  if count < 0 then 0
+  else count
+
+-- Check if a channel exists in a bus with N channels.
+-- channel_id must be in range [0, num_channels).
+let bus_has_channel channel_id num_channels : Int -> Int -> Int [cost: Const(2)] =
+  if channel_id >= 0 then
+    if channel_id < num_channels then 1
+    else 0
+  else 0
+
+-- Compute the buffer slot index for a given position.
+-- Implements circular addressing: slot = position mod capacity.
+let bus_slot position capacity : Int -> Int -> Int [cost: Const(2)] =
+  if capacity <= 0 then 0
+  else position % capacity

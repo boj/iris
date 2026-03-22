@@ -1,0 +1,206 @@
+-- Embedding operations: tiers, vectors, interpolation for crossover
+--
+-- Mirrors the Rust embedding module in iris-codec/src/embedding.rs.
+-- Provides:
+--   - Embedding tier classification (64, 256, 768 dims)
+--   - Cosine similarity between embedding vectors
+--   - Linear interpolation for crossover
+--   - L2 distance computation
+--   - Spherical linear interpolation (slerp)
+--   - Matryoshka truncation
+
+-- Embedding tier constants (dimension counts)
+let tier0_dims : Int [cost: Const(1)] = 64
+let tier1_dims : Int [cost: Const(1)] = 256
+let tier2_dims : Int [cost: Const(1)] = 768
+
+-- Classify a dimension count to its tier
+-- Returns 0 for Tier0 (64), 1 for Tier1 (256), 2 for Tier2 (768), -1 for unknown
+let classify_tier dims : Int -> Int [cost: Const(3)] =
+  if dims == 64 then 0
+  else if dims == 256 then 1
+  else if dims == 768 then 2
+  else 0 - 1
+
+-- Dot product of two vectors (represented as tuples)
+let dot_product a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  fold 0 (\acc p -> acc + p.0 * p.1) pairs
+
+-- Squared L2 norm of a vector
+let norm_squared v : Int -> Int [cost: Linear(v)] =
+  fold 0 (\acc x -> acc + x * x) v
+
+-- Cosine similarity between two embedding vectors
+-- Returns similarity scaled by 1000 (1000 = identical direction, 0 = orthogonal)
+-- Uses dot / (norm_a * norm_b) approximated as dot * 1000 / (norm_a_sq * norm_b_sq)
+-- when both norms are non-zero
+let cosine_similarity a b : Int -> Int -> Int [cost: Linear(a)] =
+  let dot = dot_product a b in
+  let norm_a = norm_squared a in
+  let norm_b = norm_squared b in
+  if norm_a == 0 then 0
+  else if norm_b == 0 then 0
+  else
+    -- Approximate: cos = dot / sqrt(na * nb)
+    -- Since sqrt is expensive, use: cos ~ dot * 1000 / ((na + nb) / 2)
+    let denom = (norm_a + norm_b) / 2 in
+    if denom == 0 then 0
+    else dot * 1000 / denom
+
+-- L2 (Euclidean) distance squared between two embeddings
+let l2_distance_sq a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  fold 0 (\acc p ->
+    let d = p.0 - p.1 in
+    acc + d * d) pairs
+
+-- Linear interpolation between two embedding vectors
+-- alpha: interpolation weight (0-1000, where 1000 = pure a, 0 = pure b)
+let interpolate_embedding a b alpha : Int -> Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  map (\p -> (alpha * p.0 + (1000 - alpha) * p.1) / 1000) pairs
+
+-- Spherical linear interpolation (slerp) between two embeddings
+-- Approximation using normalized linear interpolation
+let slerp_approx a b alpha : Int -> Int -> Int -> Int [cost: Linear(a)] =
+  let interp = interpolate_embedding a b alpha in
+  let norm = norm_squared interp in
+  if norm == 0 then interp
+  else
+    -- Normalize to approximately preserve magnitude
+    -- Scale factor: avg_norm / interp_norm (approximated)
+    let norm_a = norm_squared a in
+    let norm_b = norm_squared b in
+    let target_norm_sq = (norm_a + norm_b) / 2 in
+    if target_norm_sq == 0 then interp
+    else
+      -- Scale each element by sqrt(target/actual) ~ (target*1000/actual)/1000
+      let scale = target_norm_sq * 1000 / norm in
+      map (\x -> x * scale / 1000) interp
+
+-- Matryoshka truncation: get first n dims of an embedding
+-- Collects first n elements into a cons-list tuple
+let truncate_embedding v n : Int -> Int -> Int [cost: Linear(v)] =
+  let result = fold (0, 0)
+    (\state x ->
+      let idx = state.0 in
+      if idx < n then (idx + 1, (x, state.1))
+      else (idx + 1, state.1))
+    v in
+  result.1
+
+-- Check if two embeddings are within a threshold distance
+let within_threshold a b threshold : Int -> Int -> Int -> Int [cost: Linear(a)] =
+  let dist = l2_distance_sq a b in
+  if dist <= threshold then 1 else 0
+
+-- Element-wise addition of two vectors
+let vec_add a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  map (\p -> p.0 + p.1) pairs
+
+-- Element-wise scalar multiplication
+let vec_scale v s : Int -> Int -> Int [cost: Linear(v)] =
+  map (\x -> x * s / 1000) v
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: tier0_dims is 64
+let test_tier0 : Int [cost: Const(1)] =
+  if tier0_dims == 64 then 1 else 0 - 1
+
+-- Test: tier1_dims is 256
+let test_tier1 : Int [cost: Const(1)] =
+  if tier1_dims == 256 then 1 else 0 - 1
+
+-- Test: tier2_dims is 768
+let test_tier2 : Int [cost: Const(1)] =
+  if tier2_dims == 768 then 1 else 0 - 1
+
+-- Test: classify_tier for 64 returns 0
+let test_classify_64 : Int [cost: Const(1)] =
+  if classify_tier 64 == 0 then 1 else 0 - 1
+
+-- Test: classify_tier for 256 returns 1
+let test_classify_256 : Int [cost: Const(1)] =
+  if classify_tier 256 == 1 then 1 else 0 - 1
+
+-- Test: classify_tier for unknown returns -1
+let test_classify_unknown : Int [cost: Const(1)] =
+  if classify_tier 100 == (0 - 1) then 1 else 0 - 1
+
+-- Test: dot_product of known vectors
+let test_dot_product : Int [cost: Const(1)] =
+  let d = dot_product (3, 4) (5, 6) in
+  -- 3*5 + 4*6 = 15 + 24 = 39
+  if d == 39 then 1 else 0 - 1
+
+-- Test: norm_squared of (3, 4) = 25
+let test_norm_squared : Int [cost: Const(1)] =
+  let n = norm_squared (3, 4) in
+  if n == 25 then 1 else 0 - 1
+
+-- Test: cosine similarity of identical vectors is high
+let test_cosine_identical : Int [cost: Const(1)] =
+  let sim = cosine_similarity (100, 200, 300) (100, 200, 300) in
+  if sim >= 900 then 1 else 0 - 1
+
+-- Test: cosine similarity of orthogonal vectors is ~0
+let test_cosine_orthogonal : Int [cost: Const(1)] =
+  let sim = cosine_similarity (1000, 0) (0, 1000) in
+  if sim <= 100 then 1 else 0 - 1
+
+-- Test: l2_distance_sq of same vector is 0
+let test_l2_self : Int [cost: Const(1)] =
+  let d = l2_distance_sq (10, 20, 30) (10, 20, 30) in
+  if d == 0 then 1 else 0 - 1
+
+-- Test: l2_distance_sq of (0,0)-(3,4) = 25
+let test_l2_known : Int [cost: Const(1)] =
+  let d = l2_distance_sq (0, 0) (3, 4) in
+  if d == 25 then 1 else 0 - 1
+
+-- Test: interpolate preserves sum approximately
+let test_interp_sum : Int [cost: Const(1)] =
+  let result = interpolate_embedding (100, 200) (300, 400) 500 in
+  -- Midpoint: (200, 300), sum = 500
+  let sum = fold 0 (\acc x -> acc + x) result in
+  if sum == 500 then 1 else 0 - 1
+
+-- Test: slerp produces non-zero output
+let test_slerp_nonzero : Int [cost: Const(1)] =
+  let result = slerp_approx (100, 200) (300, 400) 500 in
+  let sum = fold 0 (\acc x -> acc + x) result in
+  if sum > 0 then 1 else 0 - 1
+
+-- Test: within_threshold returns 1 for identical vectors
+let test_within_identical : Int [cost: Const(1)] =
+  let d = l2_distance_sq (10, 20) (10, 20) in
+  if d == 0 then 1 else 0 - 1
+
+-- Test: within_threshold returns 0 for distant vectors
+let test_within_distant : Int [cost: Const(1)] =
+  let d = l2_distance_sq (0, 0) (100, 100) in
+  if d > 10 then 1 else 0 - 1
+
+-- Test: vec_add adds element-wise
+let test_vec_add : Int [cost: Const(1)] =
+  let result = vec_add (10, 20) (30, 40) in
+  let sum = fold 0 (\acc x -> acc + x) result in
+  -- 40 + 60 = 100
+  if sum == 100 then 1 else 0 - 1
+
+-- Test: vec_scale sum
+let test_vec_scale : Int [cost: Const(1)] =
+  let result = vec_scale (100, 200) 500 in
+  -- 50 + 100 = 150
+  let sum = fold 0 (\acc x -> acc + x) result in
+  if sum == 150 then 1 else 0 - 1
+
+-- Test: cosine_similarity of zero vector is 0
+let test_cosine_zero : Int [cost: Const(1)] =
+  let sim = cosine_similarity (0, 0) (100, 200) in
+  if sim == 0 then 1 else 0 - 1

@@ -1,0 +1,35 @@
+-- Lazy infinite list primitives for IRIS.
+--
+-- Lazy lists are represented as Thunks: suspended computations that
+-- produce (element, next_state) on each force, or () to signal end.
+-- This enables working with infinite sequences without materializing
+-- them in memory.
+
+-- Generate natural numbers starting from n.
+-- naturals 0 = [0, 1, 2, 3, ...]
+let naturals n = lazy_unfold (\s -> (s, s + 1)) n
+
+-- Generate the Fibonacci sequence.
+-- fibs = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, ...]
+let fibs = lazy_unfold (\s -> match s with | (a, b) -> (a, (b, a + b))) (0, 1)
+
+-- Take first n elements from a lazy list, materializing them as a tuple.
+let take n xs = lazy_take n xs
+
+-- Map a function over a lazy list, producing a new lazy list.
+let lmap f xs = lazy_map f xs
+
+-- Sum the first n natural numbers.
+-- sum_first_n 100 = 5050
+let sum_first_n n = fold 0 (+) (lazy_take n (naturals 0))
+
+-- Generate an infinite stream of a constant value.
+-- repeat 42 = [42, 42, 42, ...]
+let repeat x = lazy_unfold (\s -> (s, s)) x
+
+-- Generate a countdown from n to 1.
+-- countdown 5 = [5, 4, 3, 2, 1]
+let countdown n = lazy_unfold (\s -> if s > 0 then (s, s - 1) else ()) n
+
+-- Generate powers of 2: [1, 2, 4, 8, 16, ...]
+let powers_of_2 = lazy_unfold (\s -> (s, s * 2)) 1

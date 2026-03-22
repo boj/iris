@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Unit tests (fast)
+        run: |
+          cargo test --test test_examples -- --test-threads=4
+          cargo test --test test_benchmarks_game -- --test-threads=4
+          cargo test --test test_io_boundary -- --test-threads=4
+          cargo test --test test_convergence convergence_smoke_test
+
+      - name: Syntax tests
+        run: cargo test --test test_syntax -- --test-threads=4
+
+      - name: Compiler tests
+        run: cargo test --test test_compiler_iris_programs -- --test-threads=4
+
+      - name: Program tests
+        run: |
+          cargo test --test test_repr_iris_programs -- --test-threads=4
+          cargo test --test test_codec_iris_programs -- --test-threads=4
+          cargo test --test test_deploy_iris_programs -- --test-threads=4
+          cargo test --test test_exec_iris_programs -- --test-threads=4
+          cargo test --test test_lsp_iris_programs -- --test-threads=4
+          cargo test --test test_store_iris_programs -- --test-threads=4
+          cargo test --test test_foundry_iris_programs -- --test-threads=4
+          cargo test --test test_mutation_iris_programs -- --test-threads=4
+
+  bench:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run criterion benchmarks
+        run: cargo bench --bench evaluator -- --output-format bencher | tee bench-output.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench-output.txt
+          retention-days: 90

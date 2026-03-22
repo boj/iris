@@ -1,0 +1,51 @@
+-- Queue (FIFO)
+-- Implemented as a tuple where index 0 is the front.
+-- Enqueue appends to back, dequeue removes from front.
+
+-- Create an empty queue.
+let queue_new x : Int -> Tuple [cost: Const(1)] = ()
+
+-- Enqueue a value at the back.
+let queue_enqueue q val : Tuple -> Int -> Tuple [cost: Const(1)] =
+  list_append q val
+
+-- Dequeue from the front. Returns (new_queue, front_value).
+-- Returns ((), -1) if empty.
+let queue_dequeue q : Tuple -> Tuple [cost: Const(1)] =
+  let n = list_len q in
+  if n == 0 then ((), -1)
+  else
+    let front = list_nth q 0 in
+    let rest = list_drop q 1 in
+    (rest, front)
+
+-- Peek at front without removing.
+let queue_front q : Tuple -> Int [cost: Const(1)] =
+  let n = list_len q in
+  if n == 0 then -1
+  else list_nth q 0
+
+-- Peek at back.
+let queue_back q : Tuple -> Int [cost: Const(1)] =
+  let n = list_len q in
+  if n == 0 then -1
+  else list_nth q (n - 1)
+
+-- Check if empty.
+let queue_empty q : Tuple -> Bool [cost: Const(1)] =
+  list_len q == 0
+
+-- Size.
+let queue_size q : Tuple -> Int [cost: Const(1)] =
+  list_len q
+
+-- Test: simulate a print queue
+let test_queue x : Int -> Tuple =
+  let q = queue_new 0 in
+  let q = queue_enqueue q 100 in
+  let q = queue_enqueue q 200 in
+  let q = queue_enqueue q 300 in
+  let front = queue_front q in
+  let d1 = queue_dequeue q in
+  let d2 = queue_dequeue d1.0 in
+  (front, d1.1, d2.1, queue_size d2.0)

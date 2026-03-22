@@ -1,0 +1,417 @@
+-- Capability wiring: bridges parsed allow/deny declarations to runtime enforcement.
+--
+-- This module converts capability declaration entries (from the parser/lowerer)
+-- into the 10-tuple capability format used by capabilities.iris, and provides
+-- the runtime enforcement functions.
+--
+-- Capability entry format (from parser):
+--   (is_allow, name_hash, name_len, arg_start, arg_end)
+--   is_allow: 1 = allow, 0 = deny
+--   name_hash: char-sum hash of effect name (e.g. FileRead = 764)
+--   name_len: character length of effect name
+--   arg_start, arg_end: source positions for string argument (0 = none)
+--
+-- Graph encoding (from lowerer):
+--   Hub node (Lit, type_tag=0, value=n_caps) at port 127 from root.
+--   Entry nodes (Lit, type_tag=0, packed) at ports 0..n from hub.
+--   Packed: is_allow + name_hash * 2 + name_len * 8192
+--
+-- Capability 10-tuple format (from capabilities.iris):
+--   (effects_mask, max_memory, max_steps, max_wall_time_ms,
+--    allowed_paths_count, allowed_hosts_count,
+--    can_spawn_threads, can_ffi, can_mmap_exec, can_use_channels)
+--
+-- The wiring principle: allow declarations set bits ON, deny declarations
+-- set bits OFF. If only deny is present, start from unrestricted (all on).
+-- If only allow is present, start from nothing (all off) and enable listed.
+-- Principle of least privilege: declared capabilities are an UPPER BOUND.
+
+type MaybeTag = KnownTag(Int) | UnknownTag
+
+-- ============================================================
+-- Effect name -> effect tag mapping
+-- ============================================================
+
+-- Maps an effect name (identified by char-sum hash + length) to its
+-- EffectTag number. Returns UnknownTag if the name is not recognized.
+--
+-- Effect tags match iris-repr/src/eval.rs EffectTag::to_u8().
+-- Hash = sum of ASCII character codes.
+let effect_name_to_tag name_hash name_len : Int -> Int -> MaybeTag [cost: Const(4)] =
+  -- High-level I/O (0x00-0x0D)
+  if name_hash == 525 then if name_len == 5 then KnownTag(0) else UnknownTag       -- Print
+  else if name_hash == 772 then if name_len == 8 then KnownTag(1) else UnknownTag  -- ReadLine
+  else if name_hash == 704 then if name_len == 7 then KnownTag(2) else UnknownTag  -- HttpGet
+  else if name_hash == 838 then if name_len == 8 then KnownTag(3) else UnknownTag  -- HttpPost
+  else if name_hash == 764 then if name_len == 8 then KnownTag(4) else UnknownTag  -- FileRead
+  else if name_hash == 907 then if name_len == 9 then KnownTag(5) else UnknownTag  -- FileWrite
+  else if name_hash == 700 then if name_len == 7 then KnownTag(6) else UnknownTag  -- DbQuery
+  else if name_hash == 889 then if name_len == 9 then KnownTag(7) else UnknownTag  -- DbExecute
+  else if name_hash == 505 then if name_len == 5 then KnownTag(8) else UnknownTag  -- Sleep
+  else if name_hash == 948 then if name_len == 9 then KnownTag(9) else UnknownTag  -- Timestamp
+  else if name_hash == 609 then if name_len == 6 then KnownTag(10) else UnknownTag -- Random
+  else if name_hash == 290 then if name_len == 3 then KnownTag(11) else UnknownTag -- Log
+  else if name_hash == 1103 then if name_len == 11 then KnownTag(12) else UnknownTag -- SendMessage
+  else if name_hash == 1109 then if name_len == 11 then KnownTag(13) else UnknownTag -- RecvMessage
+  -- Raw I/O primitives (0x10-0x1F)
+  else if name_hash == 1009 then if name_len == 10 then KnownTag(16) else UnknownTag -- TcpConnect
+  else if name_hash == 675 then if name_len == 7 then KnownTag(17) else UnknownTag  -- TcpRead
+  else if name_hash == 818 then if name_len == 8 then KnownTag(18) else UnknownTag  -- TcpWrite
+  else if name_hash == 797 then if name_len == 8 then KnownTag(19) else UnknownTag  -- TcpClose
+  else if name_hash == 918 then if name_len == 9 then KnownTag(20) else UnknownTag  -- TcpListen
+  else if name_hash == 887 then if name_len == 9 then KnownTag(21) else UnknownTag  -- TcpAccept
+  else if name_hash == 786 then if name_len == 8 then KnownTag(22) else UnknownTag  -- FileOpen
+  else if name_hash == 1283 then if name_len == 13 then KnownTag(23) else UnknownTag -- FileReadBytes
+  else if name_hash == 1426 then if name_len == 14 then KnownTag(24) else UnknownTag -- FileWriteBytes
+  else if name_hash == 886 then if name_len == 9 then KnownTag(25) else UnknownTag  -- FileClose
+  else if name_hash == 796 then if name_len == 8 then KnownTag(26) else UnknownTag  -- FileStat
+  else if name_hash == 699 then if name_len == 7 then KnownTag(27) else UnknownTag  -- DirList
+  else if name_hash == 585 then if name_len == 6 then KnownTag(28) else UnknownTag  -- EnvGet
+  else if name_hash == 685 then if name_len == 7 then KnownTag(29) else UnknownTag  -- ClockNs
+  else if name_hash == 1128 then if name_len == 11 then KnownTag(30) else UnknownTag -- RandomBytes
+  else if name_hash == 697 then if name_len == 7 then KnownTag(31) else UnknownTag  -- SleepMs
+  -- Threading / atomic primitives (0x20-0x28)
+  else if name_hash == 1121 then if name_len == 11 then KnownTag(32) else UnknownTag -- ThreadSpawn
+  else if name_hash == 1000 then if name_len == 10 then KnownTag(33) else UnknownTag -- ThreadJoin
+  else if name_hash == 985 then if name_len == 10 then KnownTag(34) else UnknownTag  -- AtomicRead
+  -- Note: AtomicWrite(hash=1128,len=11) collides with RandomBytes — use len to disambiguate
+  -- AtomicWrite is excluded here; RandomBytes takes priority at (1128,11)
+  else if name_hash == 1016 then if name_len == 10 then KnownTag(36) else UnknownTag -- AtomicSwap
+  else if name_hash == 870 then if name_len == 9 then KnownTag(37) else UnknownTag  -- AtomicAdd
+  else if name_hash == 974 then if name_len == 10 then KnownTag(38) else UnknownTag  -- RwLockRead
+  else if name_hash == 1117 then if name_len == 11 then KnownTag(39) else UnknownTag -- RwLockWrite
+  else if name_hash == 1299 then if name_len == 13 then KnownTag(40) else UnknownTag -- RwLockRelease
+  -- JIT / FFI (0x29-0x2B)
+  else if name_hash == 784 then if name_len == 8 then KnownTag(41) else UnknownTag  -- MmapExec
+  else if name_hash == 995 then if name_len == 10 then KnownTag(42) else UnknownTag -- CallNative
+  else if name_hash == 657 then if name_len == 7 then KnownTag(43) else UnknownTag  -- FfiCall
+  else UnknownTag
+
+-- ============================================================
+-- Power-of-2 lookup (for bitmask construction)
+-- ============================================================
+
+-- Returns 2^i for 0 <= i <= 43. Returns 0 for out-of-range.
+let pow2 i : Int -> Int [cost: Const(1)] =
+  if i == 0 then 1
+  else if i == 1 then 2
+  else if i == 2 then 4
+  else if i == 3 then 8
+  else if i == 4 then 16
+  else if i == 5 then 32
+  else if i == 6 then 64
+  else if i == 7 then 128
+  else if i == 8 then 256
+  else if i == 9 then 512
+  else if i == 10 then 1024
+  else if i == 11 then 2048
+  else if i == 12 then 4096
+  else if i == 13 then 8192
+  else if i == 14 then 16384
+  else if i == 15 then 32768
+  else if i == 16 then 65536
+  else if i == 17 then 131072
+  else if i == 18 then 262144
+  else if i == 19 then 524288
+  else if i == 20 then 1048576
+  else if i == 21 then 2097152
+  else if i == 22 then 4194304
+  else if i == 23 then 8388608
+  else if i == 24 then 16777216
+  else if i == 25 then 33554432
+  else if i == 26 then 67108864
+  else if i == 27 then 134217728
+  else if i == 28 then 268435456
+  else if i == 29 then 536870912
+  else if i == 30 then 1073741824
+  else if i == 31 then 2147483648
+  else if i == 32 then 4294967296
+  else if i == 33 then 8589934592
+  else if i == 34 then 17179869184
+  else if i == 35 then 34359738368
+  else if i == 36 then 68719476736
+  else if i == 37 then 137438953472
+  else if i == 38 then 274877906944
+  else if i == 39 then 549755813888
+  else if i == 40 then 1099511627776
+  else if i == 41 then 2199023255552
+  else if i == 42 then 4398046511104
+  else if i == 43 then 8796093022208
+  else 0
+
+-- ============================================================
+-- Build capability tuple from declarations
+-- ============================================================
+
+-- Construct a capability 10-tuple from a list of parsed declaration entries.
+--
+-- Strategy:
+-- 1. Separate entries into allow and deny lists
+-- 2. If ONLY deny entries exist: start from unrestricted, subtract denied effects
+-- 3. If any allow entries exist: start from nothing, add allowed effects
+-- 4. Then apply deny entries to remove any explicitly denied effects
+-- 5. Special effects (ThreadSpawn, MmapExec, FfiCall) also set structural flags
+--
+-- Args:
+--   entries: list of (is_allow, name_hash, name_len, arg_start, arg_end)
+--   n_entries: number of entries in the list
+--
+-- Returns: capability 10-tuple
+let cap_from_declarations entries n_entries : Tuple -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(128)] =
+  -- Phase 1: check if any allow entries exist
+  let has_allow = fold 0
+    (\ha _i ->
+      if ha == 1 then 1
+      else if _i >= n_entries then ha
+      else
+        let e = list_nth entries _i in
+        if e.0 == 1 then 1 else ha)
+    n_entries in
+
+  -- Phase 2: build the initial effects mask
+  -- If has_allow=1: start from 0, add allowed effects
+  -- If has_allow=0: start from all-effects, will subtract denied
+  let all_effects = 17592186044415 in
+  let base_mask = if has_allow == 1 then 0 else all_effects in
+
+  -- Phase 3: process allow entries (set bits ON)
+  let allow_result = fold (base_mask, 0, 0, 0, 0, 0, 0)
+    (\ar _i ->
+      if _i >= n_entries then ar
+      else
+        let e = list_nth entries _i in
+        if e.0 != 1 then ar
+        else
+          match (effect_name_to_tag (e.1) (e.2)) with
+          | KnownTag(tag) ->
+            let new_mask = ar.0 + (pow2 tag) in
+            -- Track structural flags from allowed effects
+            let threads = if tag == 32 then 1 else ar.1 in
+            let ffi_flag = if tag == 43 then 1 else ar.2 in
+            let mmap = if tag == 41 then 1 else ar.3 in
+            let chans = if tag == 12 then 1
+              else if tag == 13 then 1 else ar.4 in
+            -- Count path and host arguments
+            let paths = if e.3 > 0 then
+              if tag >= 4 then if tag <= 5 then ar.5 + 1 else ar.5
+              else if tag >= 22 then if tag <= 27 then ar.5 + 1 else ar.5
+              else ar.5
+            else ar.5 in
+            let hosts = if e.3 > 0 then
+              if tag >= 16 then if tag <= 21 then ar.6 + 1 else ar.6
+              else ar.6
+            else ar.6 in
+            (new_mask, threads, ffi_flag, mmap, chans, paths, hosts)
+          | UnknownTag -> ar)
+    n_entries in
+
+  -- Phase 4: process deny entries (set bits OFF)
+  -- For deny: subtract the bit if it's set
+  let deny_result = fold (allow_result.0, allow_result.1, allow_result.2, allow_result.3, allow_result.4)
+    (\dr _i ->
+      if _i >= n_entries then dr
+      else
+        let e = list_nth entries _i in
+        if e.0 != 0 then dr
+        else
+          match (effect_name_to_tag (e.1) (e.2)) with
+          | KnownTag(tag) ->
+            let bit = pow2 tag in
+            let shifted = dr.0 / bit in
+            let half = shifted / 2 in
+            let is_set = shifted - half * 2 in
+            let new_mask = if is_set == 1 then dr.0 - bit else dr.0 in
+            let threads = if tag == 32 then 0 else dr.1 in
+            let ffi_flag = if tag == 43 then 0 else dr.2 in
+            let mmap = if tag == 41 then 0 else dr.3 in
+            let chans = if tag == 12 then 0
+              else if tag == 13 then 0 else dr.4 in
+            (new_mask, threads, ffi_flag, mmap, chans)
+          | UnknownTag -> dr)
+    n_entries in
+
+  (deny_result.0, 0, 0, 0, allow_result.5, allow_result.6,
+   deny_result.1, deny_result.2, deny_result.3, deny_result.4)
+
+-- ============================================================
+-- Graph capability extraction
+-- ============================================================
+
+-- Check if a graph has capability metadata attached.
+-- Convention: hub Lit node connected from root at port 127.
+-- Returns 1 if capabilities are present, 0 otherwise.
+let cap_has_metadata graph : Program -> Int [cost: Const(4)] =
+  let root = graph_get_root graph in
+  let all_edges = graph_edges graph in
+  let n_edges = list_len all_edges in
+  fold 0
+    (\found _i ->
+      if found == 1 then 1
+      else if _i >= n_edges then found
+      else
+        let edge = list_nth all_edges _i in
+        if (edge.0) == root then
+          if (edge.2) == 127 then
+            let kind = graph_get_kind graph (edge.1) in
+            if kind == 5 then 1 else found
+          else found
+        else found)
+    n_edges
+
+-- Find the hub node ID for capability metadata (port 127 from root).
+-- Returns the node ID, or -1 if not present.
+let cap_find_hub graph : Program -> Int [cost: Const(4)] =
+  let root = graph_get_root graph in
+  let all_edges = graph_edges graph in
+  let n_edges = list_len all_edges in
+  fold (0 - 1)
+    (\hub _i ->
+      if hub >= 0 then hub
+      else if _i >= n_edges then hub
+      else
+        let edge = list_nth all_edges _i in
+        if (edge.0) == root then
+          if (edge.2) == 127 then edge.1
+          else hub
+        else hub)
+    n_edges
+
+-- Extract capability entries from the graph.
+-- Returns a list of (is_allow, name_hash, name_len, 0, 0) tuples, or 0 if none.
+-- Entry packing: packed = is_allow + name_hash * 2 + name_len * 8192
+let cap_extract_entries graph : Program -> Tuple [cost: Const(64)] =
+  let hub_id = cap_find_hub graph in
+  if hub_id < 0 then 0
+  else
+    let n_caps = graph_get_lit_value graph hub_id in
+    let targets = graph_outgoing graph hub_id in
+    let n_targets = list_len targets in
+    if n_targets == 0 then 0
+    else
+      let result = fold (list_range 0 0, 0)
+        (\acc _i ->
+          if acc.1 >= n_targets then acc
+          else
+            let target_id = list_nth targets (acc.1) in
+            let packed = graph_get_lit_value graph target_id in
+            let is_allow = packed - (packed / 2) * 2 in
+            let rest = packed / 2 in
+            let name_hash = rest - (rest / 4096) * 4096 in
+            let name_len = rest / 4096 in
+            (list_append (acc.0) (is_allow, name_hash, name_len, 0, 0), acc.1 + 1))
+        n_targets in
+      result.0
+
+-- Full pipeline: extract entries from graph and build capability tuple.
+-- Returns the 10-tuple or the unrestricted default if no metadata present.
+let cap_from_graph graph : Program -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(256)] =
+  let entries = cap_extract_entries graph in
+  if entries == 0 then (17592186044415, 0, 0, 0, 0, 0, 1, 1, 1, 1)
+  else
+    let n = list_len entries in
+    if n == 0 then (17592186044415, 0, 0, 0, 0, 0, 1, 1, 1, 1)
+    else cap_from_declarations entries n
+
+-- ============================================================
+-- Runtime enforcement
+-- ============================================================
+
+-- Check if an effect is allowed by a capability tuple.
+-- Returns 1 if allowed, 0 if denied.
+-- This is the same as cap_is_effect_allowed from capabilities.iris
+-- but included here for self-contained wiring.
+let cap_enforce_effect cap effect_tag : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(4)] =
+  -- Check structural capabilities first
+  if effect_tag == 32 then cap.6
+  else if effect_tag == 33 then cap.6
+  else if effect_tag == 41 then cap.8
+  else if effect_tag == 42 then
+    if cap.7 == 0 then 0 else cap.8
+  else if effect_tag == 43 then cap.7
+  else
+    let bit = pow2 effect_tag in
+    let shifted = (cap.0) / bit in
+    let half = shifted / 2 in
+    shifted - half * 2
+
+-- ============================================================
+-- Capability composition for multi-fragment programs
+-- ============================================================
+
+-- Compute the intersection of caller capabilities with callee declared
+-- capabilities. The result is the most restrictive combination.
+-- Principle: a callee cannot exceed its caller's capabilities.
+--
+-- This implements Phase 3 of capability-wiring-todo.md:
+-- When fragment A calls fragment B via Ref:
+--   B's effective caps = intersect(A's caps, B's declared caps)
+let cap_compose_for_ref caller_caps callee_caps : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(80)] =
+  -- Effects: bitwise AND (only effects allowed by BOTH)
+  -- We iterate 44 bits to compute the AND
+  let effects = fold (0, 0)
+    (\acc _i ->
+      if acc.1 >= 44 then acc
+      else
+        let bit = pow2 acc.1 in
+        let a_set = ((caller_caps.0) / bit) - (((caller_caps.0) / bit) / 2) * 2 in
+        let b_set = ((callee_caps.0) / bit) - (((callee_caps.0) / bit) / 2) * 2 in
+        (acc.0 + a_set * b_set * bit, acc.1 + 1))
+    44 in
+  -- Memory: take smaller non-zero
+  let mem = if caller_caps.1 == 0 then callee_caps.1
+    else if callee_caps.1 == 0 then caller_caps.1
+    else if caller_caps.1 < callee_caps.1 then caller_caps.1
+    else callee_caps.1 in
+  -- Steps: take smaller non-zero
+  let steps = if caller_caps.2 == 0 then callee_caps.2
+    else if callee_caps.2 == 0 then caller_caps.2
+    else if caller_caps.2 < callee_caps.2 then caller_caps.2
+    else callee_caps.2 in
+  -- Wall time: take smaller non-zero
+  let wall = if caller_caps.3 == 0 then callee_caps.3
+    else if callee_caps.3 == 0 then caller_caps.3
+    else if caller_caps.3 < callee_caps.3 then caller_caps.3
+    else callee_caps.3 in
+  -- Path/host counts: take smaller
+  let paths = if caller_caps.4 < callee_caps.4 then caller_caps.4 else callee_caps.4 in
+  let hosts = if caller_caps.5 < callee_caps.5 then caller_caps.5 else callee_caps.5 in
+  -- Structural flags: AND
+  let threads = if caller_caps.6 == 1 then
+    if callee_caps.6 == 1 then 1 else 0 else 0 in
+  let ffi = if caller_caps.7 == 1 then
+    if callee_caps.7 == 1 then 1 else 0 else 0 in
+  let mmap = if caller_caps.8 == 1 then
+    if callee_caps.8 == 1 then 1 else 0 else 0 in
+  let chans = if caller_caps.9 == 1 then
+    if callee_caps.9 == 1 then 1 else 0 else 0 in
+  (effects.0, mem, steps, wall, paths, hosts, threads, ffi, mmap, chans)
+
+-- ============================================================
+-- Violation reporting
+-- ============================================================
+
+-- Returns a diagnostic code for a capability violation.
+-- 0 = no violation (effect is allowed)
+-- 1 = effect denied by bitmask
+-- 2 = thread spawn denied
+-- 3 = FFI denied
+-- 4 = mmap_exec denied
+-- 5 = channel denied
+let cap_violation_code cap effect_tag : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(4)] =
+  if effect_tag == 32 then if cap.6 == 0 then 2 else 0
+  else if effect_tag == 33 then if cap.6 == 0 then 2 else 0
+  else if effect_tag == 41 then if cap.8 == 0 then 4 else 0
+  else if effect_tag == 42 then
+    if cap.7 == 0 then 3
+    else if cap.8 == 0 then 4
+    else 0
+  else if effect_tag == 43 then if cap.7 == 0 then 3 else 0
+  else if effect_tag == 12 then if cap.9 == 0 then 5 else
+    let ok = cap_enforce_effect cap effect_tag in
+    if ok == 1 then 0 else 1
+  else if effect_tag == 13 then if cap.9 == 0 then 5 else
+    let ok = cap_enforce_effect cap effect_tag in
+    if ok == 1 then 0 else 1
+  else
+    let ok = cap_enforce_effect cap effect_tag in
+    if ok == 1 then 0 else 1

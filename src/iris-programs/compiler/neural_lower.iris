@@ -1,0 +1,162 @@
+-- Neural lowering: convert Neural nodes to concrete compute ops (Compiler Pass 6)
+--
+-- Neural nodes are lowered based on parameter count:
+--   Tiny   (<256 params)    -> InlineFma: Prim(VFMA=0x05) sequence
+--   Small  (256-16K params) -> TiledMatMul: Prim(VLOAD=0x0B) + Prim(VFMA=0x05) per tile
+--   Large  (>16K params)    -> ExternCall: Prim(VCALL=0x19)
+--
+-- Each Neural node (kind 7) becomes:
+--   WeightLoad -- Prim(VLOAD=0x0B) to load weight blob from weight arena
+--   Compute    -- InlineFma/TiledMatMul/ExternCall (reuses neural node id)
+--   Activation -- Prim(VRELU=0x25=37) for ReLU activation
+--
+-- Wiring:
+--   WeightLoad -> Compute (port 0)
+--   Compute -> Activation (port 0)
+--   Original neural argument edges -> Compute (shifted by 1)
+--   Consumers of neural node -> Activation (re-wired)
+
+-- Rewire consumers of an old node to point to a new replacement node.
+-- Scans all nodes for outgoing edges targeting old_id and redirects them to new_id.
+-- Returns the updated graph.
+let rewire_consumers program old_id new_id : Int -> Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold program
+    (\g nid ->
+      let children = graph_outgoing g nid in
+      let num_children = list_len children in
+      fold g
+        (\g2 port ->
+          if port < num_children then
+            let child = list_nth children port in
+            if child == old_id then
+              let g3 = graph_disconnect g2 nid old_id in
+              graph_connect g3 nid new_id port
+            else g2
+          else g2)
+        (list_range 0 num_children))
+    nodes
+
+-- Count Neural nodes in a program
+let count_neural program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 7 then acc + 1 else acc)
+    nodes
+
+-- Classify a neural node's lowering strategy
+-- Returns: 0 = InlineFma (tiny), 1 = TiledMatMul (small), 2 = ExternCall (large)
+let classify_neural param_count : Int -> Int [cost: Const(2)] =
+  if param_count < 256 then 0
+  else if param_count <= 16384 then 1
+  else 2
+
+-- Integer square root approximation using Newton's method (3 iterations)
+let isqrt n : Int -> Int [cost: Const(5)] =
+  if n <= 0 then 0
+  else if n <= 1 then 1
+  else
+    let guess = n / 2 in
+    let g1 = (guess + n / guess) / 2 in
+    let g2 = (g1 + n / g1) / 2 in
+    let g3 = (g2 + n / g2) / 2 in
+    g3
+
+-- Estimate param count from a Neural node's cost annotation
+-- In Gen1, we use the cost annotation as a proxy for param count
+-- Default: 128 (tiny range) if no cost info available
+let estimate_params program neural_id : Int -> Int -> Int [cost: Const(3)] =
+  -- The Rust pass reads param_count from the Neural payload.
+  -- In .iris, we don't have direct payload access, but graph_get_lit_value
+  -- on a Neural node won't work. Use cost annotation as proxy if available.
+  -- Default to 128 (InlineFma range) for Gen1 compatibility.
+  128
+
+-- Lower a single Neural node into WeightLoad + Compute + Activation
+-- neural_id: the Neural node to transform
+-- Returns transformed graph with consumers re-wired to Activation
+let lower_neural_node program neural_id : Int -> Int -> Int [cost: Linear(program)] =
+  -- Estimate param count for size-class selection
+  let param_count = estimate_params program neural_id in
+  let strategy = classify_neural param_count in
+  -- Save original outgoing children before transformation
+  let original_children = graph_outgoing program neural_id in
+  -- Create WeightLoad node (Prim VLOAD=0x0B=11)
+  let wl = graph_add_node_rt program 0 in
+  let g1 = wl.0 in
+  let wl_id = wl.1 in
+  let g2_r = graph_set_prim_op g1 wl_id 11 in
+  let g2 = g2_r.0 in
+  let wl_new = g2_r.1 in
+  -- Replace the Neural node itself with the compute node
+  -- Select opcode based on size class:
+  --   0 (tiny)  -> VFMA (5) for InlineFma
+  --   1 (small) -> VFMA (5) for TiledMatMul (with VLOAD prefix per tile)
+  --   2 (large) -> VCALL (25) for ExternCall
+  let compute_opcode = if strategy == 0 then 5
+                       else if strategy == 1 then 5
+                       else 25 in
+  let g3_r = graph_set_prim_op g2 neural_id compute_opcode in
+  let g3 = g3_r.0 in
+  let compute_id = g3_r.1 in
+  -- Create Activation node (Prim VRELU=0x25=37)
+  let act = graph_add_node_rt g3 0 in
+  let g4 = act.0 in
+  let act_id = act.1 in
+  let g5_r = graph_set_prim_op g4 act_id 37 in
+  let g5 = g5_r.0 in
+  let act_new = g5_r.1 in
+  -- For TiledMatMul (strategy 1), add tile VLOAD nodes
+  let g5b = if strategy == 1 then
+    let side = isqrt param_count in
+    let tile_count = if side > 16 then (side + 15) / 16 else 1 in
+    -- Create VLOAD nodes for each tile (max 8 for Gen1)
+    let capped_tiles = if tile_count > 8 then 8 else tile_count in
+    fold g5
+      (\g tile_idx ->
+        if tile_idx < capped_tiles then
+          let tl = graph_add_node_rt g 0 in
+          let tg = tl.0 in
+          let tl_id = tl.1 in
+          let tg2 = graph_set_prim_op tg tl_id 11 in
+          let tg3 = tg2.0 in
+          let tl_new = tg2.1 in
+          -- Wire tile load -> compute
+          graph_connect tg3 compute_id tl_new (tile_idx + 1)
+        else g)
+      (list_range 0 capped_tiles)
+  else g5 in
+  -- Wire: WeightLoad -> Compute (port 0)
+  let g6 = graph_connect g5b compute_id wl_new 0 in
+  -- Wire: Compute -> Activation (port 0)
+  let g7 = graph_connect g6 act_new compute_id 0 in
+  -- Carry original neural argument edges to compute (shifted by +1 for weight_load at port 0)
+  let g8 = fold g7
+    (\g port_idx ->
+      if port_idx < list_len original_children then
+        graph_connect g compute_id (list_nth original_children port_idx) (port_idx + 1)
+      else g)
+    (list_range 0 (list_len original_children)) in
+  -- Re-wire consumers of the original Neural node to the Activation output
+  -- After graph_set_prim_op, neural_id became compute_id. Consumers of compute_id
+  -- should now point to act_new (the activation output).
+  let g9 = rewire_consumers g8 compute_id act_new in
+  -- Restore the compute -> activation edge (may have been affected by rewire)
+  let g10 = graph_connect g9 act_new compute_id 0 in
+  g10
+
+-- Lower all neural nodes in a program
+-- Returns the transformed program with no Neural nodes
+let lower_neural program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let neural_count = count_neural program in
+  if neural_count == 0 then program
+  else
+    fold program
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 7 then lower_neural_node g nid
+        else g)
+      nodes

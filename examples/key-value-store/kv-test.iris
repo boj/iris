@@ -1,0 +1,52 @@
+-- Key-Value Store Tests
+-- Verifies CRUD operations on the in-memory key-value store.
+
+-- Test: new store has size 0.
+let test_empty_size x : Int -> Int [cost: Const(1)] =
+  if map_size state_empty == 0 then 1 else 0 - 1
+
+-- Test: set then get returns the value.
+let test_set_get x : Int -> Int [cost: Const(2)] =
+  let s1 = map_insert state_empty "a" 42 in
+  if map_get s1 "a" == 42 then 1 else 0 - 1
+
+-- Test: size increases with inserts.
+let test_size_grows x : Int -> Int [cost: Const(3)] =
+  let s1 = map_insert state_empty "a" 1 in
+  let s2 = map_insert s1 "b" 2 in
+  let s3 = map_insert s2 "c" 3 in
+  if map_size s3 == 3 then 1 else 0 - 1
+
+-- Test: overwrite replaces value.
+let test_overwrite x : Int -> Int [cost: Const(3)] =
+  let s1 = map_insert state_empty "key" 10 in
+  let s2 = map_insert s1 "key" 20 in
+  if map_get s2 "key" == 20 then 1 else 0 - 1
+
+-- Test: delete reduces size.
+let test_delete_reduces_size x : Int -> Int [cost: Const(3)] =
+  let s1 = map_insert state_empty "a" 1 in
+  let s2 = map_insert s1 "b" 2 in
+  let s3 = map_remove s2 "a" in
+  if map_size s3 == 1 then 1 else 0 - 1
+
+-- Test: keys returns correct count.
+let test_keys_count x : Int -> Int [cost: Const(3)] =
+  let s1 = map_insert (map_insert state_empty "x" 1) "y" 2 in
+  let ks = map_keys s1 in
+  let len = fold 0 (\acc k -> acc + 1) ks in
+  if len == 2 then 1 else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(20)] =
+  let t1 = if map_size state_empty == 0 then 1 else 0 - 1 in
+  let s1 = map_insert state_empty "a" 42 in
+  let t2 = if map_get s1 "a" == 42 then 1 else 0 - 1 in
+  let s2 = map_insert (map_insert state_empty "x" 1) "y" 2 in
+  let t3 = if map_size s2 == 2 then 1 else 0 - 1 in
+  let s3 = map_insert s1 "a" 99 in
+  let t4 = if map_get s3 "a" == 99 then 1 else 0 - 1 in
+  let s4 = map_remove s2 "x" in
+  let t5 = if map_size s4 == 1 then 1 else 0 - 1 in
+  let t6 = if fold 0 (\acc k -> acc + 1) (map_keys s2) == 2 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5, t6)

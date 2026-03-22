@@ -1,0 +1,101 @@
+-- IRIS Runtime: registry of self-written IRIS programs for the evolution loop.
+--
+-- Mirrors the Rust iris_runtime.rs (1044 LOC) in iris-evolve.
+--
+-- When iris_mode is enabled, evolution uses IRIS programs for mutation,
+-- evaluation, and selection instead of Rust functions. This module provides
+-- the lookup/dispatch layer that maps operation names to programs.
+--
+-- The actual programs live in programs/mutation/, programs/evolution/, etc.
+-- This module provides:
+--   1. Operation registry (name → program mapping)
+--   2. Cache validation (ensure programs are loaded and valid)
+--   3. Dispatch: given an operation tag, return the right program
+
+-- Operation tags matching the Rust IrisOp enum
+-- External stub (defined in codec/feature_codec.iris)
+let node_count program : Int -> Int [cost: Linear(program)] =
+  fold 0 (\acc x -> acc + 1) (graph_nodes program)
+
+let op_replace_prim : Int [cost: Const(1)] = 0
+let op_add_node : Int [cost: Const(1)] = 1
+let op_connect : Int [cost: Const(1)] = 2
+let op_evaluate : Int [cost: Const(1)] = 3
+let op_tournament_select : Int [cost: Const(1)] = 4
+let op_crossover : Int [cost: Const(1)] = 5
+let op_count : Int [cost: Const(1)] = 6
+
+-- Check if an operation tag is valid
+let is_valid_op tag : Int -> Int [cost: Const(1)] =
+  if tag >= 0 then
+    if tag < op_count then 1 else 0
+  else 0
+
+-- Validate a program for use in the runtime.
+-- Checks: non-empty, within node limit, has root.
+let validate_program program max_nodes : Int -> Int -> Int [cost: Linear(program)] =
+  let nc = node_count program in
+  if nc == 0 then 0
+  else if nc > max_nodes then 0
+  else
+    let root = graph_get_root program in
+    if root == 0 then 0 else 1
+
+-- Execute an IRIS operation: dispatch to the right program.
+-- op: operation tag (0-5)
+-- program: the target program to mutate/evaluate
+-- arg: operation-specific argument (opcode for replace_prim, etc.)
+-- mutation_prog: the loaded mutation program (from programs/mutation/)
+-- Returns the result of applying the operation.
+-- graph_eval is legitimate: evaluating loaded IRIS mutation/selection programs.
+let dispatch_op op program arg mutation_prog : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  if op == op_replace_prim then
+    graph_eval mutation_prog (program, arg)
+  else if op == op_add_node then
+    graph_eval mutation_prog (program, arg)
+  else if op == op_connect then
+    graph_eval mutation_prog (program, arg)
+  else if op == op_evaluate then
+    graph_eval program arg
+  else if op == op_tournament_select then
+    graph_eval mutation_prog (program, arg)
+  else if op == op_crossover then
+    graph_eval mutation_prog (program, arg)
+  else 0 - 1
+
+-- Build a runtime registry: validate and cache operation programs.
+-- Takes a cons-list of (op_tag, program) pairs.
+-- Returns (valid_count, invalid_count, total).
+let build_registry entries max_nodes : Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  fold (0, 0, 0)
+    (\state entry ->
+      let tag = entry.0 in
+      let prog = entry.1 in
+      let valid = validate_program prog max_nodes in
+      if valid == 1 then (state.0 + 1, state.1, state.2 + 1)
+      else (state.0, state.1 + 1, state.2 + 1))
+    entries
+
+-- Check if all required operations are present in the registry.
+-- entries: cons-list of (op_tag, program) pairs
+-- Returns 1 if all 6 operations are covered, 0 otherwise.
+let is_complete_registry entries : Int -> Int [cost: Unknown] =
+  let coverage = fold (0, 0, 0, 0, 0, 0)
+    (\state entry ->
+      let tag = entry.0 in
+      if tag == 0 then (1, state.1, state.2, state.3, state.4, state.5)
+      else if tag == 1 then (state.0, 1, state.2, state.3, state.4, state.5)
+      else if tag == 2 then (state.0, state.1, 1, state.3, state.4, state.5)
+      else if tag == 3 then (state.0, state.1, state.2, 1, state.4, state.5)
+      else if tag == 4 then (state.0, state.1, state.2, state.3, 1, state.5)
+      else if tag == 5 then (state.0, state.1, state.2, state.3, state.4, 1)
+      else state)
+    entries in
+  coverage.0 * coverage.1 * coverage.2 * coverage.3 * coverage.4 * coverage.5
+
+-- Main entry: initialize the runtime with validated programs.
+-- Returns (ready, valid_count, total_ops).
+let init_runtime entries : Int -> (Int, Int, Int) [cost: Unknown] =
+  let registry = build_registry entries 200 in
+  let complete = is_complete_registry entries in
+  (complete, registry.0, registry.2)

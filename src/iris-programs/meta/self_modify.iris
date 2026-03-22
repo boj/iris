@@ -1,0 +1,10 @@
+-- A program that modifies its own graph
+-- Captures itself via self_graph, then changes a prim opcode
+-- and evaluates the modified version to see if it scores better.
+let self_improve test_cases : Int -> Int [cost: Unknown] =
+  let program = self_graph () in
+  let score = graph_eval program test_cases in
+  let modified = graph_set_prim_op program () 0 in
+  let new_score = graph_eval modified test_cases in
+  if new_score > score then new_score
+  else score

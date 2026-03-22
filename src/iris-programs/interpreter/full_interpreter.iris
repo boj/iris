@@ -1,0 +1,200 @@
+-- Full interpreter: dispatch on all 20 node kinds and route Prim opcodes
+-- to IRIS-native handlers where possible.
+--
+-- This is the meta-circular interpreter that handles every node kind
+-- in the SemanticGraph. It uses graph introspection opcodes to determine
+-- the root node's kind, then delegates to the appropriate eval function.
+--
+-- NodeKind tags (from graph.rs):
+--   0x00 = Prim       evaluate primitive operation
+--   0x01 = Apply      evaluate function application
+--   0x02 = Lambda     create closure
+--   0x03 = Let        local binding
+--   0x04 = Match      pattern matching
+--   0x05 = Lit        literal value
+--   0x06 = Ref        cross-fragment call
+--   0x07 = Neural     neural network layer (unsupported)
+--   0x08 = Fold       fold / catamorphism
+--   0x09 = Unfold     unfold / anamorphism
+--   0x0A = Effect     side effect dispatch
+--   0x0B = Tuple      tuple construction
+--   0x0C = Inject     tagged union constructor
+--   0x0D = Project    tuple field projection
+--   0x0E = TypeAbst   type abstraction (evaluate body)
+--   0x0F = TypeApp    type application (evaluate body)
+--   0x10 = LetRec     recursive binding
+--   0x11 = Guard      conditional dispatch
+--   0x12 = Rewrite    verified term rewrite
+--   0x13 = Extern     external function (unsupported)
+--
+-- Strategy: For Prim nodes, check if the opcode falls in a group that
+-- can be handled natively in IRIS (arithmetic 0x00-0x09, comparison
+-- 0x20-0x25). For those groups, read the operands via graph introspection
+-- and compute directly. For all other opcodes and node kinds, delegate
+-- to graph_eval which invokes the full Rust interpreter.
+--
+-- Native evaluation of a Prim node works as follows:
+-- 1. Use graph_outgoing to get the argument node IDs
+-- 2. For each argument, create a sub-program (graph_set_root) and
+--    evaluate it via graph_eval to get the concrete value
+-- 3. Apply the IRIS-native operation
+--
+-- This is the first step toward Phase Transition 1 (Tool -> Organism):
+-- the interpreter progressively handles more opcodes natively, reducing
+-- its dependence on the Rust runtime.
+
+-- Main interpreter entry point.
+-- All helper logic is inlined to avoid cross-fragment Ref dependencies,
+-- ensuring the full_interpret function is self-contained and can be
+-- evaluated by the bootstrap evaluator without a fragment registry.
+let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
+  let root = graph_get_root program in
+  let kind = graph_get_kind program root in
+  -- Prim: check if we can handle this opcode natively
+  if kind == 0 then
+    let op = graph_get_prim_op program root in
+    let args = graph_outgoing program root in
+    let nargs = list_len args in
+    -- Binary operations (2 args): arithmetic, comparison
+    if nargs > 1 then
+      let arg0_id = list_nth args 0 in
+      let arg1_id = list_nth args 1 in
+      -- Evaluate argument sub-graphs via graph_set_root + graph_eval
+      let sub0 = graph_set_root program arg0_id in
+      let sub1 = graph_set_root program arg1_id in
+      let a = graph_eval sub0 inputs in
+      let b = graph_eval sub1 inputs in
+      -- Arithmetic 0x00-0x09 (native)
+      if op < 10 then
+        if op == 0 then a + b
+        else if op == 1 then a - b
+        else if op == 2 then a * b
+        else if op == 3 then
+          if b == 0 then 0
+          else a / b
+        else if op == 4 then
+          if b == 0 then 0
+          else a - (a / b) * b
+        else if op == 7 then
+          if a < b then a else b
+        else if op == 8 then
+          if a > b then a else b
+        else if op == 9 then
+          -- pow via repeated squaring
+          if b < 0 then 0
+          else if b == 0 then 1
+          else
+            let r0 = 1 in
+            let b0 = b - (b / 2) * 2 in
+            let r1 = if b0 == 1 then r0 * a else r0 in
+            let s1 = a * a in
+            let e1 = b / 2 in
+            if e1 == 0 then r1
+            else
+              let bb1 = e1 - (e1 / 2) * 2 in
+              let r2 = if bb1 == 1 then r1 * s1 else r1 in
+              let s2 = s1 * s1 in
+              let e2 = e1 / 2 in
+              if e2 == 0 then r2
+              else
+                let bb2 = e2 - (e2 / 2) * 2 in
+                let r3 = if bb2 == 1 then r2 * s2 else r2 in
+                let s3 = s2 * s2 in
+                let e3 = e2 / 2 in
+                if e3 == 0 then r3
+                else
+                  let bb3 = e3 - (e3 / 2) * 2 in
+                  let r4 = if bb3 == 1 then r3 * s3 else r3 in
+                  let s4 = s3 * s3 in
+                  let e4 = e3 / 2 in
+                  if e4 == 0 then r4
+                  else
+                    let bb4 = e4 - (e4 / 2) * 2 in
+                    let r5 = if bb4 == 1 then r4 * s4 else r4 in
+                    r5
+        -- Unary ops (neg=5, abs=6) with 2 args: second arg is 0 (unused)
+        else if op == 5 then 0 - a
+        else if op == 6 then
+          if a < 0 then 0 - a else a
+        else graph_eval program inputs
+      -- Comparison 0x20-0x25 (32-37, native)
+      else if op > 31 then
+        if op < 38 then
+          if op == 32 then
+            if a == b then 1 else 0
+          else if op == 33 then
+            if a == b then 0 else 1
+          else if op == 34 then
+            if a < b then 1 else 0
+          else if op == 35 then
+            if a > b then 1 else 0
+          else if op == 36 then
+            if a < b then 1
+            else if a == b then 1
+            else 0
+          else if op == 37 then
+            if a > b then 1
+            else if a == b then 1
+            else 0
+          else graph_eval program inputs
+        else graph_eval program inputs
+      else graph_eval program inputs
+    -- Unary operations (1 arg): neg, abs, type conversion
+    else if nargs == 1 then
+      let arg0_id = list_nth args 0 in
+      let sub0 = graph_set_root program arg0_id in
+      let a = graph_eval sub0 inputs in
+      -- neg (5), abs (6)
+      if op == 5 then 0 - a
+      else if op == 6 then
+        if a < 0 then 0 - a else a
+      -- Type conversion 0x40-0x44 (64-68): identity for Int
+      else if op > 63 then
+        if op < 69 then
+          if op == 68 then
+            if a == 0 then 0 else 1
+          else a
+        else graph_eval program inputs
+      else graph_eval program inputs
+    -- Zero args or complex: delegate to Rust
+    else graph_eval program inputs
+  -- Lit: evaluate literal value
+  else if kind == 5 then graph_eval program inputs
+  -- Apply: function application
+  else if kind == 1 then graph_eval program inputs
+  -- Lambda: closure creation
+  else if kind == 2 then graph_eval program inputs
+  -- Let: local binding
+  else if kind == 3 then graph_eval program inputs
+  -- Match: pattern matching
+  else if kind == 4 then graph_eval program inputs
+  -- Ref: cross-fragment call
+  else if kind == 6 then graph_eval program inputs
+  -- Neural: unsupported
+  else if kind == 7 then -1
+  -- Fold: catamorphism
+  else if kind == 8 then graph_eval program inputs
+  -- Unfold: anamorphism
+  else if kind == 9 then graph_eval program inputs
+  -- Effect: side effect
+  else if kind == 10 then graph_eval program inputs
+  -- Tuple: product construction
+  else if kind == 11 then graph_eval program inputs
+  -- Inject: sum constructor
+  else if kind == 12 then graph_eval program inputs
+  -- Project: field access
+  else if kind == 13 then graph_eval program inputs
+  -- TypeAbst: evaluate body
+  else if kind == 14 then graph_eval program inputs
+  -- TypeApp: evaluate body
+  else if kind == 15 then graph_eval program inputs
+  -- LetRec: recursive binding
+  else if kind == 16 then graph_eval program inputs
+  -- Guard: conditional
+  else if kind == 17 then graph_eval program inputs
+  -- Rewrite: verified rewrite (transparent)
+  else if kind == 18 then graph_eval program inputs
+  -- Extern: unsupported
+  else if kind == 19 then -1
+  -- Unknown kind
+  else -1

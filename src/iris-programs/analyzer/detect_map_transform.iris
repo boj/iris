@@ -1,0 +1,59 @@
+-- Detect map transform pattern: output = map(op, input_list)
+--
+-- Takes a list of (list_input, expected_list_output) pairs and count n.
+-- Tests map operations where op is applied element-wise as f(x, x):
+--   add(x,x) = 2*x (double)
+--   mul(x,x) = x^2 (square)
+--   sub(x,x) = 0   (zero)
+--   max(x,x) = x   (identity)
+--   min(x,x) = x   (identity)
+-- Returns: (confidence, opcode, input_index)
+
+-- Apply a unary-via-binary operation: op(x, x)
+let apply_unary op x : Int -> Int -> Int [cost: Const(3)] =
+  if op == 0 then x + x         -- double
+  else if op == 2 then x * x    -- square
+  else if op == 1 then 0        -- always zero
+  else if op == 7 then x        -- identity (min(x,x))
+  else if op == 8 then x        -- identity (max(x,x))
+  else x
+
+-- Map a function over a list
+let map_fn op xs : Int -> Int -> Int [cost: Linear(xs)] =
+  map (\x -> apply_unary op x) xs
+
+-- Check if all elements of two lists match pairwise
+let lists_equal a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  let mismatches = fold 0
+    (\acc pair -> if pair.0 == pair.1 then acc else acc + 1)
+    pairs in
+  if mismatches == 0 then 1 else 0
+
+-- Count pairs where map(op, input) == expected_output
+let count_map_matches pairs op : Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0
+    (\acc pair ->
+      let xs = pair.0 in
+      let expected = pair.1 in
+      let result = map_fn op xs in
+      let eq = lists_equal result expected in
+      acc + eq)
+    pairs
+
+-- Detect map transform pattern
+-- Returns: (confidence, opcode, input_index)
+let detect_map_transform pairs n : Int -> Int -> (Int, Int, Int) [cost: Linear(pairs)] =
+  if n == 0 then (0, 0, 0)
+  else
+    -- Try each unary-via-binary operation
+    -- Try double (add)
+    let add_matches = count_map_matches pairs 0 in
+    let add_conf = (add_matches * 100) / n in
+    -- Try square (mul)
+    let mul_matches = count_map_matches pairs 2 in
+    let mul_conf = (mul_matches * 100) / n in
+    -- Pick the best (skip sub/min/max as they produce trivial results)
+    if add_conf > mul_conf then (add_conf, 0, 0)
+    else if mul_conf > 0 then (mul_conf, 2, 0)
+    else (0, 0, 0)

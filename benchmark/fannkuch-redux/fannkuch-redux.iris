@@ -1,0 +1,45 @@
+-- Fannkuch-Redux (Benchmarks Game)
+-- Count the number of "pancake flips" for a given permutation.
+--
+-- A pancake flip reverses the first k elements of the array, where k is the
+-- value of the first element (1-indexed). We flip until the first element is 1.
+--
+-- The full benchmark finds the maximum flip count over all N! permutations.
+-- Since IRIS lacks recursion for permutation generation, we implement:
+--   1. count_flips: count flips for a single permutation (the core algorithm)
+--   2. The Rust test harness generates permutations and calls count_flips
+--
+-- This isolates the integer array manipulation, which is what the benchmark
+-- measures.
+
+-- Reverse the first k elements of a list using fold
+-- Builds reversed prefix, then appends unchanged suffix
+let reverse_prefix perm k =
+  let prefix = list_take perm k in
+  let suffix = list_drop perm k in
+  let rev = fold (list_range 0 0) (\acc i ->
+    list_append acc (list_nth prefix (k - 1 - i))
+  ) (list_range 0 k) in
+  list_concat rev suffix
+
+-- Count flips for a single permutation.
+-- Bounded iteration: at most max_flips steps (N is a safe upper bound).
+let count_flips perm max_iters =
+  let res = fold (perm, 0, 0) (\state iter_idx ->
+    let p = state.0 in
+    let count = state.1 in
+    let done = state.2 in
+    if done == 1 then state
+    else
+      let first = list_nth p 0 in
+      if first == 1 then (p, count, 1)
+      else
+        let new_p = reverse_prefix p first in
+        (new_p, count + 1, 0)
+  ) (list_range 0 max_iters) in
+  res.1
+
+-- Checksum contribution for permutation at index i:
+--   if i is even: +flips, if i is odd: -flips
+let checksum_contrib i flips =
+  if i % 2 == 0 then flips else neg flips

@@ -1,0 +1,132 @@
+{{ define "main" }}
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container">
+    <h1 class="hero-title">IRIS</h1>
+    <p class="hero-tagline">Intelligent Runtime for Iterative Synthesis</p>
+    <div class="hero-actions">
+      <a href="{{ "/learn/get-started/" | relURL }}" class="btn btn-primary">Get Started</a>
+      <span class="version-badge">Version {{ .Site.Params.version }}</span>
+    </div>
+  </div>
+</section>
+
+<!-- Why IRIS -->
+<section class="features">
+  <div class="container">
+    <h2 class="section-heading">Why IRIS?</h2>
+    <div class="grid-3">
+      <div class="card">
+        <h3>Self-Improving</h3>
+        <p>Programs that get better on their own. IRIS programs can inspect, rewrite, and evolve their own code &mdash; breeding variants, measuring fitness, and deploying improvements automatically.</p>
+      </div>
+      <div class="card">
+        <h3>Verified</h3>
+        <p>Correctness you can prove. A proof kernel checks types, cost bounds, and functional properties at compile time. The proofs are machine-checked end-to-end, formalized in Lean 4.</p>
+      </div>
+      <div class="card">
+        <h3>Fast</h3>
+        <p>Four execution tiers, one language. Programs start interpreted and can scale through JIT-compiled native code and SIMD &mdash; without changing a line of source.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Code Example -->
+<section class="code-showcase">
+  <div class="container">
+    <h2 class="section-heading">Familiar syntax, unfamiliar power.</h2>
+    <div class="grid-2">
+      <div class="code-block">
+        <div class="code-label">Algorithms</div>
+        <pre><code class="language-iris">-- Factorial with cost annotation
+let rec factorial n : Int -> Int [cost: Linear(n)] =
+  if n <= 1 then 1
+  else n * factorial (n - 1)
+
+-- GCD via Euclid's algorithm
+let rec gcd a b : Int -> Int -> Int [cost: Unknown] =
+  if b == 0 then a
+  else gcd b (a % b)
+
+-- Sum a list using fold
+let sum xs : List Int -> Int [cost: Linear(xs)] =
+  fold 0 (+) xs</code></pre>
+      </div>
+      <div class="code-block">
+        <div class="code-label">Pipelines &amp; Self-Modification</div>
+        <pre><code class="language-iris">-- Filter, transform, and sum with pipes
+let process xs : List Int -> Int [cost: Linear(xs)] =
+  xs |> filter (\x -> x > 0)
+     |> map (\x -> x * x)
+     |> fold 0 (\acc x -> acc + x)
+
+-- Nested lambdas capture outer scope
+let scale_all xs factor : List Int -> Int -> List Int =
+  map (\x -> x * factor) xs
+
+-- Programs that rewrite themselves
+let mutate program new_op : Program -> Int -> Program =
+  let root = graph_get_root program in
+  graph_set_prim_op program root new_op</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Build With IRIS -->
+<section class="domains">
+  <div class="container">
+    <h2 class="section-heading">Build it with IRIS</h2>
+    <div class="grid-4">
+      <div class="card card-icon">
+        <div class="icon">{{ partial "icons/evolve.svg" }}</div>
+        <h3>Evolutionary Programs</h3>
+        <p>Breed solutions from specifications. NSGA-II population search with lexicase selection and novelty search.</p>
+        <a href="{{ "/learn/architecture/#evolution" | relURL }}">Learn more &rarr;</a>
+      </div>
+      <div class="card card-icon">
+        <div class="icon">{{ partial "icons/verify.svg" }}</div>
+        <h3>Verified Systems</h3>
+        <p>LCF proof kernel with 20 inference rules. Refinement types and cost annotations let programs carry machine-checked correctness proofs.</p>
+        <a href="{{ "/learn/verification/" | relURL }}">Learn more &rarr;</a>
+      </div>
+      <div class="card card-icon">
+        <div class="icon">{{ partial "icons/network.svg" }}</div>
+        <h3>Full I/O</h3>
+        <p>TCP, HTTP, files, threading, and JSON in the standard library. Capability-based security controls what effects your code can perform.</p>
+        <a href="{{ "/learn/stdlib/" | relURL }}">Learn more &rarr;</a>
+      </div>
+      <div class="card card-icon">
+        <div class="icon">{{ partial "icons/perf.svg" }}</div>
+        <h3>High Performance</h3>
+        <p>Four execution tiers from interpreted to JIT-compiled x86-64 with native fold, map, filter, and tuple ops. JIT tests verify equivalence.</p>
+        <a href="{{ "/learn/architecture/#execution" | relURL }}">Learn more &rarr;</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Get Involved -->
+<section class="get-involved">
+  <div class="container">
+    <h2 class="section-heading">Get Involved</h2>
+    <div class="grid-3">
+      <div class="card">
+        <h3>Read IRIS</h3>
+        <p>Start with the <a href="{{ "/learn/" | relURL }}">language guide</a>, explore the <a href="{{ "/learn/stdlib/" | relURL }}">standard library</a>, or dive into the <a href="{{ "/learn/architecture/" | relURL }}">architecture</a>.</p>
+      </div>
+      <div class="card">
+        <h3>Build with IRIS</h3>
+        <p><a href="{{ "/learn/get-started/" | relURL }}">Install IRIS</a>, run the examples, and start writing your own programs. A full library of example programs ships as references.</p>
+      </div>
+      <div class="card">
+        <h3>Contribute</h3>
+        <p>IRIS is open source. Check out the <a href="{{ .Site.Params.repo }}">GitHub repository</a> to file issues, submit PRs, or join the discussion.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+{{ end }}

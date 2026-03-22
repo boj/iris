@@ -1,0 +1,53 @@
+-- Calculator Tests
+-- Verifies the expression evaluator on known arithmetic expressions.
+
+-- Test: 3 + 5 = 8
+let test_add x : Int -> Int [cost: Const(1)] =
+  let result = 3 + 5 in
+  if result == 8 then 1 else 0 - 1
+
+-- Test: 2 * 3 + 4 = 10  (step by step)
+let test_mul_then_add x : Int -> Int [cost: Const(1)] =
+  let product = 2 * 3 in
+  let result = product + 4 in
+  if result == 10 then 1 else 0 - 1
+
+-- Test: 10 / 2 = 5
+let test_div x : Int -> Int [cost: Const(1)] =
+  let result = 10 / 2 in
+  if result == 5 then 1 else 0 - 1
+
+-- Test: 100 - 37 = 63
+let test_sub x : Int -> Int [cost: Const(1)] =
+  let result = 100 - 37 in
+  if result == 63 then 1 else 0 - 1
+
+-- Test: nested expression (3 + 5) * (10 - 4) = 48
+let test_nested x : Int -> Int [cost: Const(1)] =
+  let a = 3 + 5 in
+  let b = 10 - 4 in
+  let result = a * b in
+  if result == 48 then 1 else 0 - 1
+
+-- Test: negative numbers (-5 + 3 = -2)
+let test_negative x : Int -> Int [cost: Const(1)] =
+  let result = -5 + 3 in
+  if result == -2 then 1 else 0 - 1
+
+-- Test: chained multiplications 2 * 3 * 4 = 24
+let test_chained_mul x : Int -> Int [cost: Const(1)] =
+  let a = 2 * 3 in
+  let result = a * 4 in
+  if result == 24 then 1 else 0 - 1
+
+-- Test summary: run all tests
+let test_results x : Int -> Tuple [cost: Const(8)] =
+  let t1 = if (3 + 5) == 8 then 1 else 0 - 1 in
+  let t2 = if (2 * 3 + 4) == 10 then 1 else 0 - 1 in
+  let t3 = if (10 / 2) == 5 then 1 else 0 - 1 in
+  let t4 = if (100 - 37) == 63 then 1 else 0 - 1 in
+  let t5 = if ((3 + 5) * (10 - 4)) == 48 then 1 else 0 - 1 in
+  let t6 = if (-5 + 3) == -2 then 1 else 0 - 1 in
+  let t7 = if (2 * 3 * 4) == 24 then 1 else 0 - 1 in
+  let t8 = if (7 * 7) == 49 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5, t6, t7, t8)

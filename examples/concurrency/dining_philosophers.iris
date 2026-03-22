@@ -1,0 +1,73 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Dining Philosophers Problem
+-- Classic concurrency problem: 5 philosophers sit at a table, alternating
+-- between thinking and eating. Each needs two forks to eat.
+--
+-- This is a simulation using State to track fork ownership and philosopher states.
+-- In a real concurrent system, this would use par_eval and synchronization.
+--
+-- States: 0 = thinking, 1 = hungry, 2 = eating
+-- Forks: tuple of 5 booleans (1 = available, 0 = taken)
+
+-- Check if philosopher i can eat (both adjacent forks available).
+let can_eat forks i n : Tuple -> Int -> Int -> Bool [cost: Const(2)] =
+  let left = i in
+  let right = (i + 1) % n in
+  list_nth forks left == 1 && list_nth forks right == 1
+
+-- Pick up both forks for philosopher i.
+let pick_up_forks forks i n : Tuple -> Int -> Int -> Tuple [cost: Const(2)] =
+  let left = i in
+  let right = (i + 1) % n in
+  list_set (list_set forks left 0) right 0
+
+-- Put down both forks for philosopher i.
+let put_down_forks forks i n : Tuple -> Int -> Int -> Tuple [cost: Const(2)] =
+  let left = i in
+  let right = (i + 1) % n in
+  list_set (list_set forks left 1) right 1
+
+-- Update state of philosopher i.
+let set_state states i new_state : Tuple -> Int -> Int -> Tuple [cost: Const(1)] =
+  list_set states i new_state
+
+-- Simulate one round: each philosopher tries to transition.
+let sim_round states forks n : Tuple -> Tuple -> Int -> Tuple [cost: Unknown] =
+  fold (states, forks, ()) (\acc i ->
+    let st = acc.0 in
+    let fk = acc.1 in
+    let log = acc.2 in
+    let phil_state = list_nth st i in
+    if phil_state == 0 then
+      -- Thinking -> Hungry
+      (set_state st i 1, fk, list_append log (i * 10 + 1))
+    else if phil_state == 1 then
+      -- Hungry -> try to Eat
+      if can_eat fk i n then
+        let new_forks = pick_up_forks fk i n in
+        (set_state st i 2, new_forks, list_append log (i * 10 + 2))
+      else (st, fk, log)  -- stay hungry
+    else
+      -- Eating -> Thinking (put down forks)
+      let new_forks = put_down_forks fk i n in
+      (set_state st i 0, new_forks, list_append log (i * 10 + 0))
+  ) (list_range 0 n)
+
+-- Run simulation for k rounds.
+let sim_philosophers n k : Int -> Int -> Tuple [cost: Unknown] =
+  let init_states = map (\i -> 0) (list_range 0 n) in  -- all thinking
+  let init_forks = map (\i -> 1) (list_range 0 n) in   -- all available
+  fold (init_states, init_forks, ()) (\acc round ->
+    sim_round acc.0 acc.1 n
+  ) (list_range 0 k)
+
+-- Test: 5 philosophers, 3 rounds
+let test_dining x : Int -> Tuple =
+  let result = sim_philosophers 5 3 in
+  let final_states = result.0 in
+  let final_forks = result.1 in
+  let log = result.2 in
+  (final_states, final_forks, log)

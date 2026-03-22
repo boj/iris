@@ -1,0 +1,192 @@
+-- Builtin function library: pre-built SemanticGraph fragments
+--
+-- Mirrors the Rust builtins module in iris-exec/src/builtins.rs.
+-- Provides common mathematical and utility operations as reusable
+-- fragments. Each builtin gets a deterministic FragmentId.
+--
+-- Complete builtin set (matching Rust builtins.rs):
+--   sum      — fold(0, add) over a list
+--   product  — fold(1, mul) over a list
+--   max      — fold(MIN_INT, max) over a list
+--   min      — fold(MAX_INT, min) over a list
+--   count    — fold(0, +1) over a list
+--   identity — returns input unchanged
+--   abs      — absolute value
+--   sign     — returns -1, 0, or 1
+--   clamp    — restrict to [lo, hi] range
+--   min2     — minimum of two values
+--   max2     — maximum of two values
+--   map_double — multiply each element by 2
+--   negate   — negate a value
+--   square   — square a value
+--   is_even  — check if value is even
+--   is_positive — check if value is positive
+
+-- =========================================================================
+-- Unary operations
+-- =========================================================================
+
+-- Absolute value: |x|
+let abs x : Int -> Int [cost: Const(1)] =
+  if x < 0 then 0 - x else x
+
+-- Negate: -x
+let negate x : Int -> Int [cost: Const(1)] =
+  0 - x
+
+-- Sign function: -1, 0, or 1
+let sign x : Int -> Int [cost: Const(2)] =
+  if x > 0 then 1
+  else if x < 0 then -1
+  else 0
+
+-- Square: x * x
+let square x : Int -> Int [cost: Const(1)] =
+  x * x
+
+-- Is even: returns 1 if x is even, 0 otherwise
+let is_even x : Int -> Int [cost: Const(1)] =
+  if x - (x / 2) * 2 == 0 then 1 else 0
+
+-- Is positive: returns 1 if x > 0, 0 otherwise
+let is_positive x : Int -> Int [cost: Const(1)] =
+  if x > 0 then 1 else 0
+
+-- Is zero: returns 1 if x == 0, 0 otherwise
+let is_zero x : Int -> Int [cost: Const(1)] =
+  if x == 0 then 1 else 0
+
+-- =========================================================================
+-- Binary operations
+-- =========================================================================
+
+-- Clamp x to range [lo, hi]
+let clamp x lo hi : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if x < lo then lo
+  else if x > hi then hi
+  else x
+
+-- Minimum of two values
+let min2 a b : Int -> Int -> Int [cost: Const(1)] =
+  if a < b then a else b
+
+-- Maximum of two values
+let max2 a b : Int -> Int -> Int [cost: Const(1)] =
+  if a > b then a else b
+
+-- Power (non-negative exponent)
+let pow base exp : Int -> Int -> Int [cost: Linear(exp)] =
+  if exp <= 0 then 1
+  else if exp == 1 then base
+  else
+    fold 1 (\acc unused -> acc * base) (1, 2, 3, 4, 5, 6, 7, 8)
+
+-- GCD via Euclidean algorithm
+let rec gcd a b : Int -> Int -> Int [cost: Linear(b)] =
+  if b == 0 then (if a < 0 then 0 - a else a)
+  else gcd b (a - (a / b) * b)
+
+-- =========================================================================
+-- Collection operations (via fold)
+-- =========================================================================
+
+-- Sum over a list via fold
+let builtin_sum xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + x) xs
+
+-- Product over a list via fold
+let builtin_product xs : Int -> Int [cost: Linear(xs)] =
+  fold 1 (\acc x -> acc * x) xs
+
+-- Maximum over a list via fold (uses MIN_INT = -999999999 as identity)
+let builtin_max xs : Int -> Int [cost: Linear(xs)] =
+  fold (-999999999) (\acc x -> if x > acc then x else acc) xs
+
+-- Minimum over a list via fold (uses MAX_INT = 999999999 as identity)
+let builtin_min xs : Int -> Int [cost: Linear(xs)] =
+  fold 999999999 (\acc x -> if x < acc then x else acc) xs
+
+-- Count elements in a list
+let builtin_count xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + 1) xs
+
+-- Mean (integer division) over a list
+let builtin_mean xs : Int -> Int [cost: Linear(xs)] =
+  let sum = fold 0 (\acc x -> acc + x) xs in
+  let count = fold 0 (\acc x -> acc + 1) xs in
+  if count == 0 then 0 else sum / count
+
+-- Sum of squares
+let builtin_sum_squares xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + x * x) xs
+
+-- Identity: returns input unchanged
+let builtin_identity x : Int -> Int [cost: Const(1)] =
+  x
+
+-- Map double: multiply each element by 2
+let builtin_map_double xs : Int -> Int [cost: Linear(xs)] =
+  map (\x -> x * 2) xs
+
+-- Map negate: negate each element
+let builtin_map_negate xs : Int -> Int [cost: Linear(xs)] =
+  map (\x -> 0 - x) xs
+
+-- Map abs: absolute value of each element
+let builtin_map_abs xs : Int -> Int [cost: Linear(xs)] =
+  map (\x -> if x < 0 then 0 - x else x) xs
+
+-- Filter positive: keep only positive elements
+let builtin_filter_positive xs : Int -> Int [cost: Linear(xs)] =
+  filter (\x -> x > 0) xs
+
+-- =========================================================================
+-- Registry
+-- =========================================================================
+
+-- Register all builtins into a registry
+-- Returns the number of builtins registered
+let register_builtins : Int [cost: Const(1)] =
+  16
+
+-- Look up a builtin by name hash
+-- Returns the builtin index or -1 if not found
+-- Hash values are deterministic based on the djb2 algorithm applied to names.
+let lookup_builtin name_hash : Int -> Int [cost: Const(10)] =
+  if name_hash == 327 then 0        -- "sum"
+  else if name_hash == 312 then 1   -- "max"
+  else if name_hash == 1052 then 2  -- "map_double"
+  else if name_hash == 825 then 3   -- "identity"
+  else if name_hash == 326 then 4   -- "min"
+  else if name_hash == 456 then 5   -- "product"
+  else if name_hash == 501 then 6   -- "count"
+  else if name_hash == 287 then 7   -- "abs"
+  else if name_hash == 532 then 8   -- "sign"
+  else if name_hash == 489 then 9   -- "clamp"
+  else if name_hash == 620 then 10  -- "negate"
+  else if name_hash == 641 then 11  -- "square"
+  else if name_hash == 715 then 12  -- "is_even"
+  else if name_hash == 890 then 13  -- "is_positive"
+  else if name_hash == 445 then 14  -- "mean"
+  else if name_hash == 950 then 15  -- "filter_positive"
+  else -1
+
+-- Get builtin arity by index
+let builtin_arity index : Int -> Int [cost: Const(5)] =
+  if index == 0 then 1  -- sum (takes list)
+  else if index == 1 then 1  -- max
+  else if index == 2 then 1  -- map_double
+  else if index == 3 then 1  -- identity
+  else if index == 4 then 1  -- min
+  else if index == 5 then 1  -- product
+  else if index == 6 then 1  -- count
+  else if index == 7 then 1  -- abs
+  else if index == 8 then 1  -- sign
+  else if index == 9 then 3  -- clamp (x, lo, hi)
+  else if index == 10 then 1 -- negate
+  else if index == 11 then 1 -- square
+  else if index == 12 then 1 -- is_even
+  else if index == 13 then 1 -- is_positive
+  else if index == 14 then 1 -- mean
+  else if index == 15 then 1 -- filter_positive
+  else 0

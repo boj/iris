@@ -1,0 +1,87 @@
+-- Monad Transformer Patterns
+-- Demonstrates stacking computational effects using the stdlib monads.
+--
+-- See also:
+--   stdlib/either.iris  -- Either (error handling)
+--   stdlib/writer.iris  -- Writer (logging)
+--   stdlib/reader.iris  -- Reader (environment)
+
+import "stdlib/either.iris" as Either
+import "stdlib/writer.iris" as Writer
+import "stdlib/list_ops.iris" as List
+
+-- ============================================================
+-- Writer + Either combined (WriterT over Either)
+-- Encoding: (tag, result_or_error, log)
+--   Success: (0, value, log)
+--   Failure: (1, error, log)
+-- ============================================================
+
+let wt_return val = (0, val, ())
+let wt_fail err = (1, err, ())
+let wt_tell msg = (0, 0, (msg,))
+
+let wt_bind wa f =
+  if wa.0 == 1 then wa
+  else
+    let result = f wa.1 in
+    (result.0, result.1, list_concat wa.2 result.2)
+
+-- Safe division with logging.
+let safe_div_logged a b =
+  let logged = wt_tell (a * 1000 + b) in
+  if b == 0 then (1, -1, logged.2)
+  else (0, a / b, logged.2)
+
+-- Chain: ((100 / a) / b) with logging.
+let chain_div a b =
+  let step1 = safe_div_logged 100 a in
+  wt_bind step1 (\result -> safe_div_logged result b)
+
+-- ============================================================
+-- List Monad: nondeterministic computation
+-- (list_return and list_bind imported from stdlib/list_ops.iris)
+-- ============================================================
+
+-- Pythagorean triples via list monad.
+let pythagorean_triples n =
+  list_bind (list_range 1 (n + 1)) (\a ->
+    list_bind (list_range a (n + 1)) (\b ->
+      list_bind (list_range b (n + 1)) (\c ->
+        if a * a + b * b == c * c then ((a, b, c),)
+        else ()
+      )
+    )
+  )
+
+-- ============================================================
+-- Tests
+-- ============================================================
+
+let test_writer x : Int -> Tuple =
+  let w = writer_bind (writer_return 10) (\a ->
+    writer_bind (writer_tell 1) (\dummy ->
+      writer_return (a + 5)
+    )
+  ) in
+  w
+
+let test_either x : Int -> Tuple =
+  let ok = either_bind (either_return 10) (\a -> either_return (a * 2)) in
+  let err = either_bind (either_fail -1) (\a -> either_return (a * 2)) in
+  (ok, err)
+
+let test_writer_either x : Int -> Tuple =
+  let d1 = chain_div 5 2 in
+  let d2 = chain_div 0 2 in
+  (d1, d2)
+
+let test_list_monad x : Int -> Tuple =
+  pythagorean_triples 20
+
+let test_monads x : Int -> Tuple =
+  let w = test_writer 0 in
+  let e = test_either 0 in
+  let we = test_writer_either 0 in
+  let triples = test_list_monad 0 in
+  (w, e, we, triples)

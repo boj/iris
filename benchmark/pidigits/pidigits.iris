@@ -1,0 +1,65 @@
+-- Pi Digits (Benchmarks Game)
+-- Compute digits of pi using the Machin-like formula with fixed-point arithmetic.
+--
+-- pi/4 = 4*arctan(1/5) - arctan(1/239)  (Machin's formula)
+--
+-- arctan(1/x) = 1/x - 1/(3*x^3) + 1/(5*x^5) - 1/(7*x^7) + ...
+--
+-- We compute using scaled integers: multiply by 10^(n+10) for n digits
+-- of precision, then extract the digits from the result.
+--
+-- Since IRIS has i64 (max ~9.2e18), we can compute about 15 digits
+-- before overflow. We use a term-by-term approach that stays in range.
+--
+-- Uses: fold, int_to_string, str_concat, str_slice
+
+-- Compute arctan(1/x) * scale using the Taylor series.
+-- Returns an integer representing arctan(1/x) * scale.
+-- Uses enough terms for the requested precision.
+let arctan_recip x scale =
+  let num_terms = 50 in
+  fold (0, scale / x, 1) (\state i ->
+    let sum = state.0 in
+    let term = state.1 in
+    let sign = state.2 in
+    if term == 0 then state
+    else
+      let denom = 2 * i + 1 in
+      let contribution = term / denom in
+      let new_sum = sum + sign * contribution in
+      let new_term = term / (neg (x * x)) in
+      (new_sum, new_term, sign)
+  ) (list_range 0 num_terms)
+
+-- Extract the sum from the arctan result tuple
+let arctan_result x scale =
+  let res = arctan_recip x scale in
+  res.0
+
+-- Compute pi * scale using Machin's formula:
+-- pi = 4 * (4 * arctan(1/5) - arctan(1/239))
+let pi_scaled scale =
+  let at5 = arctan_result 5 scale in
+  let at239 = arctan_result 239 scale in
+  4 * (4 * at5 - at239)
+
+-- Compute n digits of pi as a string.
+-- We compute pi * 10^n, then format as "3.14159..."
+let pidigits n =
+  if n < 1 then "3"
+  else
+    -- Compute scale = 10^(n+2) for extra precision
+    let scale = pow 10 (n + 2) in
+    let pi_int = pi_scaled scale in
+    let pi_str = int_to_string pi_int in
+    -- Take first n+1 digits (includes leading "3")
+    -- The result should be like "314159..." with n+2 digits
+    let result_len = str_len pi_str in
+    if result_len >= n then
+      str_slice pi_str 0 n
+    else
+      pi_str
+
+-- Benchmark entry: compute n digits of pi.
+let bench n =
+  pidigits n

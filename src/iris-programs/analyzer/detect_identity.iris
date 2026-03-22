@@ -1,0 +1,20 @@
+-- Detect identity pattern: output == input for all test cases
+--
+-- Takes a list of (input, output) pairs and the count n.
+-- Identity means every output equals its corresponding input.
+-- Returns confidence score 0-100.
+
+-- Check if a single pair is an identity match (output == input)
+let is_identity_pair pair : (Int, Int) -> Int [cost: Const(1)] =
+  if pair.0 == pair.1 then 1 else 0
+
+-- Count how many test case pairs satisfy output == input
+let count_identity_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_identity_pair pair) pairs
+
+-- Detect identity pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_identity pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  let matches = count_identity_matches pairs in
+  if n == 0 then 0
+  else (matches * 100) / n

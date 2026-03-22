@@ -1,0 +1,343 @@
+-- ELF wrapper: assemble a complete ELF64 binary from compiled x86-64 code.
+--
+-- Mirrors the Rust implementation in src/iris-deploy/src/elf.rs.
+-- Produces a statically-linked, standalone Linux x86-64 executable.
+--
+-- ELF64 file layout:
+--   [64 bytes] ELF header
+--   [56 bytes] Program header (single PT_LOAD segment)
+--   [N bytes]  Startup stub
+--   [M bytes]  Compiled machine code
+--
+-- The startup stub:
+--   - Reads argc/argv from the Linux process entry stack
+--   - Parses integer arguments via inline atoi
+--   - Calls the compiled computation function
+--   - Converts i64 result to decimal ASCII + newline
+--   - Writes to stdout via sys_write(1, ...)
+--   - Exits via sys_exit_group(0)
+
+-- =========================================================================
+-- Little-endian encoding helpers
+-- =========================================================================
+
+-- Emit a 32-bit value as 4 bytes (little-endian)
+let le32 v : Int -> Bytes [cost: Const(4)] =
+  let b0 = bitand v 255 in
+  let b1 = bitand (shr v 8) 255 in
+  let b2 = bitand (shr v 16) 255 in
+  let b3 = bitand (shr v 24) 255 in
+  bytes_from_ints (b0, b1, b2, b3)
+
+-- Emit a 64-bit value as 8 bytes (little-endian)
+let le64 v : Int -> Bytes [cost: Const(8)] =
+  let b0 = bitand v 255 in
+  let n1 = shr v 8 in
+  let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in
+  let b2 = bitand n2 255 in
+  let n3 = shr n2 8 in
+  let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in
+  let b4 = bitand n4 255 in
+  let n5 = shr n4 8 in
+  let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in
+  let b6 = bitand n6 255 in
+  let n7 = shr n6 8 in
+  let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- =========================================================================
+-- Constants
+-- =========================================================================
+
+let elf_vaddr_base : Int [cost: Const(1)] = 4194304
+
+let elf_header_size : Int [cost: Const(1)] = 64
+
+let elf_phdr_size : Int [cost: Const(1)] = 56
+
+let elf_header_total : Int [cost: Const(1)] = elf_header_size + elf_phdr_size
+
+-- =========================================================================
+-- ELF header (64 bytes, fixed for all programs)
+-- =========================================================================
+
+-- Build the 64-byte ELF64 header.
+-- Entry point is always VADDR_BASE + 120 = 0x400078.
+let elf_header_bytes : Bytes [cost: Const(1)] =
+  bytes_from_ints (
+    -- e_ident: magic + class + data + version + OS/ABI + padding (16 bytes)
+    0x7f, 0x45, 0x4c, 0x46,        -- magic: 7f E L F
+    2, 1, 1, 0,                     -- ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_NONE
+    0, 0, 0, 0, 0, 0, 0, 0,        -- padding
+    -- e_type = ET_EXEC (2 LE16)
+    2, 0,
+    -- e_machine = EM_X86_64 (0x3E LE16)
+    0x3e, 0,
+    -- e_version = 1 (LE32)
+    1, 0, 0, 0,
+    -- e_entry = 0x400078 (LE64)
+    0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+    -- e_phoff = 64 (LE64)
+    0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    -- e_shoff = 0 (LE64)
+    0, 0, 0, 0, 0, 0, 0, 0,
+    -- e_flags = 0 (LE32)
+    0, 0, 0, 0,
+    -- e_ehsize = 64 (LE16)
+    0x40, 0,
+    -- e_phentsize = 56 (LE16)
+    0x38, 0,
+    -- e_phnum = 1 (LE16)
+    1, 0,
+    -- e_shentsize, e_shnum, e_shstrndx = 0 (3x LE16)
+    0, 0, 0, 0, 0, 0
+  )
+
+-- =========================================================================
+-- Program header (56 bytes, parameterised by file/mem size)
+-- =========================================================================
+
+-- Build the 56-byte program header for a single PT_LOAD segment.
+-- p_filesz and p_memsz vary per binary.
+let program_header_bytes file_size mem_size : Int -> Int -> Bytes [cost: Const(8)] =
+  let pt_load = le32 1 in
+  let pf_rx = le32 5 in
+  let p_offset = le64 0 in
+  let p_vaddr = le64 elf_vaddr_base in
+  let p_paddr = le64 elf_vaddr_base in
+  let fixed_part = bytes_concat pt_load (bytes_concat pf_rx (bytes_concat p_offset (bytes_concat p_vaddr p_paddr))) in
+  bytes_concat fixed_part (bytes_concat (le64 file_size) (bytes_concat (le64 mem_size) (le64 4096)))
+
+-- =========================================================================
+-- Inline atoi: convert null-terminated decimal string to i64
+-- =========================================================================
+
+-- Inline atoi (58 bytes): reads digits from [rdi], handles leading '-'.
+-- Input: rdi = pointer to string.  Output: rax = parsed integer.
+let emit_inline_atoi : Bytes [cost: Const(1)] =
+  bytes_from_ints (
+    0x48, 0x31, 0xc0,                          -- xor rax, rax
+    0x4d, 0x31, 0xd2,                          -- xor r10, r10
+    0x0f, 0xb6, 0x0f,                          -- movzx ecx, byte [rdi]
+    0x80, 0xf9, 0x2d,                          -- cmp cl, '-'
+    0x75, 0x0a,                                -- jne +10
+    0x49, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00, -- mov r10, 1
+    0x48, 0xff, 0xc7,                          -- inc rdi
+    -- digit loop:
+    0x0f, 0xb6, 0x0f,                          -- movzx ecx, byte [rdi]
+    0x80, 0xe9, 0x30,                          -- sub cl, '0'
+    0x80, 0xf9, 0x09,                          -- cmp cl, 9
+    0x77, 0x13,                                -- ja +19 (done)
+    0x48, 0x8d, 0x04, 0x80,                    -- lea rax, [rax+rax*4]
+    0x48, 0xd1, 0xe0,                          -- shl rax, 1
+    0x48, 0x0f, 0xb6, 0xc9,                    -- movzx rcx, cl
+    0x48, 0x01, 0xc8,                          -- add rax, rcx
+    0x48, 0xff, 0xc7,                          -- inc rdi
+    0xeb, 0xe2,                                -- jmp -30 (loop)
+    -- done:
+    0x4d, 0x85, 0xd2,                          -- test r10, r10
+    0x74, 0x03,                                -- jz +3
+    0x48, 0xf7, 0xd8                           -- neg rax
+  )
+
+-- =========================================================================
+-- i64-to-decimal print + exit
+-- =========================================================================
+
+-- Convert r12 to decimal, write to stdout, then sys_exit_group(0).
+-- Expects r12 = result value, rsp has 32 bytes of scratch space.
+let emit_print_result_and_exit : Bytes [cost: Const(1)] =
+  bytes_from_ints (
+    -- Handle sign
+    0x45, 0x31, 0xc0,                          -- xor r8d, r8d
+    0x4c, 0x89, 0xe0,                          -- mov rax, r12
+    0x48, 0x85, 0xc0,                          -- test rax, rax
+    0x79, 0x0a,                                -- jns +10
+    0x48, 0xf7, 0xd8,                          -- neg rax
+    0x49, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, -- mov r8, 1
+    -- Set up buffer: write newline at end
+    0x48, 0x8d, 0x4c, 0x24, 0x1f,             -- lea rcx, [rsp+31]
+    0xc6, 0x01, 0x0a,                          -- mov byte [rcx], 0x0A
+    0x48, 0xff, 0xc9,                          -- dec rcx
+    0x49, 0xc7, 0xc2, 0x0a, 0x00, 0x00, 0x00, -- mov r10, 10
+    -- Digit extraction loop
+    0x48, 0x31, 0xd2,                          -- xor rdx, rdx
+    0x49, 0xf7, 0xf2,                          -- div r10
+    0x80, 0xc2, 0x30,                          -- add dl, '0'
+    0x88, 0x11,                                -- mov [rcx], dl
+    0x48, 0xff, 0xc9,                          -- dec rcx
+    0x48, 0x85, 0xc0,                          -- test rax, rax
+    0x75, 0xed,                                -- jnz -19 (digit loop)
+    -- Prepend minus if negative
+    0x4d, 0x85, 0xc0,                          -- test r8, r8
+    0x74, 0x06,                                -- jz +6
+    0xc6, 0x01, 0x2d,                          -- mov byte [rcx], '-'
+    0x48, 0xff, 0xc9,                          -- dec rcx
+    -- sys_write(1, string, length)
+    0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, -- mov rdi, 1
+    0x48, 0x8d, 0x71, 0x01,                    -- lea rsi, [rcx+1]
+    0x48, 0x8d, 0x54, 0x24, 0x20,             -- lea rdx, [rsp+32]
+    0x48, 0x29, 0xf2,                          -- sub rdx, rsi
+    0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, -- mov rax, 1
+    0x0f, 0x05,                                -- syscall
+    -- sys_exit_group(0)
+    0x48, 0xc7, 0xc0, 0xe7, 0x00, 0x00, 0x00, -- mov rax, 231
+    0x31, 0xff,                                -- xor edi, edi
+    0x0f, 0x05                                 -- syscall
+  )
+
+-- =========================================================================
+-- Per-argument parser builder
+-- =========================================================================
+
+-- Build the arg-parse block for argument i (0-based).
+-- Checks argc >= i+2, loads argv[i+1], calls inline atoi, stores result.
+-- Each block: 4 + 2 + 4 + 58 + 5 = 73 bytes.  jl skips 67 bytes.
+let build_arg_parser_0 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x02,  -- cmp r12, 2
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x10   -- mov rdi, [rbp+16]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x00  -- mov [rsp+0], rax
+  )))
+
+let build_arg_parser_1 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x03,  -- cmp r12, 3
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x18   -- mov rdi, [rbp+24]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x08  -- mov [rsp+8], rax
+  )))
+
+let build_arg_parser_2 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x04,  -- cmp r12, 4
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x20   -- mov rdi, [rbp+32]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x10  -- mov [rsp+16], rax
+  )))
+
+let build_arg_parser_3 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x05,  -- cmp r12, 5
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x28   -- mov rdi, [rbp+40]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x18  -- mov [rsp+24], rax
+  )))
+
+let build_arg_parser_4 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x06,  -- cmp r12, 6
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x30   -- mov rdi, [rbp+48]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x20  -- mov [rsp+32], rax
+  )))
+
+let build_arg_parser_5 : Bytes [cost: Const(1)] =
+  bytes_concat (bytes_from_ints (
+    0x49, 0x83, 0xfc, 0x07,  -- cmp r12, 7
+    0x7c, 0x43,              -- jl +67
+    0x48, 0x8b, 0x7d, 0x38   -- mov rdi, [rbp+56]
+  )) (bytes_concat emit_inline_atoi (bytes_from_ints (
+    0x48, 0x89, 0x44, 0x24, 0x28  -- mov [rsp+40], rax
+  )))
+
+-- Concatenate arg parsers for 0..arg_count-1
+let build_arg_parsers arg_count : Int -> Bytes [cost: Const(6)] =
+  let b = bytes_from_ints () in
+  let b0 = if arg_count >= 1 then bytes_concat b build_arg_parser_0 else b in
+  let b1 = if arg_count >= 2 then bytes_concat b0 build_arg_parser_1 else b0 in
+  let b2 = if arg_count >= 3 then bytes_concat b1 build_arg_parser_2 else b1 in
+  let b3 = if arg_count >= 4 then bytes_concat b2 build_arg_parser_3 else b2 in
+  let b4 = if arg_count >= 5 then bytes_concat b3 build_arg_parser_4 else b3 in
+  if arg_count >= 6 then bytes_concat b4 build_arg_parser_5 else b4
+
+-- =========================================================================
+-- Register loading (move parsed args from stack to System V registers)
+-- =========================================================================
+
+let build_reg_load arg_count : Int -> Bytes [cost: Const(6)] =
+  let b = bytes_from_ints () in
+  let b0 = if arg_count >= 1 then bytes_concat b (bytes_from_ints (0x48, 0x8b, 0x3c, 0x24)) else b in
+  let b1 = if arg_count >= 2 then bytes_concat b0 (bytes_from_ints (0x48, 0x8b, 0x74, 0x24, 0x08)) else b0 in
+  let b2 = if arg_count >= 3 then bytes_concat b1 (bytes_from_ints (0x48, 0x8b, 0x54, 0x24, 0x10)) else b1 in
+  let b3 = if arg_count >= 4 then bytes_concat b2 (bytes_from_ints (0x48, 0x8b, 0x4c, 0x24, 0x18)) else b2 in
+  let b4 = if arg_count >= 5 then bytes_concat b3 (bytes_from_ints (0x4c, 0x8b, 0x44, 0x24, 0x20)) else b3 in
+  if arg_count >= 6 then bytes_concat b4 (bytes_from_ints (0x4c, 0x8b, 0x4c, 0x24, 0x28)) else b4
+
+-- =========================================================================
+-- Startup stub assembly
+-- =========================================================================
+
+-- Build the complete startup stub for the given arg_count.
+-- The stub parses args, calls the compiled function (located immediately
+-- after the stub in the binary), prints the result, and exits.
+let build_startup_stub arg_count : Int -> Bytes [cost: Const(10)] =
+  -- Stack setup: save rbp, load argc, reserve 48 bytes, zero slots
+  let setup = bytes_from_ints (
+    0x48, 0x89, 0xe5,             -- mov rbp, rsp
+    0x4c, 0x8b, 0x65, 0x00,       -- mov r12, [rbp] (argc)
+    0x48, 0x83, 0xec, 0x30,       -- sub rsp, 48
+    0x31, 0xc0,                   -- xor eax, eax
+    0x48, 0x89, 0x44, 0x24, 0x00, -- mov [rsp+0], rax
+    0x48, 0x89, 0x44, 0x24, 0x08, -- mov [rsp+8], rax
+    0x48, 0x89, 0x44, 0x24, 0x10, -- mov [rsp+16], rax
+    0x48, 0x89, 0x44, 0x24, 0x18, -- mov [rsp+24], rax
+    0x48, 0x89, 0x44, 0x24, 0x20, -- mov [rsp+32], rax
+    0x48, 0x89, 0x44, 0x24, 0x28  -- mov [rsp+40], rax
+  ) in
+  -- Parse arguments
+  let arg_code = build_arg_parsers arg_count in
+  -- Load parsed args into System V registers
+  let reg_load = build_reg_load arg_count in
+  -- Stack alignment + call setup
+  let align = bytes_from_ints (
+    0x48, 0x83, 0xe4, 0xf0,       -- and rsp, -16
+    0x48, 0x83, 0xec, 0x08        -- sub rsp, 8
+  ) in
+  -- Post-call: save result, allocate scratch, print, exit
+  let post_call = bytes_concat
+    (bytes_from_ints (
+      0x49, 0x89, 0xc4,            -- mov r12, rax
+      0x48, 0x83, 0xec, 0x20       -- sub rsp, 32
+    ))
+    emit_print_result_and_exit in
+  -- Compute call rel32: bytes from after call instruction to start of compiled code
+  let post_len = bytes_len post_call in
+  let call_rel_b0 = bitand post_len 255 in
+  let call_rel_b1 = bitand (shr post_len 8) 255 in
+  let call_rel_b2 = bitand (shr post_len 16) 255 in
+  let call_rel_b3 = bitand (shr post_len 24) 255 in
+  let call_instr = bytes_from_ints (0xe8, call_rel_b0, call_rel_b1, call_rel_b2, call_rel_b3) in
+  -- Assemble: setup + arg_parse + reg_load + align + call + post_call
+  bytes_concat setup (bytes_concat arg_code (bytes_concat reg_load (bytes_concat align (bytes_concat call_instr post_call))))
+
+-- =========================================================================
+-- Main entry point: wrap machine code in a complete ELF64 binary
+-- =========================================================================
+
+-- Assemble a complete ELF64 executable from compiled x86-64 machine code.
+-- Returns: Bytes containing the entire binary (header + phdr + stub + code).
+let elf_wrap machine_code arg_count : Bytes -> Int -> Bytes [cost: Const(12)] =
+  let code_size = bytes_len machine_code in
+  -- Build startup stub
+  let stub = build_startup_stub arg_count in
+  let stub_size = bytes_len stub in
+  -- Compute sizes
+  let file_size = elf_header_total + stub_size + code_size in
+  let remainder = file_size % 4096 in
+  let mem_size = if remainder == 0 then file_size else file_size + 4096 - remainder in
+  -- Assemble ELF header (64 bytes, fixed)
+  let header = elf_header_bytes in
+  -- Assemble program header (56 bytes, parameterised)
+  let phdr = program_header_bytes file_size mem_size in
+  -- Concatenate: header(64) + phdr(56) + stub(N) + code(M)
+  bytes_concat header (bytes_concat phdr (bytes_concat stub machine_code))

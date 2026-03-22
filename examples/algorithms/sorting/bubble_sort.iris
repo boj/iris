@@ -1,0 +1,35 @@
+-- Bubble Sort
+-- Repeatedly swap adjacent elements until the list is sorted.
+-- O(n^2) time, stable sort.
+
+-- Single pass: bubble the largest unsorted element to position `limit`.
+let rec bubble_pass xs i limit : Tuple -> Int -> Int -> Tuple [cost: Linear(limit)] =
+  if i >= limit then xs
+  else
+    let a = list_nth xs i in
+    let b = list_nth xs (i + 1) in
+    if a > b then
+      -- swap: rebuild list with b before a
+      let prefix = list_take xs i in
+      let suffix = list_drop xs (i + 2) in
+      let swapped = list_concat (list_concat (list_append prefix b) (list_append () a)) suffix in
+      bubble_pass swapped (i + 1) limit
+    else
+      bubble_pass xs (i + 1) limit
+
+-- Full bubble sort: run n-1 passes, shrinking the unsorted region each time.
+let rec bubble_sort_aux xs n pass : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  if pass >= n - 1 then xs
+  else
+    let sorted_pass = bubble_pass xs 0 (n - 1 - pass) in
+    bubble_sort_aux sorted_pass n (pass + 1)
+
+let bubble_sort xs : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len xs in
+  if n <= 1 then xs
+  else bubble_sort_aux xs n 0
+
+-- Test: sort a small list
+let test_bubble_sort x : Int -> Tuple =
+  let xs = (5, 3, 8, 1, 9, 2, 7, 4, 6) in
+  bubble_sort xs

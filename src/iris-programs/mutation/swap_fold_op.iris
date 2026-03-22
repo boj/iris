@@ -1,0 +1,7 @@
+-- Swap a fold's step operation and base value in coordination
+-- opcode_base_pairs: (add,0) (mul,1) (max,-999999) (min,999999) (sub,0)
+let swap_fold_op program fold_id step_id base_id new_opcode new_base =
+  let p1_t = graph_set_prim_op program step_id new_opcode in
+  let p1 = p1_t.0 in
+  let p2_t = graph_set_lit_value p1 base_id 0 new_base in
+  p2_t.0

@@ -1,0 +1,29 @@
+-- Linear Search
+-- Scan each element sequentially until found.
+-- O(n) time. Works on unsorted data.
+
+let rec linear_search_aux xs target i : Tuple -> Int -> Int -> Int [cost: Linear(xs)] =
+  let n = list_len xs in
+  if i >= n then -1
+  else if list_nth xs i == target then i
+  else linear_search_aux xs target (i + 1)
+
+let linear_search xs target : Tuple -> Int -> Int [cost: Linear(xs)] =
+  linear_search_aux xs target 0
+
+-- Count occurrences of a value in a list.
+let count_occurrences xs target : Tuple -> Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> if x == target then acc + 1 else acc) xs
+
+-- Find all indices where target appears.
+let find_all_indices xs target : Tuple -> Int -> Tuple [cost: Linear(xs)] =
+  let indices = list_range 0 (list_len xs) in
+  filter (\i -> list_nth xs i == target) indices
+
+-- Test
+let test_linear_search x : Int -> Tuple =
+  let xs = (4, 2, 7, 1, 9, 2, 5, 2) in
+  let idx = linear_search xs 9 in
+  let count = count_occurrences xs 2 in
+  let all_twos = find_all_indices xs 2 in
+  (idx, count, all_twos)

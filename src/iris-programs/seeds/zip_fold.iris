@@ -1,0 +1,91 @@
+-- Seed generator: construct a zip+fold program
+--
+-- Builds a SemanticGraph: fold(base, step, map(zip(input_a, input_b), pair_op))
+-- Close to a dot product skeleton. Evolution can mutate the opcodes to
+-- discover zip-map-fold compositions like dot product: fold(0, add, map(zip(a,b), mul))
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)              base case
+--     port 1 -> Prim(add)           fold step
+--     port 2 -> Prim(map)           collection override
+--                 port 0 -> Prim(zip)  zipped inputs
+--                 port 1 -> Prim(mul)  pair operation
+--
+-- All higher-order ops (map, zip, filter) are Prim nodes with specific opcodes.
+-- Opcodes: add=0x00, mul=0x02, map=48, zip=50
+
+-- Step 1: add the zip node (Prim with opcode 50)
+let add_zip program : Int -> Int [cost: Const(6)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let _spo0 = graph_set_prim_op p nid 50 in
+  let p = _spo0.0 in
+  let nid = _spo0.1 in
+  (p, nid)
+
+-- Step 2: add the pair operation for the map stage
+let add_pair_op program opcode : Int -> Int -> Int [cost: Const(4)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let _spo1 = graph_set_prim_op p nid opcode in
+  let p = _spo1.0 in
+  let nid = _spo1.1 in
+  (p, nid)
+
+-- Step 3: add the map node (Prim with opcode 48) and wire to zip + pair_op
+let add_map_over_zip program zip_id pair_op_id : Int -> Int -> Int -> Int [cost: Const(8)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let map_id = r.1 in
+  let _spo2 = graph_set_prim_op p map_id 48 in
+  let p = _spo2.0 in
+  let map_id = _spo2.1 in
+  let p2 = graph_connect p map_id zip_id 0 in
+  graph_connect p2 map_id pair_op_id 1
+
+-- Step 4: add the fold step function
+let add_fold_step program opcode : Int -> Int -> Int [cost: Const(4)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let _spo3 = graph_set_prim_op p nid opcode in
+  let p = _spo3.0 in
+  let nid = _spo3.1 in
+  (p, nid)
+
+-- Complete zip+fold seed: wire zip -> map -> fold
+let generate_zip_fold program : Int -> Int [cost: Const(20)] =
+  -- Add zip node (Prim, opcode 50)
+  let z = graph_add_node_rt program 0 in
+  let p1 = z.0 in
+  let zip_id = z.1 in
+  let _spo4 = graph_set_prim_op p1 zip_id 50 in
+  let p1 = _spo4.0 in
+  let zip_id = _spo4.1 in
+  -- Add pair operation (mul, opcode 2)
+  let m = graph_add_node_rt p1 0 in
+  let p2 = m.0 in
+  let mul_id = m.1 in
+  let _spo5 = graph_set_prim_op p2 mul_id 2 in
+  let p2 = _spo5.0 in
+  let mul_id = _spo5.1 in
+  -- Add map node (Prim, opcode 48): map(zip_output, mul)
+  let mp = graph_add_node_rt p2 0 in
+  let p3 = mp.0 in
+  let map_id = mp.1 in
+  let _spo6 = graph_set_prim_op p3 map_id 48 in
+  let p3 = _spo6.0 in
+  let map_id = _spo6.1 in
+  let p4 = graph_connect p3 map_id zip_id 0 in
+  let p5 = graph_connect p4 map_id mul_id 1 in
+  -- Add fold step (add, opcode 0)
+  let fs = graph_add_node_rt p5 0 in
+  let p6 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold: root -> step (port 1), map (port 2)
+  let root = graph_get_root p6 in
+  let p7 = graph_connect p6 root add_id 1 in
+  graph_connect p7 root map_id 2

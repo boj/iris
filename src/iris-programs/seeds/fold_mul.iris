@@ -1,0 +1,18 @@
+-- Seed generator: construct a fold+mul program (product over list)
+--
+-- Builds a SemanticGraph: fold(1, mul, input) = product(input)
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(1)        base case (identity for multiplication)
+--     port 1 -> Prim(mul)     step function (accumulator * element)
+--
+-- Uses self_graph to obtain a base program, adds a Prim(mul) node,
+-- then wires it as the fold step via graph_connect.
+-- Opcode: mul = 0x02
+let generate_fold_mul program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 2 in
+  let prog = step.0 in
+  let mul_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root mul_id 1

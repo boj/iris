@@ -1,0 +1,7 @@
+-- Evaluate a Lit node (return its value)
+-- Kind 5 indicates a literal node
+let eval_lit program =
+  let root = graph_get_root program in
+  let kind = graph_get_kind program root in
+  if kind == 5 then graph_eval program ()
+  else -1

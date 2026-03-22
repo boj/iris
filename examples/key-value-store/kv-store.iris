@@ -1,0 +1,46 @@
+-- In-Memory Key-Value Store
+-- Uses State (BTreeMap) for persistent key-value storage.
+-- Supports get, set, delete, keys, has, and size operations.
+
+-- Create a new empty store.
+let kv_new x : Int -> State [cost: Const(1)] =
+  state_empty
+
+-- Set a key-value pair in the store.
+-- Returns the updated store.
+let kv_set store key v : State -> String -> Int -> State [cost: Const(1)] =
+  map_insert store key v
+
+-- Get a value by key.
+-- Returns the value, or Unit if the key does not exist.
+let kv_get store key : State -> String -> Value [cost: Const(1)] =
+  map_get store key
+
+-- Delete a key from the store.
+-- Returns the updated store.
+let kv_delete store key : State -> String -> State [cost: Const(1)] =
+  map_remove store key
+
+-- Check if a key exists by checking if size changes after removing it.
+-- Returns 1 if the key exists, 0 otherwise.
+let kv_has store key : State -> String -> Int [cost: Const(2)] =
+  let before = map_size store in
+  let after = map_size (map_remove store key) in
+  if before > after then 1 else 0
+
+-- Get all keys in the store as a list.
+let kv_keys store : State -> Tuple [cost: Const(1)] =
+  map_keys store
+
+-- Get all values in the store as a list.
+let kv_values store : State -> Tuple [cost: Const(1)] =
+  map_values store
+
+-- Get the number of entries in the store.
+let kv_size store : State -> Int [cost: Const(1)] =
+  map_size store
+
+-- Merge two stores. Second store's values win on conflict.
+let kv_merge store1 store2 : State -> State -> State [cost: Unknown] =
+  let ks = map_keys store2 in
+  fold store1 (\acc k -> map_insert acc k (map_get store2 k)) ks

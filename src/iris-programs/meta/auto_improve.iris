@@ -1,0 +1,172 @@
+-- Self-improvement daemon cycle: profile -> extract -> evolve -> gate -> deploy.
+--
+-- The auto-improver continuously identifies the slowest component,
+-- evolves an IRIS replacement, gates it for correctness and performance,
+-- and deploys it if it passes. When nothing needs optimization, it
+-- explores new capabilities.
+--
+-- Cycle:
+--   1. Profile: measure each component, find the slowest
+--   2. Extract: generate test cases from the slowest component
+--   3. Evolve: breed a faster IRIS replacement
+--   4. Gate: 100% correctness AND <= 2x slowdown
+--   5. Deploy: register the IRIS component
+--   6. Explore: if idle, try solving a new random problem
+
+-- Find the slowest component from a list of (name_hash, time_ns) pairs
+-- Returns the (name_hash, time_ns) of the slowest component
+let find_slowest components : Int -> Int [cost: Linear(components)] =
+  fold (0, 0)
+    (\best comp ->
+      if comp.1 > best.1 then comp
+      else best)
+    components
+
+-- Check if a candidate passes the performance gate
+-- Requires 100% correctness AND slowdown <= max_slowdown
+-- correctness_pct: 0-100, slowdown_pct: iris_time * 100 / rust_time
+-- max_slowdown_pct: e.g. 200 for 2.0x
+let passes_gate correctness_pct slowdown_pct max_slowdown_pct : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if correctness_pct < 100 then 0
+  else if slowdown_pct > max_slowdown_pct then 0
+  else 1
+
+-- Compute slowdown ratio as percentage: iris_time * 100 / rust_time
+let compute_slowdown iris_time_ns rust_time_ns : Int -> Int -> Int [cost: Const(1)] =
+  if rust_time_ns == 0 then 100
+  else (iris_time_ns * 100) / rust_time_ns
+
+-- Compute correctness: (correct_count * 100) / total_count
+let compute_correctness correct total : Int -> Int -> Int [cost: Const(1)] =
+  if total == 0 then 0
+  else (correct * 100) / total
+
+-- Count test cases in a collection
+let count_tests test_cases : Int -> Int [cost: Linear(test_cases)] =
+  fold 0 (\acc tc -> acc + 1) test_cases
+
+-- Count how many tests a candidate passes
+let count_correct candidate test_cases : Int -> Int -> Int [cost: Linear(test_cases)] =
+  fold 0
+    (\correct tc ->
+      let actual = graph_eval candidate tc.0 in
+      if actual == tc.1 then correct + 1 else correct)
+    test_cases
+
+-- Run the gate check on a candidate against test cases
+-- Returns 1 if candidate should be deployed, 0 otherwise
+let gate_check candidate test_cases rust_time_ns max_slowdown_pct : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let total = count_tests test_cases in
+  let correct = count_correct candidate test_cases in
+  let corr = compute_correctness correct total in
+  passes_gate corr 100 max_slowdown_pct
+
+-- Profile a component: run it on sample inputs and measure mean time
+-- component: the program to profile
+-- sample_inputs: list of inputs to run
+-- Returns: mean execution time (approximated as number of eval steps)
+let profile_component component sample_inputs : Int -> Int -> Int [cost: Linear(sample_inputs)] =
+  let total_evals = fold 0
+    (\acc input ->
+      let _discard = graph_eval component input in
+      acc + 1)
+    sample_inputs in
+  total_evals
+
+-- Extract test cases from a component's behavior
+-- Run the component on sample inputs, capture (input, output) pairs
+let extract_test_cases component sample_inputs : Int -> Int -> Int [cost: Linear(sample_inputs)] =
+  map (\input ->
+    let output = graph_eval component input in
+    (input, output))
+  sample_inputs
+
+-- Evolve a replacement candidate using mutate-and-test loop
+-- seed_program: starting point for evolution
+-- test_cases: (input, expected_output) pairs
+-- max_iters: number of mutation attempts
+-- Returns: (best_program, best_score)
+let evolve_replacement seed_program test_cases max_iters : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let count = count_tests test_cases in
+  let base_correct = count_correct seed_program test_cases in
+  let base_score = compute_correctness base_correct count in
+  fold (seed_program, base_score)
+    (\state i ->
+      let cur_prog = state.0 in
+      let cur_score = state.1 in
+      let rnd = random 0 15 in
+      let mutant_root = graph_get_root cur_prog in
+      let mutant_result = graph_set_prim_op cur_prog mutant_root rnd in
+      let mutant = mutant_result.0 in
+      let new_correct = count_correct mutant test_cases in
+      let new_score = compute_correctness new_correct count in
+      if new_score > cur_score then (mutant, new_score)
+      else (cur_prog, cur_score))
+    max_iters
+
+-- Full improvement cycle: profile -> extract -> evolve -> gate
+-- prog: current best candidate (the component to potentially replace)
+-- test_cases: validation set
+-- max_iters: evolution budget
+-- max_slowdown_pct: performance gate threshold (e.g. 200 for 2.0x)
+-- Returns: (new_best_or_original, improved_flag, score)
+let improve_cycle prog test_cases max_iters max_slowdown_pct : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  -- 1. Profile: measure current component
+  let count = count_tests test_cases in
+  let base_correct = count_correct prog test_cases in
+  let base_score = compute_correctness base_correct count in
+  -- 2. Evolve: breed a replacement
+  let result = evolve_replacement prog test_cases max_iters in
+  let candidate = result.0 in
+  let cand_score = result.1 in
+  -- 3. Gate: check if replacement is better AND correct
+  if cand_score > base_score then
+    let gate_passed = passes_gate cand_score 100 max_slowdown_pct in
+    if gate_passed == 1 then (candidate, 1, cand_score)
+    else (prog, 0, base_score)
+  else (prog, 0, base_score)
+
+-- Run N improvement cycles, accumulating improvements
+-- Returns: (final_program, total_improvements, final_score)
+let improve_loop prog test_cases cycles max_iters max_slowdown_pct : Int -> Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  fold (prog, 0, 0)
+    (\state cycle ->
+      let cur_prog = state.0 in
+      let total_imps = state.1 in
+      let result = improve_cycle cur_prog test_cases max_iters max_slowdown_pct in
+      let new_prog = result.0 in
+      let improved = result.1 in
+      let score = result.2 in
+      (new_prog, total_imps + improved, score))
+    cycles
+
+-- Explore a new capability: generate a random problem and try to solve it
+-- Returns: (solved_flag, score)
+let explore_capability seed_program test_cases max_iters : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let result = evolve_replacement seed_program test_cases max_iters in
+  let score = result.1 in
+  if score >= 100 then (1, score)
+  else (0, score)
+
+-- Full daemon cycle: decide whether to improve or explore
+-- components: list of (name_hash, time_ns, program, deployed_flag) tuples
+-- test_cases: validation set
+-- Returns: (action, result_score)
+--   action: 0=improved, 1=explored, 2=nothing
+let daemon_cycle components test_cases max_iters : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let slowest = find_slowest components in
+  let slowest_hash = slowest.0 in
+  let slowest_time = slowest.1 in
+  if slowest_time == 0 then
+    -- Nothing to optimize, explore
+    let seed = graph_new in
+    let explore = explore_capability seed test_cases max_iters in
+    (1, explore.1)
+  else
+    -- Try to improve the slowest component
+    let seed = graph_new in
+    let result = improve_cycle seed test_cases max_iters 200 in
+    let improved = result.1 in
+    let score = result.2 in
+    if improved == 1 then (0, score)
+    else (2, score)

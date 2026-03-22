@@ -1,0 +1,31 @@
+-- Tower of Hanoi
+-- Move n disks from source peg to target peg using an auxiliary peg.
+-- Classic recursive algorithm: 2^n - 1 moves.
+--
+-- Returns a list of moves as (from, to) pairs encoded as (from * 10 + to).
+-- Pegs are numbered 1, 2, 3.
+
+let rec hanoi_aux n from_peg to_peg aux_peg : Int -> Int -> Int -> Int -> Tuple [cost: Unknown] =
+  if n <= 0 then ()
+  else if n == 1 then
+    (from_peg * 10 + to_peg,)
+  else
+    let moves1 = hanoi_aux (n - 1) from_peg aux_peg to_peg in
+    let move_biggest = (from_peg * 10 + to_peg,) in
+    let moves2 = hanoi_aux (n - 1) aux_peg to_peg from_peg in
+    list_concat (list_concat moves1 move_biggest) moves2
+
+-- Solve Tower of Hanoi for n disks (pegs 1 -> 3, aux = 2).
+let hanoi n : Int -> Tuple [cost: Unknown] =
+  hanoi_aux n 1 3 2
+
+-- Count number of moves (should be 2^n - 1).
+let hanoi_count n : Int -> Int [cost: Unknown] =
+  list_len (hanoi n)
+
+-- Test
+let test_hanoi x : Int -> Tuple =
+  let moves3 = hanoi 3 in
+  let count3 = hanoi_count 3 in   -- 7
+  let count4 = hanoi_count 4 in   -- 15
+  (moves3, count3, count4)

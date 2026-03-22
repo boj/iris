@@ -1,0 +1,51 @@
+-- Palindrome Checker
+-- Check if a sequence reads the same forwards and backwards.
+-- Works on both integer tuples and strings.
+
+-- Check if an integer tuple is a palindrome.
+let is_palindrome xs : Tuple -> Bool [cost: Linear(xs)] =
+  let n = list_len xs in
+  let half = n / 2 in
+  fold true (\result i ->
+    if result == false then false
+    else list_nth xs i == list_nth xs (n - 1 - i)
+  ) (list_range 0 half)
+
+-- Check if a string is a palindrome (by character codes).
+let is_palindrome_str s : String -> Bool [cost: Linear(s)] =
+  is_palindrome (str_chars s)
+
+-- Find the longest palindromic substring length.
+-- Brute force O(n^3): check all substrings.
+let longest_palindrome_len xs : Tuple -> Int [cost: Unknown] =
+  let n = list_len xs in
+  fold 0 (\best i ->
+    fold best (\best2 j ->
+      if j <= i then best2
+      else
+        let sub = list_take (list_drop xs i) (j - i) in
+        let len = j - i in
+        if len > best2 then
+          if is_palindrome sub then len else best2
+        else best2
+    ) (list_range 0 (n + 1))
+  ) (list_range 0 n)
+
+-- Check if a number is a palindrome (in decimal).
+-- Reverse the digits and compare.
+let rec digits_of n : Int -> Tuple [cost: Unknown] =
+  if n < 10 then (n,)
+  else list_append (digits_of (n / 10)) (n % 10)
+
+let is_palindrome_num n : Int -> Bool [cost: Unknown] =
+  let d = digits_of (if n < 0 then 0 - n else n) in
+  is_palindrome d
+
+-- Test
+let test_palindrome x : Int -> Tuple =
+  let p1 = is_palindrome (1, 2, 3, 2, 1) in
+  let p2 = is_palindrome (1, 2, 3, 4) in
+  let p3 = is_palindrome_num 12321 in
+  let p4 = is_palindrome_num 12345 in
+  let longest = longest_palindrome_len (1, 2, 3, 2, 1, 4) in
+  (p1, p2, p3, p4, longest)

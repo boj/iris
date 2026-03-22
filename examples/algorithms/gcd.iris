@@ -1,0 +1,4 @@
+-- Greatest common divisor via Euclid's algorithm
+let rec gcd a b : Int -> Int -> Int [cost: Unknown] =
+  if b == 0 then a
+  else gcd b (a % b)

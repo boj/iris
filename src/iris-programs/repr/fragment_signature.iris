@@ -1,0 +1,162 @@
+-- Fragment: the self-contained holographic unit
+--
+-- Mirrors the Rust fragment.rs (80 LOC) in iris-repr.
+--
+-- Fragment fields:
+--   id: FragmentId (32 bytes, BLAKE3 of content)
+--   graph: SemanticGraph
+--   boundary: Boundary (typed inputs and outputs)
+--   type_env: TypeEnv (complete, self-contained)
+--   imports: Vec<FragmentRef> (dependencies by hash)
+--   metadata: FragmentMeta (name, created_at, generation, lineage_hash)
+--   proof: Option<ProofReceipt>
+--   contracts: FragmentContracts (requires/ensures)
+--
+-- Boundary:
+--   inputs: Vec<(NodeId, TypeRef)>
+--   outputs: Vec<(NodeId, TypeRef)>
+--
+-- FragmentMeta:
+--   name: Option<String>
+--   created_at: u64 (Unix epoch seconds)
+--   generation: u64
+--   lineage_hash: u32
+--
+-- FragmentContracts:
+--   requires: Vec<LIAFormula>  -- preconditions over input vars
+--   ensures: Vec<LIAFormula>   -- postconditions (BoundVar(0xFFFF) = result)
+
+-- ============================================================
+-- Fragment structural signature (original fingerprinting)
+-- ============================================================
+
+-- Compute a structural signature (fingerprint) of a program.
+-- Combines root kind, node count, and root opcode (for Prim roots)
+-- into a consistent integer hash.
+-- For Prim roots: signature = (node_count * 31) XOR (opcode * 65537)
+-- For non-Prim roots: signature = root_kind * 997 + node_count * 31
+let fragment_signature program : Int -> Int [cost: Linear(program)] =
+  let root = graph_get_root program in
+  let root_kind = graph_get_kind program root in
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  if root_kind == 0 then
+    let opcode = graph_get_prim_op program root in
+    bitxor (node_count * 31) (opcode * 65537)
+  else
+    root_kind * 997 - (neg (node_count * 31))
+
+-- ============================================================
+-- Boundary representation
+-- ============================================================
+
+-- Count the total boundary ports (inputs + outputs).
+let boundary_port_count input_count output_count : Int -> Int -> Int [cost: Const(1)] =
+  input_count + output_count
+
+-- Validate a boundary: must have at least one output.
+let validate_boundary input_count output_count : Int -> Int -> Int [cost: Const(2)] =
+  let inputs_ok = if input_count >= 0 then 1 else 0 in
+  let outputs_ok = if output_count >= 1 then 1 else 0 in
+  inputs_ok * outputs_ok
+
+-- Estimate wire size of a Boundary section.
+-- input_count(4) + inputs * 16 + output_count(4) + outputs * 16
+let boundary_wire_size input_count output_count : Int -> Int -> Int [cost: Const(2)] =
+  4 + input_count * 16 + 4 + output_count * 16
+
+-- ============================================================
+-- FragmentMeta representation
+-- ============================================================
+
+-- Validate fragment metadata.
+-- created_at: must be positive
+-- generation: must be non-negative
+let validate_meta created_at generation : Int -> Int -> Int [cost: Const(2)] =
+  let time_ok = if created_at > 0 then 1 else 0 in
+  let gen_ok = if generation >= 0 then 1 else 0 in
+  time_ok * gen_ok
+
+-- Estimate wire size of FragmentMeta.
+-- has_name(1) + optional name(4 + len) + created_at(8) + generation(8) + lineage_hash(4)
+let meta_wire_size has_name name_len : Int -> Int -> Int [cost: Const(2)] =
+  let name_bytes = if has_name == 1 then 1 + 4 + name_len else 1 in
+  name_bytes + 8 + 8 + 4
+
+-- ============================================================
+-- FragmentContracts
+-- ============================================================
+
+-- Validate fragment contracts.
+-- requires_count: number of precondition formulas
+-- ensures_count: number of postcondition formulas
+let validate_contracts requires_count ensures_count : Int -> Int -> Int [cost: Const(2)] =
+  let req_ok = if requires_count >= 0 then 1 else 0 in
+  let ens_ok = if ensures_count >= 0 then 1 else 0 in
+  req_ok * ens_ok
+
+-- ============================================================
+-- Fragment validation
+-- ============================================================
+
+-- Validate a complete fragment.
+-- Checks: boundary valid, metadata valid, type_env non-empty.
+let validate_fragment input_count output_count created_at generation type_count : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let boundary_ok = validate_boundary input_count output_count in
+  let meta_ok = validate_meta created_at generation in
+  let types_ok = if type_count >= 1 then 1 else 0 in
+  boundary_ok * meta_ok * types_ok
+
+-- ============================================================
+-- Fragment ancestry
+-- ============================================================
+
+-- Compute lineage hash: combine parent hashes for ancestry tracking.
+-- parent1_hash: first parent's lineage_hash
+-- parent2_hash: second parent's lineage_hash (0 for mutation-only)
+-- generation: current generation number
+let compute_lineage_hash parent1_hash parent2_hash generation : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let combined = parent1_hash * 31 + parent2_hash in
+  let with_gen = combined * 65537 + generation in
+  -- Truncate to u32 range
+  let masked = if with_gen < 0 then 0 - with_gen else with_gen in
+  masked % 4294967296
+
+-- ============================================================
+-- Import validation
+-- ============================================================
+
+-- Check if an import list is valid (no duplicates in sorted order).
+-- import_count: number of imports
+-- Returns: 1 (basic validation; full duplicate check needs iteration).
+let validate_imports import_count : Int -> Int [cost: Const(2)] =
+  if import_count >= 0 then
+    if import_count <= 1000 then 1 else 0
+  else 0
+
+-- ============================================================
+-- Complete fragment size estimation
+-- ============================================================
+
+-- Estimate the total wire size of a complete fragment.
+-- node_count: number of nodes in the graph
+-- edge_count: number of edges
+-- type_count: number of type definitions
+-- input_count: boundary input ports
+-- output_count: boundary output ports
+-- import_count: number of imports
+-- has_proof: 1 if proof receipt present
+-- has_name: 1 if metadata has a name
+-- name_len: length of name string
+let fragment_total_wire_size node_count edge_count type_count input_count output_count import_count has_proof has_name name_len : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let header = 45 in
+  let types_section = 4 + type_count * 12 in
+  let nodes_section = 4 + node_count * 40 in
+  let edges_section = 4 + edge_count * 18 in
+  let boundary = boundary_wire_size input_count output_count in
+  let imports_section = 2 + import_count * 32 in
+  let hash_root_cost = 32 + 8 + 2 in
+  let graph_types = 4 + type_count * 12 in
+  let proof_section = if has_proof == 1 then 330 else 0 in
+  let metadata = meta_wire_size has_name name_len in
+  header + types_section + nodes_section + edges_section + boundary + imports_section + hash_root_cost + graph_types + proof_section + metadata

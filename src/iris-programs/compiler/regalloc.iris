@@ -1,0 +1,120 @@
+-- Register allocation: assign virtual registers to physical ZMM registers (Compiler Pass 9)
+--
+-- Linear scan algorithm over zmm0-7 (8 compute registers).
+-- Spill to zmm8-15 first (8 spill registers), then to arena memory.
+--
+-- Since IRIS graphs don't have explicit virtual registers, this pass
+-- annotates each node with its physical register assignment using the
+-- cost field as a proxy (via graph_set_cost).
+--
+-- Physical register layout:
+--   zmm0-7    -- compute registers (8)
+--   zmm8-15   -- spill registers (8)
+--   zmm16-30  -- reserved
+--   zmm31     -- zero register (PHYS_ZERO)
+--
+-- Algorithm:
+--   1. Enumerate nodes in order (BFS from root)
+--   2. Assign physical registers round-robin for compute regs (0-7)
+--   3. When compute regs exhaust, spill to zmm8-15
+--   4. When spill regs exhaust, insert VSPILL/VRELOAD ops
+--
+-- The output graph has register assignments in cost annotations and
+-- may have additional VSPILL/VRELOAD Prim nodes inserted.
+
+-- Constants
+let compute_reg_count : Int [cost: Const(1)] = 8
+let spill_reg_count : Int [cost: Const(1)] = 8
+let total_alloc_regs : Int [cost: Const(1)] = 16
+let phys_zero : Int [cost: Const(1)] = 31
+
+-- Check if a virtual register is the unused sentinel
+let is_unused_vreg vreg : Int -> Int [cost: Const(1)] =
+  if vreg == 65535 then 1 else 0
+
+-- Assign physical register for node index (round-robin)
+-- node_index: 0-based node position
+-- Returns: physical register number (0-7 compute, 8-15 spill, 16+ arena)
+let assign_phys_reg node_index : Int -> Int [cost: Const(2)] =
+  if node_index < compute_reg_count then node_index
+  else if node_index < total_alloc_regs then node_index
+  else total_alloc_regs + (node_index - total_alloc_regs)
+
+-- Compute the index of a node in the node list
+-- Uses a fold with (found, count) tuple:
+--   - Increment count until we find the target node
+--   - Once found, stop counting
+-- Returns the 0-based index of the node, or -1 if not found
+let node_index_in_list nid nodes : Int -> Int -> Int [cost: Linear(nodes)] =
+  let result = fold (0, 0)
+    (\state n ->
+      let found = state.0 in
+      let count = state.1 in
+      if found == 1 then state  -- already found, stop counting
+      else if n == nid then (1, count)  -- found it
+      else (0, count + 1))  -- not found yet, keep counting
+    nodes in
+  if result.0 == 1 then result.1 else 0 - 1
+
+-- Allocate registers for all nodes in a program
+-- Assigns physical register numbers to each node via cost annotation
+-- When a node needs a spill, inserts VSPILL/VRELOAD Prim nodes
+-- Returns the annotated (and possibly expanded) program
+let allocate_registers program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  -- Phase 1: Assign physical registers to each node
+  let annotated = fold (program, 0)
+    (\state nid ->
+      let g = state.0 in
+      let idx = state.1 in
+      let phys = assign_phys_reg idx in
+      let g2 = graph_set_cost g nid phys in
+      (g2, idx + 1))
+    nodes in
+  let g1 = annotated.0 in
+  let total_assigned = annotated.1 in
+  -- Phase 2: Insert VSPILL/VRELOAD for nodes assigned to spill slots
+  -- If any node got a register >= total_alloc_regs, insert spill ops
+  if total_assigned <= total_alloc_regs then g1
+  else
+    -- Fold over nodes, accumulating (graph, spill_count)
+    -- For each node needing a spill, actually add VSPILL/VRELOAD nodes
+    -- and return the modified graph
+    let spill_result = fold (g1, 0)
+      (\state nid ->
+        let g = state.0 in
+        let spill_count = state.1 in
+        -- Compute this node's index correctly using the (found, count) pattern
+        let idx = node_index_in_list nid nodes in
+        let phys = assign_phys_reg idx in
+        if phys >= total_alloc_regs then
+          -- Insert a VSPILL node before this node
+          let spill = graph_add_node_rt g 0 in
+          let g2 = spill.0 in
+          let spill_id = spill.1 in
+          -- Set VSPILL opcode = 0x1D = 29
+          let g3_r = graph_set_prim_op g2 spill_id 29 in
+          let g3 = g3_r.0 in
+          let spill_new = g3_r.1 in
+          -- Annotate spill node with the spill slot register
+          let g3b = graph_set_cost g3 spill_new phys in
+          -- Insert a VRELOAD node after this node
+          let reload = graph_add_node_rt g3b 0 in
+          let g4 = reload.0 in
+          let reload_id = reload.1 in
+          -- Set VRELOAD opcode = 0x1E = 30
+          let g5_r = graph_set_prim_op g4 reload_id 30 in
+          let g5 = g5_r.0 in
+          let reload_new = g5_r.1 in
+          -- Annotate reload node with the compute register it reloads into
+          let target_reg = spill_count + compute_reg_count in
+          let g5b = graph_set_cost g5 reload_new target_reg in
+          -- Wire: spill reads from the node being spilled
+          let g6 = graph_connect g5b spill_new nid 0 in
+          -- Wire: reload produces the value
+          let g7 = graph_connect g6 reload_new spill_new 0 in
+          (g7, spill_count + 1)
+        else (g, spill_count))
+      nodes in
+    spill_result.0

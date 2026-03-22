@@ -1,0 +1,27 @@
+-- Time utilities built on clock_ns (0x1D)
+-- Provides millisecond-resolution timing and formatting
+
+-- Current time in milliseconds since Unix epoch
+let now_ms unused : Int -> Int [cost: Const(1)] =
+  let ns = clock_ns () in
+  ns / 1000000
+
+-- Elapsed time in milliseconds since a start timestamp
+let elapsed_ms start_ms : Int -> Int [cost: Const(1)] =
+  let ns = clock_ns () in
+  let current_ms = ns / 1000000 in
+  current_ms - start_ms
+
+-- Format a duration in milliseconds as a human-readable string
+-- Returns "X.XXs" for durations >= 1000ms, "Xms" otherwise
+let format_duration ms : Int -> Int [cost: Const(1)] =
+  if ms >= 1000 then
+    let secs = ms / 1000 in
+    let frac = ms - (secs * 1000) in
+    let frac_str = int_to_string frac in
+    let padded = if frac < 10 then str_concat "00" frac_str
+                 else if frac < 100 then str_concat "0" frac_str
+                 else frac_str in
+    str_concat (str_concat (int_to_string secs) (str_concat "." padded)) "s"
+  else
+    str_concat (int_to_string ms) "ms"

@@ -1,0 +1,35 @@
+-- Cache statistics: hit rate computation for compilation and evaluation caches
+--
+-- Tracks hits, misses, evictions, and computes utilization metrics.
+
+-- Compute cache hit rate as fixed-point percentage (0-10000 = 0%-100%)
+let hit_rate hits misses : Int -> Int -> Int [cost: Const(2)] =
+  let total = hits + misses in
+  if total == 0 then 0
+  else (hits * 10000) / total
+
+-- Compute cache utilization percentage (0-100)
+let utilization current_entries max_entries : Int -> Int -> Int [cost: Const(2)] =
+  if max_entries == 0 then 0
+  else (current_entries * 100) / max_entries
+
+-- Check if cache is cold (hit rate below 50%)
+-- Returns 1 if cold, 0 if warm
+let is_cold_cache hits misses : Int -> Int -> Int [cost: Const(2)] =
+  let rate = hit_rate hits misses in
+  if rate < 5000 then 1 else 0
+
+-- Compute eviction pressure: ratio of evictions to total operations
+-- Returns fixed-point pressure (0-10000)
+let eviction_pressure evictions hits misses : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let total = hits + misses in
+  if total == 0 then 0
+  else (evictions * 10000) / total
+
+-- Full cache report: (hit_rate, utilization, eviction_pressure)
+-- All values in fixed-point 0-10000 range
+let cache_report hits misses evictions current_entries max_entries : Int -> Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(4)] =
+  let hr = hit_rate hits misses in
+  let util = utilization current_entries max_entries in
+  let pressure = eviction_pressure evictions hits misses in
+  (hr, util * 100, pressure)

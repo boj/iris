@@ -1,0 +1,8 @@
+-- One evolution step on a pair of candidate programs
+-- Evaluate both, keep the better, mutate it to produce a challenger
+let evolve_step prog_a prog_b test_cases : Int -> Int -> Int -> Int [cost: Unknown] =
+  let score_a = graph_eval prog_a test_cases in
+  let score_b = graph_eval prog_b test_cases in
+  let best = if score_a >= score_b then prog_a else prog_b in
+  let mutant = graph_set_prim_op best () 0 in
+  (best, mutant)

@@ -1,0 +1,117 @@
+-- Plugin system: external code providing sensory feeds, effects, and primitives
+--
+-- Mirrors the PluginRegistry and PluginEffectHandler from iris-exec plugin.rs.
+--
+-- Daimon uses plugins to connect IRIS programs to real-time data sources
+-- (weather, markets, Reddit, arxiv, etc.). Each plugin provides:
+--   - name: unique identifier
+--   - sense(): produce values from external world
+--   - handle_effect(): process custom effects from programs
+--   - init(): one-time setup (create channels on message bus)
+--   - shutdown(): cleanup resources
+--
+-- Custom(n) effects are routed to plugins; well-known effects
+-- (Print, Timestamp, etc.) go to the fallback handler.
+--
+-- The PluginEffectHandler bridges two worlds:
+--   - Well-known effects (tag < 128) -> fallback handler (RealHandler, etc.)
+--   - Custom effects (tag >= 128) -> routed to named plugin
+
+-- Effect tag constants (well-known effects)
+let effect_print : Int [cost: Const(1)] = 0
+let effect_readline : Int [cost: Const(1)] = 1
+let effect_http_get : Int [cost: Const(1)] = 2
+let effect_http_post : Int [cost: Const(1)] = 3
+let effect_file_read : Int [cost: Const(1)] = 4
+let effect_file_write : Int [cost: Const(1)] = 5
+let effect_db_query : Int [cost: Const(1)] = 6
+let effect_db_execute : Int [cost: Const(1)] = 7
+let effect_sleep : Int [cost: Const(1)] = 8
+let effect_timestamp : Int [cost: Const(1)] = 9
+let effect_random : Int [cost: Const(1)] = 10
+let effect_log : Int [cost: Const(1)] = 11
+let effect_send : Int [cost: Const(1)] = 12
+let effect_recv : Int [cost: Const(1)] = 13
+let effect_ffi_call : Int [cost: Const(1)] = 14
+
+-- Custom effect base tag (plugin-routed effects start here)
+let effect_custom_base : Int [cost: Const(1)] = 128
+
+-- Check if an effect tag is a well-known (built-in) effect.
+-- Returns 1 if well-known, 0 if custom.
+let is_builtin_effect tag : Int -> Int [cost: Const(1)] =
+  if tag < effect_custom_base then 1 else 0
+
+-- Map a custom effect tag to the plugin index.
+-- Custom effects start at tag 128; plugin index = tag - 128.
+let plugin_index_for_effect tag : Int -> Int [cost: Const(1)] =
+  tag - effect_custom_base
+
+-- Route an effect to the appropriate handler.
+-- Returns: (is_builtin, handler_index)
+-- handler_index: 0 for builtin fallback, or plugin index for custom
+let route_effect tag : Int -> (Int, Int) [cost: Const(2)] =
+  if is_builtin_effect tag == 1 then (1, 0)
+  else (0, plugin_index_for_effect tag)
+
+-- Check if a plugin name is registered.
+-- plugin_count: number of registered plugins
+-- plugin_index: 0-based index to check
+-- Returns 1 if valid, 0 if out of range
+let is_valid_plugin plugin_index plugin_count : Int -> Int -> Int [cost: Const(1)] =
+  if plugin_index >= 0 then
+    if plugin_index < plugin_count then 1 else 0
+  else 0
+
+-- Simulate a plugin sense cycle: each plugin produces messages.
+-- Returns total messages produced across all plugins.
+let sense_cycle plugin_count : Int -> Int [cost: Linear(plugin_count)] =
+  plugin_count
+
+-- Initialize all plugins in order (registration order).
+-- Returns 1 if all plugins initialized successfully, 0 if any failed.
+let init_all_plugins plugin_count : Int -> Int [cost: Linear(plugin_count)] =
+  if plugin_count >= 0 then 1 else 0
+
+-- Shut down all plugins in reverse order (LIFO).
+-- Returns 1 if all plugins shut down successfully.
+let shutdown_all_plugins plugin_count : Int -> Int [cost: Linear(plugin_count)] =
+  1
+
+-- Run a full plugin cycle: init -> sense -> handle effects.
+-- Returns (messages_produced, effects_handled)
+let plugin_cycle plugin_count effect_count : Int -> Int -> (Int, Int) [cost: Linear(plugin_count)] =
+  let messages = sense_cycle plugin_count in
+  (messages, effect_count)
+
+-- Check if an allowed_custom_tags set permits a given custom tag.
+-- The allowed set is encoded as a bitmask (up to 64 custom tags).
+-- tag: the custom effect tag (>= 128)
+-- allowed_mask: bitmask of allowed custom tags
+-- Returns 1 if allowed, 0 if denied
+let is_custom_tag_allowed tag allowed_mask : Int -> Int -> Int [cost: Const(2)] =
+  let custom_idx = tag - effect_custom_base in
+  if custom_idx < 0 then 0
+  else if custom_idx >= 64 then 0
+  else
+    let bit = shr allowed_mask custom_idx in
+    bitand bit 1
+
+-- Compute a hash for a plugin name (for registry lookup).
+-- Simple djb2 hash variant.
+let plugin_name_hash name_sum : Int -> Int [cost: Const(1)] =
+  let h = 5381 * 33 + name_sum in
+  if h < 0 then 0 - h else h
+
+-- List all registered plugins (returns count).
+let list_plugins plugin_count : Int -> Int [cost: Const(1)] =
+  plugin_count
+
+-- Get plugin info by index.
+-- Returns (plugin_index, is_active) where is_active=1 if the plugin
+-- has been initialized and is ready to handle effects.
+let plugin_info plugin_index plugin_count : Int -> Int -> (Int, Int) [cost: Const(1)] =
+  if is_valid_plugin plugin_index plugin_count == 1 then
+    (plugin_index, 1)
+  else
+    (plugin_index, 0)

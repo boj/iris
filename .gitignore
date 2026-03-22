@@ -1,0 +1,15 @@
+target/
+.worktrees/
+.claude/worktrees/
+.iris-daemon/
+*.swp
+*.swo
+*~
+.DS_Store
+*.pyc
+__pycache__/
+.env
+.claude/settings.local.json
+weights/
+result
+*.bak

@@ -1,0 +1,244 @@
+-- Component bridge: interface between IRIS programs and Rust evolution functions
+--
+-- Mirrors the Rust component_bridge module in iris-evolve/src/component_bridge.rs.
+-- Wraps Rust mutation/seed functions as IRIS-callable components, enabling
+-- the transition from Rust-backed operators to IRIS-evolved operators.
+--
+-- Component kinds:
+--   0 = Mutation (Program -> Program)
+--   1 = Seed (Int -> Program)
+--   2 = Fitness (Program -> Scores)
+--
+-- Bootstrap compatibility:
+--   graph_add_node_rt behaves differently in bootstrap (arg = node kind)
+--   vs rust-scaffolding (arg = always Prim opcode).
+--   Portable pattern: graph_add_node_rt pg 0 (creates Prim node),
+--   then graph_set_prim_op pg node opcode (sets actual opcode).
+--
+-- Today: components delegate to Rust functions via graph_add_node_rt/graph_set_prim_op
+-- Tomorrow: components hold real IRIS programs that execute directly
+
+-- Component kind constants
+let component_mutation : Int [cost: Const(1)] = 0
+let component_seed : Int [cost: Const(1)] = 1
+let component_fitness : Int [cost: Const(1)] = 2
+
+-- Check if a component kind is valid
+let is_valid_kind kind : Int -> Int [cost: Const(3)] =
+  if kind == 0 then 1
+  else if kind == 1 then 1
+  else if kind == 2 then 1
+  else 0
+
+-- Helper: create a Prim node with a specific opcode (bootstrap-safe)
+-- Step 1: graph_add_node_rt with kind 0 = Prim
+-- Step 2: graph_set_prim_op to set the actual opcode
+-- Returns: (program, node_id)
+let make_prim_node program opcode : Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let node_id = step.1 in
+  if opcode == 0 then (prog, node_id)
+  else
+    let result = graph_set_prim_op prog node_id opcode in
+    (result.0, result.1)
+
+-- =========================================================================
+-- Mutation component dispatch
+-- =========================================================================
+
+-- Look up a mutation component by name hash
+-- Standard mutation names and their hashes:
+--   "insert_node" = 1110, "delete_node" = 1045,
+--   "replace_prim" = 1198, "connect" = 723
+-- Returns 1 if found, 0 if not
+let lookup_mutation name_hash : Int -> Int [cost: Const(5)] =
+  if name_hash == 1110 then 1
+  else if name_hash == 1045 then 1
+  else if name_hash == 1198 then 1
+  else if name_hash == 723 then 1
+  else 0
+
+-- Apply a mutation component to a program
+-- Dispatches based on mutation_id to the appropriate operator
+-- mutation_id: 0=insert_node, 1=delete_node, 2=replace_prim, 3=connect
+-- Returns (result_program, success_flag)
+let apply_mutation program mutation_id seed : Int -> Int -> Int -> (Int, Int) [cost: Linear(program)] =
+  if mutation_id == 0 then
+    -- Insert a new node with random opcode and connect it to root
+    let opcode = (if seed < 0 then 0 - seed else seed) % 16 in
+    let result = make_prim_node program opcode in
+    let prog = result.0 in
+    let new_id = result.1 in
+    let root = graph_get_root prog in
+    let port = (if seed < 0 then 0 - seed else seed) / 16 % 3 in
+    let connected = graph_connect prog root new_id port in
+    (connected, 1)
+  else if mutation_id == 1 then
+    -- Delete node: bypass a child by reconnecting parent to grandchild
+    let root = graph_get_root program in
+    let children = graph_outgoing program root in
+    let child_count = fold 0 (\acc x -> acc + 1) children in
+    if child_count == 0 then (program, 0)
+    else
+      let child = children.0 in
+      let grandchildren = graph_outgoing program child in
+      let gc_count = fold 0 (\acc x -> acc + 1) grandchildren in
+      if gc_count == 0 then
+        -- Child is a leaf: disconnect it
+        let p1 = graph_disconnect program root child in
+        (p1, 1)
+      else
+        -- Bypass child: disconnect root->child, connect root->grandchild
+        let grandchild = grandchildren.0 in
+        let p1 = graph_disconnect program root child in
+        let p2 = graph_connect p1 root grandchild 0 in
+        (p2, 1)
+  else if mutation_id == 2 then
+    -- Replace prim opcode at root
+    let root = graph_get_root program in
+    let kind = graph_get_kind program root in
+    if kind == 0 then
+      let new_op = (if seed < 0 then 0 - seed else seed) % 16 in
+      let result = graph_set_prim_op program root new_op in
+      (result.0, 1)
+    else (program, 0)
+  else if mutation_id == 3 then
+    -- Connect: add an edge between root and a selected target node
+    let nodes = graph_nodes program in
+    let nc = fold 0 (\acc x -> acc + 1) nodes in
+    if nc < 2 then (program, 0)
+    else
+      let root = graph_get_root program in
+      let abs_seed = if seed < 0 then 0 - seed else seed in
+      let pick_idx = (abs_seed / 4) % nc in
+      let target = fold (0, root)
+        (\state nid ->
+          if state.0 == pick_idx then (state.0 + 1, nid)
+          else (state.0 + 1, state.1))
+        nodes in
+      let port = abs_seed % 4 in
+      if target.1 == root then (program, 0)
+      else
+        let connected = graph_connect program root (target.1) port in
+        (connected, 1)
+  else (program, 0)
+
+-- =========================================================================
+-- Seed component dispatch
+-- =========================================================================
+
+-- Look up a seed component by name hash
+-- Standard seed names:
+--   "fold_add" = 718, "fold_max" = 730,
+--   "identity" = 825, "map_fold" = 736
+-- Returns 1 if found, 0 if not
+let lookup_seed name_hash : Int -> Int [cost: Const(5)] =
+  if name_hash == 718 then 1
+  else if name_hash == 730 then 1
+  else if name_hash == 825 then 1
+  else if name_hash == 736 then 1
+  else 0
+
+-- Apply a seed component to generate a new program
+-- seed_id: 0=fold_add, 1=fold_max, 2=identity, 3=map_fold
+-- Returns (new_program, success_flag)
+let apply_seed seed_id rng_seed : Int -> Int -> (Int, Int) [cost: Const(10)] =
+  if seed_id == 0 then
+    -- Generate fold(0, add, input) = sum
+    let p = graph_new in
+    let step = make_prim_node p 0 in
+    let prog = step.0 in
+    let add_id = step.1 in
+    let root = graph_get_root prog in
+    let result = graph_connect prog root add_id 1 in
+    (result, 1)
+  else if seed_id == 1 then
+    -- Generate fold(MIN, max, input) = max
+    let p = graph_new in
+    let step = make_prim_node p 8 in
+    let prog = step.0 in
+    let max_id = step.1 in
+    let root = graph_get_root prog in
+    let result = graph_connect prog root max_id 1 in
+    (result, 1)
+  else if seed_id == 2 then
+    -- Generate identity: fold(0, add, input) with single element = input
+    let p = graph_new in
+    let step = make_prim_node p 0 in
+    let prog = step.0 in
+    let add_id = step.1 in
+    let root = graph_get_root prog in
+    let result = graph_connect prog root add_id 1 in
+    (result, 1)
+  else if seed_id == 3 then
+    -- Generate map_fold: fold(0, add, map(input, mul))
+    let p = graph_new in
+    let step1 = make_prim_node p 2 in
+    let prog1 = step1.0 in
+    let mul_id = step1.1 in
+    let step2 = make_prim_node prog1 48 in
+    let prog2 = step2.0 in
+    let map_id = step2.1 in
+    let prog3 = graph_connect prog2 map_id mul_id 1 in
+    let step3 = make_prim_node prog3 0 in
+    let prog4 = step3.0 in
+    let add_id = step3.1 in
+    let root = graph_get_root prog4 in
+    let prog5 = graph_connect prog4 root add_id 1 in
+    let prog6 = graph_connect prog5 root map_id 2 in
+    (prog6, 1)
+  else (graph_new, 0)
+
+-- =========================================================================
+-- Component lifecycle
+-- =========================================================================
+
+-- Check if a component is IRIS-native or Rust-backed
+-- A placeholder graph has 0 nodes (Rust-backed)
+-- A real IRIS program has > 0 nodes
+let is_iris_native program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let nc = fold 0 (\acc x -> acc + 1) nodes in
+  if nc > 0 then 1 else 0
+
+-- Register a mutation function and return its component index
+-- Returns (component_index, total_registered)
+let register_mutation name_hash current_count : Int -> Int -> (Int, Int) [cost: Const(2)] =
+  (current_count, current_count + 1)
+
+-- Register a seed function and return its component index
+let register_seed name_hash current_count : Int -> Int -> (Int, Int) [cost: Const(2)] =
+  (current_count, current_count + 1)
+
+-- =========================================================================
+-- Batch operations
+-- =========================================================================
+
+-- Apply a random mutation from the available mutation components
+-- Selects mutation_id randomly and applies it
+let apply_random_mutation program seed : Int -> Int -> (Int, Int) [cost: Linear(program)] =
+  let mutation_id = (if seed < 0 then 0 - seed else seed) % 4 in
+  apply_mutation program mutation_id seed
+
+-- Generate a random seed program
+let generate_random_seed rng_seed : Int -> (Int, Int) [cost: Const(10)] =
+  let seed_id = (if rng_seed < 0 then 0 - rng_seed else rng_seed) % 4 in
+  apply_seed seed_id rng_seed
+
+-- Dispatch a component operation by kind and name
+-- Exercises the complete component API: validate, lookup, register, execute
+let dispatch_component kind name_hash program seed count : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Linear(program)] =
+  let valid = is_valid_kind kind in
+  if valid == 0 then (program, 0)
+  else
+    let native = is_iris_native program in
+    if kind == component_mutation then
+      let found = lookup_mutation name_hash in
+      let reg = register_mutation name_hash count in
+      apply_random_mutation program seed
+    else if kind == component_seed then
+      let found = lookup_seed name_hash in
+      let reg = register_seed name_hash count in
+      generate_random_seed seed
+    else (program, 0)

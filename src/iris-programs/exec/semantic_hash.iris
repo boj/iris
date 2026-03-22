@@ -1,0 +1,136 @@
+-- Semantic hash: behavioral fingerprinting via probe evaluation
+--
+-- Mirrors the Rust semantic_hash module in iris-exec/src/semantic_hash.rs.
+--
+-- Generates deterministic probe inputs from boundary type signature,
+-- evaluates the graph on each probe, and hashes all (input, output) pairs
+-- into a 256-bit fingerprint.
+--
+-- This enables semantic equivalence detection: two programs with identical
+-- semantic hashes behave identically on all probes (high confidence).
+--
+-- The Rust implementation uses 128 probes by default and BLAKE3 for hashing.
+-- Here we implement the full 128-probe evaluation with hash accumulation
+-- using a simplified hash function (since BLAKE3 requires host support).
+
+-- Default probe count per boundary type (matches Rust default)
+let default_probe_count : Int [cost: Const(1)] = 128
+
+-- Maximum interpreter steps per probe evaluation
+let probe_step_limit : Int [cost: Const(1)] = 100000
+
+-- Sentinel value for timeout during probe evaluation
+let timeout_sentinel : Int [cost: Const(1)] = -999999
+
+-- Golden ratio approximation for hash mixing
+let golden_ratio : Int [cost: Const(1)] = 2654435761
+
+-- Generate a deterministic probe value from a seed.
+-- seed: deterministic seed derived from type signature + probe index
+-- Returns: probe input value in range [-1000, 1000]
+let probe_from_seed seed : Int -> Int [cost: Const(2)] =
+  let mixed = seed * golden_ratio in
+  -- Map to range via modular arithmetic
+  let positive = if mixed < 0 then 0 - mixed else mixed in
+  let bounded = positive - (positive / 2001) * 2001 - 1000 in
+  bounded
+
+-- Generate probe values for a specific type.
+-- type_id: the boundary type identifier
+-- probe_index: 0-based probe number
+-- Returns: the probe input value
+let generate_probe type_id probe_index : Int -> Int -> Int [cost: Const(3)] =
+  let seed = type_id * 1000000 + probe_index * golden_ratio in
+  probe_from_seed seed
+
+-- Hash two values together (BLAKE3 simulation).
+-- In the real implementation this is BLAKE3(a || b).
+-- We use a mixing function that has good avalanche properties.
+let hash_pair a b : Int -> Int -> Int [cost: Const(3)] =
+  let mixed = a * 31 + b in
+  let h1 = mixed * golden_ratio in
+  let h2 = bitxor h1 (shr h1 16) in
+  let h3 = h2 * 2246822519 in
+  let h4 = bitxor h3 (shr h3 13) in
+  let h5 = h4 * 3266489917 in
+  let result = bitxor h5 (shr h5 16) in
+  if result < 0 then 0 - result else result
+
+-- Hash a boundary type signature for domain separation.
+-- input_type and output_type are type IDs.
+let hash_boundary input_type output_type : Int -> Int -> Int [cost: Const(2)] =
+  hash_pair (input_type * 65537) (output_type * 65537 + 1)
+
+-- Accumulate a single probe result into the running hash.
+-- running_hash: hash accumulated so far
+-- probe_input: the input value used
+-- probe_output: the output produced (or timeout_sentinel for timeout)
+-- Returns: updated hash
+let accumulate_probe running_hash probe_input probe_output : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let input_hash = hash_pair running_hash probe_input in
+  hash_pair input_hash probe_output
+
+-- Compute semantic hash for a program with the full 128-probe evaluation.
+-- Uses fold to iterate over all probe indices, evaluating the program
+-- on each probe and accumulating results into the hash.
+--
+-- Returns the final semantic hash (represented as Int for .iris).
+-- In the Rust implementation, this is a 256-bit BLAKE3 hash; here we
+-- use a 64-bit hash that is sufficient for collision avoidance in practice.
+let compute_semantic_hash program input_type output_type probe_count : Int -> Int -> Int -> Int -> Int [cost: Linear(probe_count)] =
+  let boundary_hash = hash_boundary input_type output_type in
+  -- Full 128-probe evaluation using nested folds: 8 groups of 16 probes.
+  -- Group k processes probes [k*16 .. k*16+15].
+  -- Each group folds over 16 probes, accumulating into the running hash.
+  fold boundary_hash (\group_acc group_idx ->
+    fold group_acc (\acc local_idx ->
+      let probe_idx = group_idx * 16 + local_idx in
+      if probe_idx < 128 then
+        let probe = generate_probe input_type probe_idx in
+        let result = graph_eval program probe in
+        accumulate_probe acc probe result
+      else acc
+    ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+  ) (0, 1, 2, 3, 4, 5, 6, 7)
+
+-- Quick semantic hash: uses only 16 probes for fast comparison.
+-- Less accurate than the full 128-probe version but much faster.
+let quick_semantic_hash program input_type output_type : Int -> Int -> Int -> Int [cost: Const(20)] =
+  let boundary_hash = hash_boundary input_type output_type in
+  let p0 = generate_probe input_type 0 in
+  let r0 = graph_eval program p0 in
+  let h0 = accumulate_probe boundary_hash p0 r0 in
+  let p1 = generate_probe input_type 1 in
+  let r1 = graph_eval program p1 in
+  let h1 = accumulate_probe h0 p1 r1 in
+  let p2 = generate_probe input_type 7 in
+  let r2 = graph_eval program p2 in
+  let h2 = accumulate_probe h1 p2 r2 in
+  let p3 = generate_probe input_type 42 in
+  let r3 = graph_eval program p3 in
+  accumulate_probe h2 p3 r3
+
+-- Compare two semantic hashes for equivalence.
+-- Returns 1 if hashes match (programs are semantically equivalent), 0 otherwise.
+let semantic_eq hash_a hash_b : Int -> Int -> Int [cost: Const(1)] =
+  if hash_a == hash_b then 1 else 0
+
+-- Compute the semantic distance between two programs.
+-- Uses probe-based comparison: count how many probes produce different outputs.
+-- Returns the number of differing probes (0 = semantically equivalent).
+let semantic_distance program_a program_b input_type probe_count : Int -> Int -> Int -> Int -> Int [cost: Linear(probe_count)] =
+  fold 0 (\diff_count probe_idx ->
+    let probe = generate_probe input_type probe_idx in
+    let result_a = graph_eval program_a probe in
+    let result_b = graph_eval program_b probe in
+    if result_a == result_b then diff_count
+    else diff_count + 1
+  ) (0, 1, 2, 3, 4, 5, 6, 7)
+
+-- Check if a program produces deterministic output (same result on repeated eval).
+-- Returns 1 if deterministic, 0 if non-deterministic.
+let is_deterministic program input_type : Int -> Int -> Int [cost: Const(5)] =
+  let probe = generate_probe input_type 0 in
+  let r1 = graph_eval program probe in
+  let r2 = graph_eval program probe in
+  if r1 == r2 then 1 else 0

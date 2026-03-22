@@ -1,0 +1,96 @@
+-- Content-Addressed Evolution Lifecycle
+--
+-- Demonstrates native codegen, BLAKE3 content-addressed hashing,
+-- and performance improvement through structural evolution.
+--
+-- Each version compiles to a Fragment with a unique BLAKE3 FragmentId.
+-- The evaluator automatically selects the fastest execution path:
+--   Integer folds  -> GP register native codegen (rcx, rbx, r8-r15)
+--   Float64 folds  -> AVX register native codegen (xmm0-xmm14)
+--
+-- Pre-evolution versions carry extra state and do redundant work.
+-- Post-evolution versions are structurally leaner: fewer tuple elements,
+-- fewer operations per step, less register pressure. Evolution discovered
+-- that the extra computation was unnecessary for the required output.
+
+-- =========================================================================
+-- Integer: Pre-evolution (4-element state, extra statistics)
+-- =========================================================================
+-- Tracks hash, count, running sum, and running max per iteration.
+-- 4-element tuple = 4 loop-carried GP registers + extra ops per step.
+-- Returns (hash, count) after discarding the unused statistics.
+
+let hash_pre n =
+  let res = fold (0, 0, 0, 0) (\state step ->
+    let h = state.0 in
+    let c = state.1 in
+    let sum = state.2 in
+    let max_h = state.3 in
+    let new_h = (h * 31 + step) % 1000003 in
+    let new_sum = sum + new_h in
+    let new_max = if new_h > max_h then new_h else max_h in
+    (new_h, c + 1, new_sum, new_max)
+  ) (list_range 0 n) in
+  (res.0, res.1)
+
+-- =========================================================================
+-- Integer: Post-evolution (2-element state, minimal ops)
+-- =========================================================================
+-- Evolution eliminated the unused sum and max tracking. Same hash and count
+-- output, but 2-element tuple = 2 loop-carried registers, fewer ops.
+-- Different SemanticGraph structure -> different BLAKE3 FragmentId.
+
+let hash_post n =
+  fold (0, 0) (\state step ->
+    let new_h = (state.0 * 31 + step) % 1000003 in
+    (new_h, state.1 + 1)
+  ) (list_range 0 n)
+
+-- =========================================================================
+-- Float64: Pre-evolution (6-element state, full statistics)
+-- =========================================================================
+-- Tracks EMA, count, sum, sum-of-squares, min, and max per iteration.
+-- 6-element tuple = 6 loop-carried xmm registers + extra float ops.
+-- Returns (ema, count) after discarding unused statistics.
+
+let ema_pre n =
+  let res = fold (0.0, 0.0, 0.0, 0.0, 999999.0, 0.0) (\state step ->
+    let ema = state.0 in
+    let count = state.1 in
+    let sum = state.2 in
+    let sumsq = state.3 in
+    let lo = state.4 in
+    let hi = state.5 in
+    let alpha = 0.1 in
+    let value = int_to_float step in
+    let new_ema = alpha * value + (1.0 - alpha) * ema in
+    let new_sum = sum + value in
+    let new_sumsq = sumsq + value * value in
+    let new_lo = min lo value in
+    let new_hi = max hi value in
+    (new_ema, count + 1.0, new_sum, new_sumsq, new_lo, new_hi)
+  ) (list_range 0 n) in
+  (res.0, res.1)
+
+-- =========================================================================
+-- Float64: Post-evolution (2-element state, just EMA)
+-- =========================================================================
+-- Evolution eliminated unused statistics. Same EMA and count output,
+-- but 2-element tuple = 2 loop-carried xmm registers, fewer float ops.
+
+let ema_post n =
+  fold (0.0, 0.0) (\state step ->
+    let alpha = 0.1 in
+    let value = int_to_float step in
+    let new_ema = alpha * value + (1.0 - alpha) * state.0 in
+    (new_ema, state.1 + 1.0)
+  ) (list_range 0 n)
+
+-- =========================================================================
+-- Test entry points
+-- =========================================================================
+
+let test_int_pre = hash_pre 1000
+let test_int_post = hash_post 1000
+let test_float_pre = ema_pre 1000
+let test_float_post = ema_post 1000

@@ -1,0 +1,36 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["f74dfab75aa26916.olean"],
+  "i": "081d768050ec7bc7.ilean",
+  "c": "b898f58e47f70d17.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/bojo/Development/ailang/lean/.lake/build/lib/lean /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/bin/lean /home/bojo/Development/ailang/lean/IrisKernel/Properties.lean -o /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Properties.olean -i /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Properties.ilean -c /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Properties.c --setup /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Properties.setup.json --json",
+   "level": "trace"},
+  {"message":
+   "IrisKernel/Properties.lean:29:9: unused variable `d`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "level": "warning"},
+  {"message": "IrisKernel/Properties.lean:75:8: declaration uses `sorry`",
+   "level": "warning"}],
+ "inputs":
+ [["IrisKernel.Properties:deps",
+   [["deps",
+     [["«iris-kernel»/IrisKernel:extraDep",
+       [["@«iris-kernel»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["IrisKernel.Types transitive imports (legacy)", "00000000000006bb"],
+        ["IrisKernel.Types:importAllArts", "51e6c1b7e4bff075"],
+        ["IrisKernel.Rules transitive imports (legacy)", "4fb08f520d8aa1a7"],
+        ["IrisKernel.Rules:importAllArts", "516462e1f0ca5f98"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["/home/bojo/Development/ailang/lean/IrisKernel/Properties.lean",
+   "b2d028ba09a56c57"],
+  ["options", [["-DautoImplicit=false", "4a85acb881fd49d0"]]],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "51a7a26318fe20e1"}

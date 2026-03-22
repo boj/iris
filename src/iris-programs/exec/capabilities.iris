@@ -1,0 +1,418 @@
+-- Capability-based security system for IRIS programs.
+--
+-- Mirrors the Rust capabilities system in iris-exec/src/capabilities.rs.
+--
+-- Provides fine-grained control over what effects a program can perform,
+-- how much memory it can use, how many steps it can execute, and what
+-- filesystem/network resources it can access. This is the enforcement
+-- layer that makes sandboxed execution safe for evolved programs.
+--
+-- Capability struct encoding (10 dimensions as a tuple):
+--   (allowed_effects_mask, max_memory, max_steps, max_wall_time_ms,
+--    allowed_paths_count, allowed_hosts_count,
+--    can_spawn_threads, can_ffi, can_mmap_exec, can_use_channels)
+--
+-- Effect tag encoding (from EffectTag enum in iris-repr):
+--   0x00 = Print, 0x01 = ReadLine, 0x02 = Log, 0x03 = Timestamp,
+--   0x04 = Random, 0x05 = ClockNs, 0x06 = RandomBytes, 0x07 = SleepMs,
+--   0x08 = Sleep,
+--   0x09 = FileRead, 0x0A = FileWrite, 0x0B = FileOpen,
+--   0x0C = FileReadBytes, 0x0D = FileWriteBytes,
+--   0x10 = FileClose, 0x11 = FileStat, 0x12 = DirList,
+--   0x13 = TcpConnect, 0x14 = TcpRead, 0x15 = TcpWrite,
+--   0x16 = TcpClose, 0x17 = TcpListen, 0x18 = TcpAccept,
+--   0x19 = EnvGet,
+--   0x20 = ThreadSpawn, 0x21 = ThreadJoin,
+--   0x22 = MmapExec,
+--   0x23 = SendMessage, 0x24 = RecvMessage,
+--   0x25 = Spawn,
+--   0x26 = Reap,
+--   0x27 = Audit,
+--   0x28 = CallNative,
+--   0x29 = LoadPlugin, 0x2A = UnloadPlugin, 0x2B = FfiCall
+--
+-- Allowed effects are encoded as a bitmask (64-bit integer).
+-- Bit N is set if effect tag N is allowed.
+
+-- ============================================================
+-- Capability profiles
+-- ============================================================
+
+-- Unrestricted: all effects allowed, no limits.
+-- Returns: (allowed_effects_mask, max_memory, max_steps, max_wall_time_ms,
+--           allowed_paths_count, allowed_hosts_count,
+--           can_spawn_threads, can_ffi, can_mmap_exec, can_use_channels)
+let cap_unrestricted : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  -- All bits set for all known effect tags (0x00..0x2B = 44 tags)
+  -- We use a large mask to cover all.
+  let all_effects = 17592186044415 in  -- (1 << 44) - 1
+  (all_effects, 0, 0, 0, 999, 999, 1, 1, 1, 1)
+
+-- Sandbox: pure computation only. No I/O, no threads, no FFI.
+-- Only allows: Print(0x00), Log(0x02), Timestamp(0x03), Random(0x04),
+--              ClockNs(0x05), RandomBytes(0x06), SleepMs(0x07)
+-- max_memory = 10 MB, max_steps = 1M, max_wall_time = 10s
+let cap_sandbox : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  -- Bits: 0,2,3,4,5,6,7 = 1 + 4 + 8 + 16 + 32 + 64 + 128 = 253
+  let sandbox_effects = 253 in
+  (sandbox_effects, 10485760, 1000000, 10000, 0, 0, 0, 0, 0, 0)
+
+-- Local I/O: file access to specific paths, no network.
+-- Allows sandbox effects + file ops (0x09..0x0D, 0x10..0x12)
+-- max_memory = 256 MB, max_steps = unlimited, max_wall_time = 60s
+let cap_local : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  -- sandbox_effects + file bits: 0x09..0x0D (bits 9-13), 0x10..0x12 (bits 16-18)
+  -- 253 + 512 + 1024 + 2048 + 4096 + 8192 + 65536 + 131072 + 262144 = 474877
+  let local_effects = 474877 in
+  (local_effects, 268435456, 0, 60000, 10, 0, 0, 0, 0, 1)
+
+-- Network: local I/O + TCP connections to specific hosts.
+-- Adds TCP ops (0x13..0x18) to local capabilities.
+-- max_memory = 256 MB, max_steps = unlimited, max_wall_time = 60s
+let cap_network : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  -- local_effects + TCP bits: 0x13..0x18 (bits 19-24)
+  -- 474877 + 524288 + 1048576 + 2097152 + 4194304 + 8388608 + 16777216 = 33505021
+  let network_effects = 33505021 in
+  (network_effects, 268435456, 0, 60000, 10, 10, 0, 0, 0, 1)
+
+-- Full: all effects, all capabilities (same as unrestricted).
+let cap_full : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  let all_effects = 17592186044415 in
+  (all_effects, 0, 0, 0, 999, 999, 1, 1, 1, 1)
+
+-- Daemon candidate: very restrictive for testing evolved code.
+-- Sandbox + file ops but only to /tmp. No network, no threads.
+-- max_memory = 10 MB, max_steps = 1M, max_wall_time = 10s
+let cap_daemon_candidate : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  let daemon_effects = 474877 in  -- sandbox + file ops
+  (daemon_effects, 10485760, 1000000, 10000, 1, 0, 0, 0, 0, 0)
+
+-- ============================================================
+-- Capability accessors
+-- ============================================================
+
+-- Extract the allowed effects mask from a capability tuple.
+let cap_get_effects cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.0
+
+-- Extract max memory from a capability tuple.
+let cap_get_max_memory cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.1
+
+-- Extract max steps from a capability tuple.
+let cap_get_max_steps cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.2
+
+-- Extract max wall time (ms) from a capability tuple.
+let cap_get_max_wall_time cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.3
+
+-- Check if threads can be spawned.
+let cap_can_spawn_threads cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.6
+
+-- Check if FFI calls are allowed.
+let cap_can_ffi cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.7
+
+-- Check if executable memory mapping is allowed.
+let cap_can_mmap_exec cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.8
+
+-- Check if channel operations are allowed.
+let cap_can_use_channels cap : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int [cost: Const(1)] =
+  cap.9
+
+-- ============================================================
+-- Permission checking
+-- ============================================================
+
+-- Check if a given effect tag is allowed by the capability mask.
+-- Uses bit testing: (mask >> tag) & 1 == 1.
+-- Since IRIS does not have native bitwise ops, we simulate with
+-- arithmetic: divide by 2^tag, then check if result is odd.
+let cap_is_effect_allowed cap effect_tag : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(8)] =
+  let mask = cap.0 in
+  -- Compute 2^effect_tag by repeated doubling
+  let pow2 = if effect_tag == 0 then 1
+    else if effect_tag == 1 then 2
+    else if effect_tag == 2 then 4
+    else if effect_tag == 3 then 8
+    else if effect_tag == 4 then 16
+    else if effect_tag == 5 then 32
+    else if effect_tag == 6 then 64
+    else if effect_tag == 7 then 128
+    else if effect_tag == 8 then 256
+    else if effect_tag == 9 then 512
+    else if effect_tag == 10 then 1024
+    else if effect_tag == 11 then 2048
+    else if effect_tag == 12 then 4096
+    else if effect_tag == 13 then 8192
+    else if effect_tag == 14 then 16384
+    else if effect_tag == 15 then 32768
+    else if effect_tag == 16 then 65536
+    else if effect_tag == 17 then 131072
+    else if effect_tag == 18 then 262144
+    else if effect_tag == 19 then 524288
+    else if effect_tag == 20 then 1048576
+    else if effect_tag == 21 then 2097152
+    else if effect_tag == 22 then 4194304
+    else if effect_tag == 23 then 8388608
+    else if effect_tag == 24 then 16777216
+    else if effect_tag == 25 then 33554432
+    else if effect_tag == 26 then 67108864
+    else if effect_tag == 27 then 134217728
+    else if effect_tag == 28 then 268435456
+    else if effect_tag == 29 then 536870912
+    else if effect_tag == 30 then 1073741824
+    else if effect_tag == 31 then 2147483648
+    else 0 in
+  -- Check structural capabilities for special effect types
+  if effect_tag == 32 then cap.6    -- ThreadSpawn -> can_spawn_threads
+  else if effect_tag == 33 then cap.6  -- ThreadJoin -> can_spawn_threads
+  else if effect_tag == 34 then cap.8  -- MmapExec -> can_mmap_exec
+  else if effect_tag == 40 then        -- CallNative -> can_ffi AND can_mmap_exec
+    if cap.7 == 0 then 0
+    else cap.8
+  else if effect_tag == 43 then cap.7  -- FfiCall -> can_ffi
+  else
+    -- General effect: check bitmask
+    let shifted = mask / pow2 in
+    -- Check if the lowest bit is set (odd number)
+    let half = shifted / 2 in
+    if shifted - half * 2 == 1 then 1 else 0
+
+-- Check if a file path operation is allowed.
+-- Requires both the effect to be allowed AND the path to match.
+-- path_allowed: 1 if the path has been pre-checked against allowed_paths, 0 otherwise.
+let cap_check_file_op cap effect_tag path_allowed : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int -> Int [cost: Const(4)] =
+  let effect_ok = cap_is_effect_allowed cap effect_tag in
+  if effect_ok == 0 then 0
+  else if cap.4 == 0 then 0  -- no paths allowed
+  else path_allowed
+
+-- Check if a network host operation is allowed.
+-- host_allowed: 1 if the host has been pre-checked against allowed_hosts, 0 otherwise.
+let cap_check_host_op cap effect_tag host_allowed : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int -> Int [cost: Const(4)] =
+  let effect_ok = cap_is_effect_allowed cap effect_tag in
+  if effect_ok == 0 then 0
+  else if cap.5 == 0 then 0  -- no hosts allowed
+  else host_allowed
+
+-- ============================================================
+-- Bitwise helpers for capability algebra
+-- ============================================================
+
+-- Extract bit i from mask: (mask / pow2(i)) % 2
+-- Uses the pow2 lookup table from cap_is_effect_allowed.
+let extract_bit mask i : Int -> Int -> Int [cost: Const(4)] =
+  let pow2 = if i == 0 then 1
+    else if i == 1 then 2
+    else if i == 2 then 4
+    else if i == 3 then 8
+    else if i == 4 then 16
+    else if i == 5 then 32
+    else if i == 6 then 64
+    else if i == 7 then 128
+    else if i == 8 then 256
+    else if i == 9 then 512
+    else if i == 10 then 1024
+    else if i == 11 then 2048
+    else if i == 12 then 4096
+    else if i == 13 then 8192
+    else if i == 14 then 16384
+    else if i == 15 then 32768
+    else if i == 16 then 65536
+    else if i == 17 then 131072
+    else if i == 18 then 262144
+    else if i == 19 then 524288
+    else if i == 20 then 1048576
+    else if i == 21 then 2097152
+    else if i == 22 then 4194304
+    else if i == 23 then 8388608
+    else if i == 24 then 16777216
+    else if i == 25 then 33554432
+    else if i == 26 then 67108864
+    else if i == 27 then 134217728
+    else if i == 28 then 268435456
+    else if i == 29 then 536870912
+    else if i == 30 then 1073741824
+    else if i == 31 then 2147483648
+    else 0 in
+  let shifted = mask / pow2 in
+  let half = shifted / 2 in
+  shifted - half * 2
+
+-- Bitwise AND of two effect masks using arithmetic decomposition.
+-- Iterates over 32 bit positions (covers all effect tags 0x00..0x1F).
+-- For each bit, extracts it from both masks, ANDs them (multiply),
+-- and accumulates the result.
+let bitmask_and x y : Int -> Int -> Int [cost: Const(64)] =
+  let b0 = (extract_bit x 0) * (extract_bit y 0) * 1 in
+  let b1 = (extract_bit x 1) * (extract_bit y 1) * 2 in
+  let b2 = (extract_bit x 2) * (extract_bit y 2) * 4 in
+  let b3 = (extract_bit x 3) * (extract_bit y 3) * 8 in
+  let b4 = (extract_bit x 4) * (extract_bit y 4) * 16 in
+  let b5 = (extract_bit x 5) * (extract_bit y 5) * 32 in
+  let b6 = (extract_bit x 6) * (extract_bit y 6) * 64 in
+  let b7 = (extract_bit x 7) * (extract_bit y 7) * 128 in
+  let b8 = (extract_bit x 8) * (extract_bit y 8) * 256 in
+  let b9 = (extract_bit x 9) * (extract_bit y 9) * 512 in
+  let b10 = (extract_bit x 10) * (extract_bit y 10) * 1024 in
+  let b11 = (extract_bit x 11) * (extract_bit y 11) * 2048 in
+  let b12 = (extract_bit x 12) * (extract_bit y 12) * 4096 in
+  let b13 = (extract_bit x 13) * (extract_bit y 13) * 8192 in
+  b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13
+
+-- Helper: OR of two single bits (0 or 1). a + b - a*b gives correct OR.
+let or_bit xa ya : Int -> Int -> Int [cost: Const(1)] =
+  xa + ya - xa * ya
+
+-- Bitwise OR of two effect masks using arithmetic decomposition.
+-- For each bit, extracts from both masks, ORs them, and accumulates.
+let bitmask_or x y : Int -> Int -> Int [cost: Const(64)] =
+  let b0 = (or_bit (extract_bit x 0) (extract_bit y 0)) * 1 in
+  let b1 = (or_bit (extract_bit x 1) (extract_bit y 1)) * 2 in
+  let b2 = (or_bit (extract_bit x 2) (extract_bit y 2)) * 4 in
+  let b3 = (or_bit (extract_bit x 3) (extract_bit y 3)) * 8 in
+  let b4 = (or_bit (extract_bit x 4) (extract_bit y 4)) * 16 in
+  let b5 = (or_bit (extract_bit x 5) (extract_bit y 5)) * 32 in
+  let b6 = (or_bit (extract_bit x 6) (extract_bit y 6)) * 64 in
+  let b7 = (or_bit (extract_bit x 7) (extract_bit y 7)) * 128 in
+  let b8 = (or_bit (extract_bit x 8) (extract_bit y 8)) * 256 in
+  let b9 = (or_bit (extract_bit x 9) (extract_bit y 9)) * 512 in
+  let b10 = (or_bit (extract_bit x 10) (extract_bit y 10)) * 1024 in
+  let b11 = (or_bit (extract_bit x 11) (extract_bit y 11)) * 2048 in
+  let b12 = (or_bit (extract_bit x 12) (extract_bit y 12)) * 4096 in
+  let b13 = (or_bit (extract_bit x 13) (extract_bit y 13)) * 8192 in
+  b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13
+
+-- ============================================================
+-- Capability algebra
+-- ============================================================
+
+-- Intersection: compute the most restrictive combination of two capabilities.
+-- Effects: bitwise AND of masks (correct per-bit intersection).
+-- Limits: take the smaller (more restrictive) non-zero value.
+-- Booleans: AND of structural flags.
+let cap_intersect a b : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(80)] =
+  -- Bitwise AND of effect masks: only effects allowed by BOTH capabilities.
+  let effects = bitmask_and a.0 b.0 in
+  -- Memory: take smaller non-zero, or the non-zero one
+  let mem = if a.1 == 0 then b.1
+    else if b.1 == 0 then a.1
+    else if a.1 < b.1 then a.1
+    else b.1 in
+  -- Steps: take smaller non-zero
+  let steps = if a.2 == 0 then b.2
+    else if b.2 == 0 then a.2
+    else if a.2 < b.2 then a.2
+    else b.2 in
+  -- Wall time: take smaller non-zero
+  let wall = if a.3 == 0 then b.3
+    else if b.3 == 0 then a.3
+    else if a.3 < b.3 then a.3
+    else b.3 in
+  -- Path/host counts: take smaller
+  let paths = if a.4 < b.4 then a.4 else b.4 in
+  let hosts = if a.5 < b.5 then a.5 else b.5 in
+  -- Structural flags: AND (both must be 1)
+  let threads = if a.6 == 1 then
+    if b.6 == 1 then 1 else 0
+    else 0 in
+  let ffi = if a.7 == 1 then
+    if b.7 == 1 then 1 else 0
+    else 0 in
+  let mmap = if a.8 == 1 then
+    if b.8 == 1 then 1 else 0
+    else 0 in
+  let chans = if a.9 == 1 then
+    if b.9 == 1 then 1 else 0
+    else 0 in
+  (effects, mem, steps, wall, paths, hosts, threads, ffi, mmap, chans)
+
+-- Union: compute the least restrictive combination of two capabilities.
+-- Effects: bitwise OR of masks (correct per-bit union).
+-- Limits: take the larger (less restrictive) value; 0 = unlimited.
+-- Booleans: OR of structural flags.
+let cap_union a b : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(80)] =
+  -- Bitwise OR of effect masks: effects allowed by EITHER capability.
+  let effects = bitmask_or a.0 b.0 in
+  -- Memory: 0 = unlimited, so if either is 0, result is 0 (unlimited).
+  -- Otherwise take the larger.
+  let mem = if a.1 == 0 then 0
+    else if b.1 == 0 then 0
+    else if a.1 > b.1 then a.1
+    else b.1 in
+  -- Steps: same logic
+  let steps = if a.2 == 0 then 0
+    else if b.2 == 0 then 0
+    else if a.2 > b.2 then a.2
+    else b.2 in
+  -- Wall time
+  let wall = if a.3 == 0 then 0
+    else if b.3 == 0 then 0
+    else if a.3 > b.3 then a.3
+    else b.3 in
+  -- Path/host counts: take larger
+  let paths = if a.4 > b.4 then a.4 else b.4 in
+  let hosts = if a.5 > b.5 then a.5 else b.5 in
+  -- Structural flags: OR (either one being 1 is enough)
+  let threads = if a.6 == 1 then 1
+    else if b.6 == 1 then 1
+    else 0 in
+  let ffi = if a.7 == 1 then 1
+    else if b.7 == 1 then 1
+    else 0 in
+  let mmap = if a.8 == 1 then 1
+    else if b.8 == 1 then 1
+    else 0 in
+  let chans = if a.9 == 1 then 1
+    else if b.9 == 1 then 1
+    else 0 in
+  (effects, mem, steps, wall, paths, hosts, threads, ffi, mmap, chans)
+
+-- ============================================================
+-- Resource limit enforcement
+-- ============================================================
+
+-- Check if step count exceeds the capability limit.
+-- Returns 1 if within limits, 0 if exceeded.
+-- cap_max_steps == 0 means unlimited.
+let cap_check_steps cap current_steps : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(2)] =
+  let limit = cap.2 in
+  if limit == 0 then 1  -- unlimited
+  else if current_steps < limit then 1
+  else 0
+
+-- Check if memory usage exceeds the capability limit.
+-- Returns 1 if within limits, 0 if exceeded.
+-- cap_max_memory == 0 means unlimited.
+let cap_check_memory cap current_bytes : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(2)] =
+  let limit = cap.1 in
+  if limit == 0 then 1  -- unlimited
+  else if current_bytes < limit then 1
+  else 0
+
+-- Check if wall time exceeds the capability limit.
+-- Returns 1 if within limits, 0 if exceeded.
+-- cap_max_wall_time == 0 means unlimited.
+let cap_check_wall_time cap elapsed_ms : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(2)] =
+  let limit = cap.3 in
+  if limit == 0 then 1  -- unlimited
+  else if elapsed_ms < limit then 1
+  else 0
+
+-- Full pre-execution check: verify that an effect is permitted
+-- given the current resource usage.
+-- Returns 1 if allowed, 0 if denied.
+let cap_pre_check cap effect_tag steps_used memory_used wall_time_ms : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Int -> Int -> Int -> Int [cost: Const(8)] =
+  let effect_ok = cap_is_effect_allowed cap effect_tag in
+  if effect_ok == 0 then 0
+  else
+    let steps_ok = cap_check_steps cap steps_used in
+    if steps_ok == 0 then 0
+    else
+      let mem_ok = cap_check_memory cap memory_used in
+      if mem_ok == 0 then 0
+      else cap_check_wall_time cap wall_time_ms

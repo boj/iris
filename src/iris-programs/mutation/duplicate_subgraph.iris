@@ -1,0 +1,9 @@
+-- Duplicate a node and its immediate outgoing edges
+-- Creates a clone of the node, copies edges from original to clone's targets
+let duplicate_node program node_id =
+  let kind = graph_get_kind program node_id in
+  -- Create a new node of same kind
+  let s1 = graph_add_node_rt program kind in
+  let p1 = s1.0 in
+  let clone_id = s1.1 in
+  (p1, clone_id)

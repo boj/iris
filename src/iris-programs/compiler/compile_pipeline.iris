@@ -1,0 +1,76 @@
+-- Compile pipeline: chain all 10 compiler passes in sequence
+--
+-- External pass stubs (defined in sibling files; these satisfy the parser).
+let monomorphize x : Int -> Int [cost: Const(1)] = x
+let defunctionalize x : Int -> Int [cost: Const(1)] = x
+let match_lower x : Int -> Int [cost: Const(1)] = x
+let fold_lower x : Int -> Int [cost: Const(1)] = x
+let effect_lower x : Int -> Int [cost: Const(1)] = x
+let neural_lower x : Int -> Int [cost: Const(1)] = x
+let layout_assign x : Int -> Int [cost: Const(1)] = x
+let instruction_select x : Int -> Int [cost: Const(1)] = x
+let register_allocate x : Int -> Int [cost: Const(1)] = x
+let container_pack x : Int -> Int [cost: Const(1)] = x
+let dead_code_elim x : Int -> Int [cost: Const(1)] = x
+let constant_fold x : Int -> Int [cost: Const(1)] = x
+let strength_reduce x : Int -> Int [cost: Const(1)] = x
+let compile_to_bytecode x : Int -> Int [cost: Const(1)] = x
+--
+-- Mirrors iris-compiler/src/lib.rs compile() function.
+-- Each pass transforms the graph representation one step closer to
+-- executable CLCU containers.
+--
+-- Pipeline:
+--   SemanticGraph
+--     -> Pass 1:  Monomorphization (eliminate polymorphism)
+--     -> Pass 2:  Defunctionalization (eliminate higher-order functions)
+--     -> Pass 3:  Match Lowering (eliminate pattern matching)
+--     -> Pass 4:  Fold/Recursion Lowering (eliminate fold → loops)
+--     -> Pass 5:  Effect Lowering (eliminate effects → trampolines)
+--     -> Pass 6:  Neural Lowering (eliminate neural nodes → primitives)
+--     -> Pass 7:  Data Layout (assign memory layout to tuples/values)
+--     -> Pass 8:  Instruction Selection (choose CLCU micro-ops)
+--     -> Pass 9:  Register Allocation (assign ZMM registers)
+--     -> Pass 10: Container Packing (emit CLCU containers)
+
+-- Run the full 10-pass pipeline on a SemanticGraph.
+-- Returns a CLCU chain (list of containers) ready for execution.
+--
+-- Rejects graphs containing Ref nodes (cross-fragment references)
+-- since the CLCU execution model has no fragment resolution.
+let compile_pipeline graph : Int -> Int [cost: Linear(graph)] =
+  let has_refs = fold 0 (\found node ->
+    let kind = graph_get_kind graph node in
+    if kind == 11 then 1 else found)
+    (graph_nodes graph)
+  in
+  if has_refs == 1 then -1
+  else
+    let p1 = monomorphize graph in
+    let p2 = defunctionalize p1 in
+    let p3 = match_lower p2 in
+    let p4 = fold_lower p3 in
+    let p5 = effect_lower p4 in
+    let p6 = neural_lower p5 in
+    let p7 = layout_assign p6 in
+    let p8 = instruction_select p7 in
+    let p9 = register_allocate p8 in
+    let p10 = container_pack p9 in
+    p10
+
+-- Compile with optimization: run dead code elimination and constant
+-- folding before the main pipeline.
+let compile_optimized graph : Int -> Int [cost: Linear(graph)] =
+  let opt1 = dead_code_elim graph in
+  let opt2 = constant_fold opt1 in
+  let opt3 = strength_reduce opt2 in
+  compile_pipeline opt3
+
+-- Compile to bytecode (for bootstrap VM, not CLCU).
+-- Simpler pipeline: skip passes 7-10, emit bytecode directly.
+let compile_to_bytecode_pipeline graph : Int -> Int [cost: Linear(graph)] =
+  let p1 = monomorphize graph in
+  let p2 = defunctionalize p1 in
+  let p3 = match_lower p2 in
+  let p4 = fold_lower p3 in
+  compile_to_bytecode p4

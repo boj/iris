@@ -1,0 +1,45 @@
+-- Map operations built on the map_* primitives.
+--
+-- Maps are Value::State (BTreeMap<String, Value>) under the hood.
+-- These functions provide a higher-level API for key-value storage.
+
+-- Create an empty map
+let empty_map : Int [cost: Const(1)] = state_empty
+
+-- Insert a key-value pair
+let insert m k v : Int -> Int -> Int -> Int [cost: Const(1)] = map_insert m k v
+
+-- Get value by key (Unit if missing)
+let get m k : Int -> Int -> Int [cost: Const(1)] = map_get m k
+
+-- Remove a key
+let remove m k : Int -> Int -> Int [cost: Const(1)] = map_remove m k
+
+-- Get all keys as a list of strings
+let keys m : Int -> Int [cost: Const(1)] = map_keys m
+
+-- Get all values as a list
+let values m : Int -> Int [cost: Const(1)] = map_values m
+
+-- Number of entries
+let size m : Int -> Int [cost: Const(1)] = map_size m
+
+-- Check if a key exists (returns 1 or 0)
+let has_key m k : Int -> Int -> Int [cost: Const(2)] =
+  let v = map_get m k in
+  if v == () then 0 else 1
+
+-- Insert multiple key-value pairs from a list of (key, value) tuples
+-- Each element should be a Tuple(String, Value)
+let insert_all m pairs : Int -> Int -> Int [cost: Linear(pairs)] =
+  fold m (\acc pair -> map_insert acc (pair.0) (pair.1)) pairs
+
+-- Map over values: apply a function to each value, keeping keys
+let map_over_values m f : Int -> (Int -> Int) -> Int [cost: Linear(m)] =
+  let ks = map_keys m in
+  fold (state_empty) (\acc k -> map_insert acc k (f (map_get m k))) ks
+
+-- Merge two maps (second overwrites first on key conflict)
+let merge m1 m2 : Int -> Int -> Int [cost: Linear(m2)] =
+  let ks = map_keys m2 in
+  fold m1 (\acc k -> map_insert acc k (map_get m2 k)) ks

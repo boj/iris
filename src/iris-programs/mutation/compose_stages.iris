@@ -1,0 +1,25 @@
+-- Compose a new Fold stage around the current program root
+-- Creates: Fold(base_lit, step_op, old_root)
+let compose_fold program base_value step_opcode =
+  let old_root = graph_get_root program in
+  -- Create base literal
+  let s1 = graph_add_node_rt program 5 in
+  let p1 = s1.0 in
+  let base_id = s1.1 in
+  let p2_t = graph_set_lit_value p1 base_id 0 base_value in
+  let p2 = p2_t.0 in
+  -- Create step Prim node
+  let s2 = graph_add_node_rt p2 0 in
+  let p3 = s2.0 in
+  let step_id = s2.1 in
+  let p4_t = graph_set_prim_op p3 step_id step_opcode in
+  let p4 = p4_t.0 in
+  -- Create Fold node (kind=8)
+  let s3 = graph_add_node_rt p4 8 in
+  let p5 = s3.0 in
+  let fold_id = s3.1 in
+  -- Wire: fold(base, step, old_root)
+  let p6 = graph_connect p5 fold_id base_id 0 in
+  let p7 = graph_connect p6 fold_id step_id 1 in
+  let p8 = graph_connect p7 fold_id old_root 2 in
+  graph_set_root p8 fold_id

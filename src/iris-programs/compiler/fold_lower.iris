@@ -1,0 +1,121 @@
+-- Fold/LetRec lowering: convert Fold and LetRec nodes to loop structures (Compiler Pass 4)
+--
+-- Fold (kind 8)   -> LoopHeader + LoopBody + LoopExit + LoopBackedge
+-- LetRec (kind 16) with Structural/Sized decrease -> same loop pattern
+-- Unfold (kind 9)  -> passthrough Let (anamorphism handled by loop)
+--
+-- Loop structure: 4 new Prim nodes with opcodes encoding loop semantics:
+--   LoopHeader (Prim VMOV=0x0F) — entry point, receives initial accumulator
+--   LoopBody   (Prim VMOV=0x0F) — loop body computation
+--   LoopExit   (Prim VMOV=0x0F) — exit with final result (reuses Fold/LetRec id)
+--   LoopBackedge (Prim NOP=0x00) — back-edge for loop iteration
+--
+-- Wiring:
+--   Header -> Body (continuation)
+--   Body -> Backedge (continuation)
+--   Backedge -> Header (continuation, loop-back)
+--   Header -> Exit (continuation, exit condition)
+--   Original Fold/LetRec argument edges -> LoopHeader
+--
+-- Unfold -> Let (passthrough, kind 3)
+
+-- Count Fold nodes
+let count_folds program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 8 then acc + 1 else acc)
+    nodes
+
+-- Count LetRec nodes
+let count_letrecs program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 16 then acc + 1 else acc)
+    nodes
+
+-- Count Unfold nodes
+let count_unfolds program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 9 then acc + 1 else acc)
+    nodes
+
+-- Lower a single Fold or LetRec node into a loop quad
+-- node_id: the Fold or LetRec node to transform
+-- Returns transformed graph
+let lower_fold_node program node_id : Int -> Int -> Int [cost: Const(12)] =
+  -- Create LoopHeader (Prim VMOV)
+  let h = graph_add_node_rt program 0 in
+  let g1 = h.0 in
+  let header_id = h.1 in
+  let g2 = graph_set_prim_op g1 header_id 15 in
+  let g3 = g2.0 in
+  let header_new = g2.1 in
+  -- Create LoopBody (Prim VMOV)
+  let b = graph_add_node_rt g3 0 in
+  let g4 = b.0 in
+  let body_id = b.1 in
+  let g5 = graph_set_prim_op g4 body_id 15 in
+  let g6 = g5.0 in
+  let body_new = g5.1 in
+  -- Create LoopBackedge (Prim NOP)
+  let be = graph_add_node_rt g6 0 in
+  let g7 = be.0 in
+  let backedge_id = be.1 in
+  -- NOP opcode is 0, which is already the default for new Prim nodes
+  -- Replace the original Fold/LetRec node with LoopExit (Prim VMOV)
+  let g8 = graph_set_prim_op g7 node_id 15 in
+  let g9 = g8.0 in
+  let exit_id = g8.1 in
+  -- Wire loop structure
+  -- Body -> Header (continuation)
+  let g10 = graph_connect g9 body_new header_new 0 in
+  -- Backedge -> Body (continuation)
+  let g11 = graph_connect g10 backedge_id body_new 0 in
+  -- Header -> Backedge (continuation)
+  let g12 = graph_connect g11 header_new backedge_id 0 in
+  -- Exit -> Header (continuation, port 1 for exit condition)
+  let g13 = graph_connect g12 exit_id header_new 1 in
+  -- Carry original argument edges to header
+  let children = graph_outgoing program node_id in
+  fold g13
+    (\g port_idx ->
+      if port_idx < list_len children then
+        graph_connect g header_new (list_nth children port_idx) port_idx
+      else g)
+    (list_range 0 (list_len children))
+
+-- Lower all folds, letrecs, and unfolds
+-- Returns the transformed program
+let lower_folds program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let folds = count_folds program in
+  let letrecs = count_letrecs program in
+  let unfolds = count_unfolds program in
+  if folds + letrecs + unfolds == 0 then program
+  else
+    -- Phase 1: Lower Fold and LetRec nodes to loop quads
+    let g1 = fold program
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 8 then lower_fold_node g nid
+        else if kind == 16 then lower_fold_node g nid
+        else g)
+      nodes in
+    -- Phase 2: Convert Unfold nodes to Let (passthrough)
+    -- Unfold becomes a Let node (kind 3) which is just pass-through
+    fold g1
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 9 then
+          -- Replace Unfold with Prim VMOV (passthrough)
+          let result = graph_set_prim_op g nid 15 in
+          result.0
+        else g)
+      nodes

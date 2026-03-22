@@ -1,0 +1,6 @@
+-- Clamp a value to [lo, hi] range with bounds contracts
+let clamp x lo hi : Int -> Int -> Int -> Int
+  requires lo <= hi
+  ensures result >= lo
+  ensures result <= hi
+  = if x < lo then lo else if x > hi then hi else x

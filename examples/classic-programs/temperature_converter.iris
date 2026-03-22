@@ -1,0 +1,45 @@
+-- Temperature Converter
+-- Convert between Celsius, Fahrenheit, and Kelvin.
+
+-- Celsius to Fahrenheit: F = C * 9/5 + 32
+let c_to_f c : Float -> Float [cost: Const(3)] =
+  c * 9.0 / 5.0 + 32.0
+
+-- Fahrenheit to Celsius: C = (F - 32) * 5/9
+let f_to_c f : Float -> Float [cost: Const(3)] =
+  (f - 32.0) * 5.0 / 9.0
+
+-- Celsius to Kelvin: K = C + 273.15
+let c_to_k c : Float -> Float [cost: Const(1)] =
+  c + 273.15
+
+-- Kelvin to Celsius: C = K - 273.15
+let k_to_c k : Float -> Float [cost: Const(1)] =
+  k - 273.15
+
+-- Fahrenheit to Kelvin (via Celsius)
+let f_to_k f : Float -> Float [cost: Const(4)] =
+  c_to_k (f_to_c f)
+
+-- Kelvin to Fahrenheit (via Celsius)
+let k_to_f k : Float -> Float [cost: Const(4)] =
+  c_to_f (k_to_c k)
+
+-- Convert a table of Celsius values to all three scales.
+-- Returns (celsius, fahrenheit, kelvin) tuples.
+let conversion_table celsius_values : Tuple -> Tuple [cost: Linear(celsius_values)] =
+  map (\c -> (c, c_to_f c, c_to_k c)) celsius_values
+
+-- Notable temperatures
+let water_freezing_c x : Int -> Float [cost: Const(1)] = 0.0
+let water_boiling_c x : Int -> Float [cost: Const(1)] = 100.0
+let absolute_zero_k x : Int -> Float [cost: Const(1)] = 0.0
+let body_temp_c x : Int -> Float [cost: Const(1)] = 37.0
+
+-- Test
+let test_temp x : Int -> Tuple =
+  let boil_f = c_to_f 100.0 in    -- 212.0
+  let freeze_f = c_to_f 0.0 in    -- 32.0
+  let body_f = c_to_f 37.0 in     -- 98.6
+  let abs_c = k_to_c 0.0 in       -- -273.15
+  (boil_f, freeze_f, body_f, abs_c)

@@ -1,0 +1,16 @@
+-- Compare two programs structurally
+-- Checks whether two programs have the same node count and the same
+-- root node kind. Returns 1 if equivalent, 0 otherwise.
+-- Uses multiplication as logical AND for 0/1 values.
+let compare_programs prog_a prog_b : Int -> Int -> Int [cost: Linear(prog_a)] =
+  let nodes_a = graph_nodes prog_a in
+  let nodes_b = graph_nodes prog_b in
+  let count_a = fold 0 (\acc x -> acc + 1) nodes_a in
+  let count_b = fold 0 (\acc x -> acc + 1) nodes_b in
+  let root_a = graph_get_root prog_a in
+  let root_b = graph_get_root prog_b in
+  let kind_a = graph_get_kind prog_a root_a in
+  let kind_b = graph_get_kind prog_b root_b in
+  let count_match = bool_to_int (count_a == count_b) in
+  let kind_match = bool_to_int (kind_a == kind_b) in
+  count_match * kind_match

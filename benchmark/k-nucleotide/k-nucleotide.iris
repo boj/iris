@@ -1,0 +1,59 @@
+-- K-Nucleotide (Benchmarks Game)
+-- Count DNA subsequence frequencies in a given DNA string.
+--
+-- Given a DNA string and a substring length k, count how many times
+-- each k-mer (substring of length k) appears. Return frequencies as
+-- a State (BTreeMap) mapping k-mer strings to their counts.
+--
+-- Uses: str_slice, str_len, fold, state_empty, map_insert, map_get, map_size
+--
+-- Note: map_get returns Unit for missing keys. To distinguish Unit from Int,
+-- we check map_size before and after inserting to detect new vs existing keys.
+
+-- Count all k-mers of length k in a DNA string.
+-- Returns a State (map) of k-mer -> count.
+let count_kmers dna k =
+  let n = str_len dna in
+  let num_kmers = n - k + 1 in
+  if num_kmers < 1 then state_empty
+  else
+    fold state_empty (\counts i ->
+      let kmer = str_slice dna i (i + k) in
+      let old_size = map_size counts in
+      let trial = map_insert counts kmer 1 in
+      let new_size = map_size trial in
+      if new_size > old_size then
+        trial
+      else
+        let cur = map_get counts kmer in
+        map_insert counts kmer (cur + 1)
+    ) (list_range 0 num_kmers)
+
+-- Get the count of a specific k-mer in the frequency table.
+-- Returns 0 if the k-mer is not found (uses map_size trick).
+let get_count freqs kmer =
+  let old_size = map_size freqs in
+  let trial = map_insert freqs kmer 0 in
+  let new_size = map_size trial in
+  if new_size > old_size then 0
+  else map_get freqs kmer
+
+-- Count k-mers and return the number of distinct k-mers found.
+let count_distinct dna k =
+  let freqs = count_kmers dna k in
+  map_size freqs
+
+-- Main benchmark: count 1-mers and 2-mers, return key results.
+-- Returns (num_distinct_1mers, num_distinct_2mers, count_of_GG)
+let knucleotide dna =
+  let freq1 = count_kmers dna 1 in
+  let freq2 = count_kmers dna 2 in
+  let distinct1 = map_size freq1 in
+  let distinct2 = map_size freq2 in
+  let gg_count = get_count freq2 "GG" in
+  (distinct1, distinct2, gg_count)
+
+-- Benchmark entry: count k-mers of specified length.
+-- Returns the number of distinct k-mers.
+let bench dna k =
+  count_distinct dna k

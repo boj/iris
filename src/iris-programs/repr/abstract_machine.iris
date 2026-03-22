@@ -1,0 +1,74 @@
+-- Abstract machine state and capability detection
+--
+-- The IRIS Abstract Machine defines the bytecode instruction set.
+-- Programs compile from SemanticGraph to Bytecode, which executes on:
+--   - Rust VM (portable)
+--   - JIT (x86-64 native)
+--   - CLCU interpreter (AVX-512 optimized)
+--
+-- This module provides the machine description and capability queries.
+
+-- Abstract machine version
+let machine_version : Int [cost: Const(1)] =
+  1
+
+-- Maximum operand stack depth
+let max_stack_depth : Int [cost: Const(1)] =
+  1024
+
+-- Maximum number of constants in a bytecode program
+let max_constants : Int [cost: Const(1)] =
+  65535
+
+-- Check if a program fits within the abstract machine's constraints
+-- node_count: total nodes in the program
+-- stack_estimate: estimated max stack depth during execution
+-- const_count: number of constant values used
+-- Returns 1 if program fits, 0 if exceeds limits
+let fits_machine node_count stack_estimate const_count : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let stack_ok = bool_to_int (stack_estimate <= 1024) in
+  let const_ok = bool_to_int (const_count <= 65535) in
+  stack_ok * const_ok
+
+-- Estimate stack depth for a program
+-- Simple heuristic: max(node_count / 2, fold_depth * 3)
+-- fold_depth: nesting depth of fold nodes
+let estimate_stack_depth program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  let fold_count = fold 0 (\a k -> if k == 8 then a + 1 else a) kinds in
+  max (node_count / 2) (fold_count * 3)
+
+-- Estimate constant count for a program
+-- Count Lit nodes (kind 5) as each requires a constant slot
+let estimate_constants program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  fold 0
+    (\acc k -> if k == 5 then acc + 1 else acc)
+    kinds
+
+-- Determine the best execution backend for a program
+-- 0 = Rust VM (portable), 1 = JIT (if available), 2 = CLCU (AVX-512)
+-- Simple heuristic: large programs (>100 nodes) prefer JIT,
+-- neural-heavy programs prefer CLCU
+let select_backend node_count neural_count has_jit has_avx512 : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  if neural_count > 0 then
+    if has_avx512 == 1 then 2 else if has_jit == 1 then 1 else 0
+  else if node_count > 100 then
+    if has_jit == 1 then 1 else 0
+  else 0
+
+-- Full machine check: validate a program against the abstract machine
+-- Returns (fits, stack_estimate, const_count, backend)
+let machine_check program has_jit has_avx512 : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  let stack = estimate_stack_depth program in
+  let consts = estimate_constants program in
+  let fits = fits_machine node_count stack consts in
+  let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  let neural_count = fold 0 (\a k -> if k == 7 then a + 1 else a) kinds in
+  let backend = select_backend node_count neural_count has_jit has_avx512 in
+  (fits, stack, consts, backend)

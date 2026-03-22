@@ -1,0 +1,164 @@
+-- MAP-Elites archive: maintain a 2D grid of cells, each holding the best
+-- individual for a behavior niche (complexity x output diversity).
+--
+-- Grid layout:
+--   Complexity bins  (0-7 nodes -> 0, 8-31 -> 1, 32-127 -> 2, 128+ -> 3)
+--   Diversity bins   (1 distinct -> 0, 2-3 -> 1, 4+ -> 2)
+--   Total: 4 x 3 = 12 cells
+--
+-- Archive state is a flat tuple of 12 entries, each:
+--   (program, fitness, occupied_flag)
+--
+-- Update rule: an individual replaces the current occupant of its bin
+-- only if its total fitness is higher.
+
+-- Classify node count into a complexity bin (0-3)
+let complexity_bin node_count : Int -> Int [cost: Const(3)] =
+  if node_count <= 7 then 0
+  else if node_count <= 31 then 1
+  else if node_count <= 127 then 2
+  else 3
+
+-- Classify distinct-value count into a diversity bin (0-2)
+let diversity_bin distinct_count : Int -> Int [cost: Const(2)] =
+  if distinct_count <= 1 then 0
+  else if distinct_count <= 3 then 1
+  else 2
+
+-- Compute a flat grid index from complexity and diversity bins
+-- index = complexity_bin * 3 + diversity_bin  (range: 0..11)
+let grid_index node_count distinct_count : Int -> Int -> Int [cost: Const(5)] =
+  let cb = complexity_bin node_count in
+  let db = diversity_bin distinct_count in
+  cb * 3 + db
+
+-- Decide whether a candidate should replace the current occupant
+-- Returns 1 if candidate_fitness > current_fitness, 0 otherwise
+let should_replace candidate_fitness current_fitness : Int -> Int -> Int [cost: Const(1)] =
+  if candidate_fitness > current_fitness then 1 else 0
+
+-- Sum a fitness vector (tuple of ints) to get total fitness
+let total_fitness fitnesses : Int -> Int [cost: Linear(fitnesses)] =
+  fold 0 (\acc f -> acc + f) fitnesses
+
+-- Count distinct values in a behavior vector (for diversity binning)
+-- Uses a simple O(n^2) approach: for each element, check if it appeared earlier
+let count_distinct behaviors : Int -> Int [cost: Unknown] =
+  fold (0, ())
+    (\state elem ->
+      let count = state.0 in
+      let seen = state.1 in
+      -- Check if elem was seen before by scanning seen list
+      let is_dup = fold 0
+        (\found prev -> if prev == elem then 1 else found)
+        seen in
+      if is_dup == 1 then (count, state.1)
+      else (count + 1, elem))
+    behaviors
+
+-- =========================================================================
+-- Archive state management
+-- =========================================================================
+
+-- Initialize an empty archive: 12 cells, each (program, fitness, occupied_flag)
+-- program=0 (no program), fitness=0, occupied=0
+let empty_archive : Int [cost: Const(1)] =
+  ((0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0),
+   (0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0),
+   (0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0))
+
+-- Read the cell at index (0..11)
+-- archive: flat tuple of 12 (program, fitness, occupied) triples
+-- Returns: (program, fitness, occupied_flag)
+let read_cell archive idx : Int -> Int -> Int [cost: Const(12)] =
+  if idx == 0 then archive.0
+  else if idx == 1 then archive.1
+  else if idx == 2 then archive.2
+  else if idx == 3 then archive.3
+  else if idx == 4 then archive.4
+  else if idx == 5 then archive.5
+  else if idx == 6 then archive.6
+  else if idx == 7 then archive.7
+  else if idx == 8 then archive.8
+  else if idx == 9 then archive.9
+  else if idx == 10 then archive.10
+  else archive.11
+
+-- Update a cell in the archive (returns new archive tuple)
+-- new_val is a (program, fitness, occupied_flag) triple
+let update_cell archive idx new_val : Int -> Int -> Int -> Int [cost: Const(12)] =
+  (if idx == 0 then new_val else archive.0,
+   if idx == 1 then new_val else archive.1,
+   if idx == 2 then new_val else archive.2,
+   if idx == 3 then new_val else archive.3,
+   if idx == 4 then new_val else archive.4,
+   if idx == 5 then new_val else archive.5,
+   if idx == 6 then new_val else archive.6,
+   if idx == 7 then new_val else archive.7,
+   if idx == 8 then new_val else archive.8,
+   if idx == 9 then new_val else archive.9,
+   if idx == 10 then new_val else archive.10,
+   if idx == 11 then new_val else archive.11)
+
+-- Try to insert an individual into the archive
+-- Stores (program, fitness, 1) in the cell if candidate is better or cell is empty
+-- Returns: (updated_archive, was_inserted)
+let try_insert archive node_count distinct_count program fitness : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(15)] =
+  let idx = grid_index node_count distinct_count in
+  let cell = read_cell archive idx in
+  let current_occupied = cell.2 in
+  let current_fitness = cell.1 in
+  if current_occupied == 0 then
+    let new_archive = update_cell archive idx (program, fitness, 1) in
+    (new_archive, 1)
+  else if fitness > current_fitness then
+    let new_archive = update_cell archive idx (program, fitness, 1) in
+    (new_archive, 1)
+  else
+    (archive, 0)
+
+-- Count occupied cells in the archive (check occupied_flag in each cell)
+let count_occupied archive : Int -> Int [cost: Const(12)] =
+  let c0 = (archive.0).2 in
+  let c1 = (archive.1).2 in
+  let c2 = (archive.2).2 in
+  let c3 = (archive.3).2 in
+  let c4 = (archive.4).2 in
+  let c5 = (archive.5).2 in
+  let c6 = (archive.6).2 in
+  let c7 = (archive.7).2 in
+  let c8 = (archive.8).2 in
+  let c9 = (archive.9).2 in
+  let c10 = (archive.10).2 in
+  let c11 = (archive.11).2 in
+  c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11
+
+-- Compute total fitness across all occupied cells (sum .1 from each triple)
+let archive_total_fitness archive : Int -> Int [cost: Const(12)] =
+  (archive.0).1 + (archive.1).1 + (archive.2).1 + (archive.3).1 +
+  (archive.4).1 + (archive.5).1 + (archive.6).1 + (archive.7).1 +
+  (archive.8).1 + (archive.9).1 + (archive.10).1 + (archive.11).1
+
+-- Archive quality metric: coverage * mean_fitness
+-- coverage = occupied_cells / 12 (scaled by 100)
+-- Returns: quality score (0-10000)
+let archive_quality archive : Int -> Int [cost: Const(15)] =
+  let occupied = count_occupied archive in
+  let coverage = (occupied * 100) / 12 in
+  let total = archive_total_fitness archive in
+  let mean_fit = if occupied == 0 then 0 else total / occupied in
+  (coverage * mean_fit) / 100
+
+-- Full archive lifecycle: initialize, insert, read, and score
+-- Exercises the complete archive API as integration entry point
+let run_archive program node_count distinct_count fitness : Int -> Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Const(30)] =
+  let archive = empty_archive in
+  let dist = count_distinct (fitness, fitness, 0) in
+  let total = total_fitness (fitness, 0, 0) in
+  let should = should_replace fitness 0 in
+  let result = try_insert archive program node_count distinct_count fitness in
+  let updated = result.0 in
+  let idx = grid_index node_count distinct_count in
+  let cell = read_cell updated idx in
+  let quality = archive_quality updated in
+  (updated, cell, quality, result.1)

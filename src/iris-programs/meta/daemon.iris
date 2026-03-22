@@ -1,0 +1,177 @@
+-- Self-improving daemon: continuous cycle loop with stagnation and
+-- convergence detection.
+--
+-- The daemon runs improvement cycles in a loop, tracking:
+--   - Stagnation: no improvement for N consecutive cycles
+--   - Convergence: improvement rate approaching zero (local maximum)
+--   - Cycle timing: how long each cycle takes
+--
+-- When stagnation is detected, the daemon switches from improvement
+-- to exploration mode. When convergence is detected, it resets by
+-- exploring new problems or increasing mutation pressure.
+--
+-- Phase Transition 1: Tool -> Organism (autopoiesis)
+-- The daemon maintains itself and produces its own components.
+
+-- =========================================================================
+-- Daemon state
+-- =========================================================================
+
+-- Stagnation detection parameters
+let stagnation_threshold : Int [cost: Const(1)] = 10
+let convergence_threshold : Int [cost: Const(1)] = 5
+let max_explore_attempts : Int [cost: Const(1)] = 3
+
+-- Check if the daemon is stagnating
+-- stag_count: consecutive cycles without improvement
+-- Returns: 1 if stagnating, 0 if not
+let is_stagnating stag_count : Int -> Int [cost: Const(1)] =
+  if stag_count >= stagnation_threshold then 1 else 0
+
+-- Check if the daemon has converged (improvement rate near zero)
+-- recent_improvements: list of improvement deltas from last N cycles
+-- Returns: 1 if converged (all deltas <= threshold), 0 otherwise
+let is_converged recent_improvements : Int -> Int [cost: Linear(recent_improvements)] =
+  let non_improving = fold 0
+    (\acc delta ->
+      if delta <= convergence_threshold then acc + 1 else acc)
+    recent_improvements in
+  let total = fold 0 (\acc x -> acc + 1) recent_improvements in
+  if total == 0 then 0
+  else if non_improving == total then 1 else 0
+
+-- =========================================================================
+-- Cycle mode selection
+-- =========================================================================
+
+-- Decide what to do this cycle
+-- mode: 0=improve, 1=explore, 2=reset
+let decide_mode stag_count converged explore_count : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if converged == 1 then
+    if explore_count >= max_explore_attempts then 2
+    else 1
+  else if is_stagnating stag_count == 1 then 1
+  else 0
+
+-- =========================================================================
+-- Cycle execution
+-- =========================================================================
+
+-- Run an improvement cycle
+-- prog: current program
+-- test_cases: validation set
+-- max_iters: evolution budget per cycle
+-- Returns: (new_prog, improvement_delta, score)
+let run_improve_cycle prog test_cases max_iters : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let count = fold 0 (\acc tc -> acc + 1) test_cases in
+  let base_correct = fold 0
+    (\correct tc ->
+      let result = graph_eval prog tc.0 in
+      if result == tc.1 then correct + 1 else correct)
+    test_cases in
+  let base_score = if count == 0 then 0 else (base_correct * 100) / count in
+  let evolved = fold (prog, base_score)
+    (\state i ->
+      let cur = state.0 in
+      let cur_score = state.1 in
+      let rnd = random 0 15 in
+      let cur_root = graph_get_root cur in
+      let mutant_result = graph_set_prim_op cur cur_root rnd in
+      let mutant = mutant_result.0 in
+      let new_correct = fold 0
+        (\c tc ->
+          let result = graph_eval mutant tc.0 in
+          if result == tc.1 then c + 1 else c)
+        test_cases in
+      let new_score = if count == 0 then 0 else (new_correct * 100) / count in
+      if new_score > cur_score then (mutant, new_score)
+      else (cur, cur_score))
+    max_iters in
+  let final_score = evolved.1 in
+  let delta = final_score - base_score in
+  (evolved.0, delta, final_score)
+
+-- Run an exploration cycle (try to solve a new problem)
+-- Returns: (program, solved_flag, score)
+let run_explore_cycle seed_program test_cases max_iters : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let result = run_improve_cycle seed_program test_cases max_iters in
+  let score = result.2 in
+  let solved = if score >= 100 then 1 else 0 in
+  (result.0, solved, score)
+
+-- Run a reset: increase mutation aggressiveness and start fresh
+-- Returns: (fresh_program, delta, score)
+let run_reset seed_program test_cases max_iters : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  -- Use more aggressive mutations (random opcodes across wider range)
+  let count = fold 0 (\acc tc -> acc + 1) test_cases in
+  let evolved = fold (seed_program, 0)
+    (\state i ->
+      let rnd = random 0 30 in
+      let reset_root = graph_get_root (state.0) in
+      let mutant_result = graph_set_prim_op (state.0) reset_root rnd in
+      let mutant = mutant_result.0 in
+      let correct = fold 0
+        (\c tc ->
+          let result = graph_eval mutant tc.0 in
+          if result == tc.1 then c + 1 else c)
+        test_cases in
+      let score = if count == 0 then 0 else (correct * 100) / count in
+      if score > state.1 then (mutant, score)
+      else state)
+    max_iters in
+  (evolved.0, evolved.1, evolved.1)
+
+-- =========================================================================
+-- Main daemon loop
+-- =========================================================================
+
+-- Run the daemon for N cycles
+-- state: (program, stag_count, explore_count, total_improvements, best_score)
+-- test_cases: validation set
+-- max_cycles: number of cycles to run
+-- max_iters: evolution budget per cycle
+-- Returns: (final_program, total_improvements, final_score, stag_count, cycles_run)
+let daemon_loop program test_cases max_cycles max_iters : Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Unknown] =
+  let init_state = (program, 0, 0, 0, 0) in
+  let final_state = fold init_state
+    (\state cycle ->
+      let prog = state.0 in
+      let stag = state.1 in
+      let explores = state.2 in
+      let total_imps = state.3 in
+      let best_score = state.4 in
+      -- Track recent improvements for convergence detection
+      let converged = if stag > 5 then 1 else 0 in
+      let mode = decide_mode stag converged explores in
+      if mode == 0 then
+        -- Improve mode
+        let result = run_improve_cycle prog test_cases max_iters in
+        let new_prog = result.0 in
+        let delta = result.1 in
+        let score = result.2 in
+        let new_stag = if delta > 0 then 0 else stag + 1 in
+        let new_imps = if delta > 0 then total_imps + 1 else total_imps in
+        let new_best = if score > best_score then score else best_score in
+        (new_prog, new_stag, 0, new_imps, new_best)
+      else if mode == 1 then
+        -- Explore mode
+        let seed = graph_new in
+        let result = run_explore_cycle seed test_cases max_iters in
+        let new_prog = if result.1 == 1 then result.0 else prog in
+        let new_best = if result.2 > best_score then result.2 else best_score in
+        (new_prog, 0, explores + 1, total_imps, new_best)
+      else
+        -- Reset mode
+        let seed = graph_new in
+        let result = run_reset seed test_cases max_iters in
+        let new_best = if result.2 > best_score then result.2 else best_score in
+        (result.0, 0, 0, total_imps, new_best))
+    max_cycles in
+  (final_state.0, final_state.3, final_state.4, final_state.1, max_cycles)
+
+-- Check if daemon should continue running
+-- Returns: 1 if should continue, 0 if solved or budget exhausted
+let should_continue score cycles_remaining : Int -> Int -> Int [cost: Const(2)] =
+  if score >= 100 then 0
+  else if cycles_remaining <= 0 then 0
+  else 1

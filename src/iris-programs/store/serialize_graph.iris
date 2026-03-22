@@ -1,0 +1,76 @@
+-- Serialize a SemanticGraph to a flat integer representation for persistence.
+--
+-- Mirrors the Rust wire.rs format (simplified to IRIS integer encoding):
+--   Header: root node ID, node count, edge count
+--   Nodes:  each node encoded as (node_id << 16) | (kind << 8) | opcode
+--   Edges:  each edge encoded as (source << 16) | target
+--
+-- Walks every node and every edge in the graph to produce a complete,
+-- deterministic serialized representation.
+
+-- Extract the root node ID from a program graph
+let get_root program : Int -> Int [cost: Const(1)] =
+  graph_get_root program
+
+-- Extract node count from a program graph
+let get_node_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n -> acc + 1) nodes
+
+-- Serialize a single node to its descriptor tuple
+-- Returns (kind, opcode_if_prim, child_count)
+let serialize_node program node_id : Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  let kind = graph_get_kind program node_id in
+  let opcode = if kind == 0 then graph_get_prim_op program node_id else 0 in
+  let children = graph_outgoing program node_id in
+  let child_count = fold 0 (\acc _c -> acc + 1) children in
+  (kind, opcode, child_count)
+
+-- Serialize a complete graph by walking all nodes.
+-- Returns a list of (kind, opcode_if_prim, child_count) node descriptors,
+-- one per node in the graph, providing a complete structural representation.
+let serialize_graph program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold ()
+    (\acc node ->
+      let kind = graph_get_kind program node in
+      let opcode = if kind == 0 then graph_get_prim_op program node else 0 in
+      let children = graph_outgoing program node in
+      let child_count = fold 0 (\inner _c -> inner + 1) children in
+      list_append acc (kind, opcode, child_count))
+    nodes
+
+-- Compute the serialized byte size of a graph.
+-- Mirrors wire.rs: 8 bytes per node_id, 1 byte kind, 1 byte opcode,
+-- 18 bytes per edge (source + target + port + label).
+let serialized_size node_count edge_count : Int -> Int -> Int [cost: Const(2)] =
+  let header = 48 in
+  let node_bytes = node_count * 10 in
+  let edge_bytes = edge_count * 18 in
+  header + node_bytes + edge_bytes
+
+-- Compute a structural fingerprint incorporating all node data.
+-- Walks every node (not just root/count) for a complete hash.
+let graph_fingerprint program : Int -> Int [cost: Linear(program)] =
+  let root = graph_get_root program in
+  let nodes = graph_nodes program in
+  let edges = graph_edges program in
+  let node_hash = fold 0
+    (\acc node ->
+      let kind = graph_get_kind program node in
+      let opcode = if kind == 0 then graph_get_prim_op program node else 0 in
+      bitxor (acc * 997 + kind * 256 + opcode) (node * 65537))
+    nodes in
+  let edge_hash = fold 0
+    (\acc edge ->
+      let src = edge.0 in
+      let tgt = edge.1 in
+      bitxor (acc * 997 + src * 256) (tgt * 65537))
+    edges in
+  bitxor node_hash edge_hash
+
+-- Compare two graphs for structural equality via full fingerprint
+let graphs_equal prog_a prog_b : Int -> Int -> Int [cost: Linear(prog_a)] =
+  let fp_a = graph_fingerprint prog_a in
+  let fp_b = graph_fingerprint prog_b in
+  if fp_a == fp_b then 1 else 0

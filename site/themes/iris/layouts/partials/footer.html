@@ -1,0 +1,28 @@
+<footer class="site-footer">
+  <div class="footer-container">
+    <div class="footer-col">
+      <h4>Get Help</h4>
+      <ul>
+        <li><a href="{{ "/learn/" | relURL }}">Documentation</a></li>
+        <li><a href="{{ "/learn/get-started/" | relURL }}">Getting Started</a></li>
+        <li><a href="{{ "/learn/stdlib/" | relURL }}">Standard Library</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>Policies</h4>
+      <ul>
+        <li><a href="{{ .Site.Params.repo }}">Source Code</a></li>
+        <li><a href="{{ .Site.Params.repo }}/blob/main/LICENSE">License ({{ .Site.Params.license }})</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>Social</h4>
+      <ul>
+        <li><a href="{{ .Site.Params.repo }}">GitHub</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <p>Maintained by the IRIS contributors.</p>
+  </div>
+</footer>

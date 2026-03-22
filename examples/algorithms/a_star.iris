@@ -1,0 +1,121 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Inline helper: fold with early termination via (continue?, acc) pairs.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    if state.0 then step_fn state.1 elem else state
+  ) xs in
+  result.1
+
+-- A* Pathfinding Algorithm
+-- Find the shortest path in a weighted grid.
+-- Grid: 0 = passable, 1 = wall. Movement cost = 1 per step.
+-- Heuristic: Manhattan distance.
+--
+-- FIXME: A* requires a priority queue with decrease-key, which is expensive
+-- with immutable tuples. We use a sorted open list which is O(n) per insert.
+-- A proper implementation would need a mutable heap.
+
+-- Manhattan distance heuristic.
+let manhattan r1 c1 r2 c2 : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  abs (r1 - r2) + abs (c1 - c2)
+
+-- Encode (row, col) as single int for lookup.
+let encode r c cols : Int -> Int -> Int -> Int [cost: Const(1)] = r * cols + c
+
+-- Decode position to (row, col).
+let decode pos cols : Int -> Int -> Tuple [cost: Const(2)] = (pos / cols, pos % cols)
+
+-- Check if position is valid and passable.
+let is_passable grid rows cols r c : Tuple -> Int -> Int -> Int -> Int -> Bool [cost: Const(3)] =
+  r >= 0 && r < rows && c >= 0 && c < cols && list_nth grid (r * cols + c) == 0
+
+-- Get 4-directional neighbors of a position.
+let neighbors r c rows cols grid : Int -> Int -> Int -> Int -> Tuple -> Tuple [cost: Const(12)] =
+  let dirs = ((-1, 0), (1, 0), (0, -1), (0, 1)) in
+  fold () (\acc dir ->
+    let nr = r + dir.0 in
+    let nc = c + dir.1 in
+    if is_passable grid rows cols nr nc then
+      list_append acc (encode nr nc cols)
+    else acc
+  ) dirs
+
+-- A* search. Returns path length or -1 if no path.
+-- Uses g_scores (State map) and a sorted open list of (f_score, position).
+let a_star grid rows cols start_r start_c goal_r goal_c : Tuple -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let start = encode start_r start_c cols in
+  let goal = encode goal_r goal_c cols in
+  let h_start = manhattan start_r start_c goal_r goal_c in
+  -- State: (open_list, g_scores, closed_set)
+  -- open_list: sorted by f_score, each entry is (f_score, position)
+  -- g_scores: State map from position (int key) to g_score
+  -- closed_set: tuple of processed positions
+  let init_g = map_insert state_empty start 0 in
+  let init_open = ((h_start, start),) in
+  let init_state = (init_open, init_g, ()) in
+
+  -- Main loop: process up to rows*cols*2 nodes
+  let max_iter = rows * cols * 2 in
+  let result = fold_while init_state (\pair ->
+    let state = pair.0 in
+    let step = pair.1 in
+    let open = state.0 in
+    let g_scores = state.1 in
+    let closed = state.2 in
+    if list_len open == 0 then (false, state)  -- no path
+    else
+      -- Pop node with lowest f_score (first in sorted list)
+      let best = list_nth open 0 in
+      let rest_open = list_drop open 1 in
+      let current = best.1 in
+      -- Check if goal reached
+      if current == goal then (false, state)
+      else
+        -- Skip if already closed
+        let already_closed = fold false (\found c -> if c == current then true else found) closed in
+        if already_closed then (true, (rest_open, g_scores, closed))
+        else
+          let new_closed = list_append closed current in
+          let pos = decode current cols in
+          let cur_r = pos.0 in
+          let cur_c = pos.1 in
+          let cur_g = map_get g_scores current in
+          let nbrs = neighbors cur_r cur_c rows cols grid in
+          -- Process each neighbor
+          let updated = fold (rest_open, g_scores) (\acc nb ->
+            let nb_open = acc.0 in
+            let nb_g = acc.1 in
+            let tent_g = cur_g + 1 in
+            let old_g = if map_contains_key nb_g nb then map_get nb_g nb else 999999 in
+            if tent_g < old_g then
+              let nb_pos = decode nb cols in
+              let h = manhattan nb_pos.0 nb_pos.1 goal_r goal_c in
+              let f = tent_g + h in
+              let new_g = map_insert nb_g nb tent_g in
+              -- Insert into open list maintaining sort order
+              let new_open = list_sort (list_append nb_open (f, nb)) in
+              (new_open, new_g)
+            else acc
+          ) nbrs in
+          (true, (updated.0, updated.1, new_closed))
+  ) (list_range 0 max_iter) in
+  -- Extract result
+  let final_state = result in
+  let final_g = final_state.1 in
+  if map_contains_key final_g goal then map_get final_g goal
+  else -1
+
+-- Test: 5x5 grid with walls
+let test_a_star x : Int -> Tuple =
+  let grid = (
+    0, 0, 0, 0, 0,
+    0, 1, 1, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 1, 1, 0,
+    0, 0, 0, 0, 0
+  ) in
+  let path_len = a_star grid 5 5 0 0 4 4 in
+  (path_len,)

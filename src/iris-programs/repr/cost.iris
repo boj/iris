@@ -1,0 +1,245 @@
+-- Cost system: bounds, terms, and universalization
+--
+-- Mirrors the Rust cost.rs (220 LOC) in iris-repr.
+--
+-- CostBound (14 variants):
+--   0 = Unknown, 1 = Zero, 2 = Constant(u64), 3 = Linear(CostVar),
+--   4 = NLogN(CostVar), 5 = Polynomial(CostVar, u32),
+--   6 = Sum(CostBound, CostBound), 7 = Par(CostBound, CostBound),
+--   8 = Mul(CostBound, CostBound), 9 = Amortized(CostBound, PotentialFn),
+--   10 = HWScaled(CostBound, HWParamRef), 11 = Sup(Vec<CostBound>),
+--   12 = Inf(Vec<CostBound>)
+--
+-- CostTerm (per-node, 3 variants):
+--   0 = Unit, 1 = Inherited, 2 = Annotated(CostBound)
+--
+-- Key operation: universalize_cost strips HWScaled annotations.
+
+-- ============================================================
+-- CostBound variant tags
+-- ============================================================
+
+let cost_unknown : Int [cost: Const(1)] = 0
+let cost_zero : Int [cost: Const(1)] = 1
+let cost_constant : Int [cost: Const(1)] = 2
+let cost_linear : Int [cost: Const(1)] = 3
+let cost_nlogn : Int [cost: Const(1)] = 4
+let cost_polynomial : Int [cost: Const(1)] = 5
+let cost_sum : Int [cost: Const(1)] = 6
+let cost_par : Int [cost: Const(1)] = 7
+let cost_mul : Int [cost: Const(1)] = 8
+let cost_amortized : Int [cost: Const(1)] = 9
+let cost_hw_scaled : Int [cost: Const(1)] = 10
+let cost_sup : Int [cost: Const(1)] = 11
+let cost_inf : Int [cost: Const(1)] = 12
+
+-- ============================================================
+-- CostTerm variant tags
+-- ============================================================
+
+let term_unit : Int [cost: Const(1)] = 0
+let term_inherited : Int [cost: Const(1)] = 1
+let term_annotated : Int [cost: Const(1)] = 2
+
+-- ============================================================
+-- CostBound classification
+-- ============================================================
+
+-- Check if a cost bound is a leaf variant (no recursive children).
+-- Leaf variants: Unknown(0), Zero(1), Constant(2), Linear(3), NLogN(4), Polynomial(5)
+let is_leaf_cost tag : Int -> Int [cost: Const(2)] =
+  if tag >= 0 then
+    if tag <= 5 then 1 else 0
+  else 0
+
+-- Check if a cost bound is a binary recursive variant.
+-- Binary: Sum(6), Par(7), Mul(8)
+let is_binary_cost tag : Int -> Int [cost: Const(2)] =
+  if tag >= 6 then
+    if tag <= 8 then 1 else 0
+  else 0
+
+-- Check if a cost bound is HW-specific.
+-- Only HWScaled(10) contains hardware references.
+let is_hw_cost tag : Int -> Int [cost: Const(1)] =
+  if tag == 10 then 1 else 0
+
+-- Check if a cost bound is a collection variant.
+-- Collection: Sup(11), Inf(12)
+let is_collection_cost tag : Int -> Int [cost: Const(2)] =
+  if tag == 11 then 1
+  else if tag == 12 then 1
+  else 0
+
+-- ============================================================
+-- universalize_cost: strip hardware-specific annotations
+-- ============================================================
+
+-- Universalize a cost bound by stripping HWScaled wrappers.
+-- HWScaled(inner, _) is replaced by the universalized inner.
+-- All other variants are returned as-is (leaf) or recursed structurally.
+--
+-- This is the key operation from cost.rs that makes costs portable:
+-- a universalized cost contains no HWParamRef references and can be
+-- compared/composed across different hardware targets.
+--
+-- tag: CostBound discriminant
+-- value: the payload value (e.g., constant value, CostVar id)
+-- inner_tag: for recursive variants, the inner CostBound's tag
+-- inner_value: for recursive variants, the inner CostBound's value
+--
+-- Returns: (result_tag, result_value) for the universalized cost.
+let universalize_cost tag value inner_tag inner_value : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(5)] =
+  if tag == 10 then
+    -- HWScaled: strip wrapper, return inner (recursively universalized)
+    if inner_tag == 10 then
+      -- Double-nested HWScaled: keep stripping (handled by caller recursion)
+      (inner_tag, inner_value)
+    else
+      (inner_tag, inner_value)
+  else
+    -- Non-HW variants pass through unchanged
+    (tag, value)
+
+-- ============================================================
+-- Cost comparison
+-- ============================================================
+
+-- Compare two cost bounds for dominance.
+-- Returns: -1 if a < b, 0 if equal, 1 if a > b, 2 if incomparable.
+--
+-- Comparison rules:
+-- - Zero < Constant < Linear < NLogN < Polynomial
+-- - Unknown is incomparable with everything
+-- - Same-variant comparison uses values
+let compare_costs tag_a val_a tag_b val_b : Int -> Int -> Int -> Int -> Int [cost: Const(6)] =
+  if tag_a == tag_b then
+    -- Same variant: compare values
+    if val_a == val_b then 0
+    else if val_a < val_b then -1
+    else 1
+  else if tag_a == 0 then 2
+  else if tag_b == 0 then 2
+  else if tag_a == 1 then
+    -- Zero is always <= anything except Unknown
+    -1
+  else if tag_b == 1 then
+    1
+  else if tag_a < tag_b then -1
+  else if tag_a > tag_b then 1
+  else 2
+
+-- ============================================================
+-- Cost arithmetic
+-- ============================================================
+
+-- Add two constant costs (for Sum variant).
+-- Only works for Constant variant (tag=2).
+let add_constant_costs val_a val_b : Int -> Int -> Int [cost: Const(1)] =
+  val_a + val_b
+
+-- Multiply two constant costs (for Mul variant).
+let mul_constant_costs val_a val_b : Int -> Int -> Int [cost: Const(1)] =
+  val_a * val_b
+
+-- Take the supremum (max) of two costs.
+-- For Constants: max(a, b)
+let sup_constant_costs val_a val_b : Int -> Int -> Int [cost: Const(2)] =
+  if val_a >= val_b then val_a else val_b
+
+-- Take the infimum (min) of two costs.
+let inf_constant_costs val_a val_b : Int -> Int -> Int [cost: Const(2)] =
+  if val_a <= val_b then val_a else val_b
+
+-- ============================================================
+-- Cost propagation
+-- ============================================================
+
+-- Compute the effective cost for a node given its CostTerm.
+-- term_tag: CostTerm variant (0=Unit, 1=Inherited, 2=Annotated)
+-- annotated_cost_tag: if Annotated, the CostBound variant tag
+-- annotated_cost_value: if Annotated, the CostBound value
+-- parent_cost_tag: the parent's effective cost tag (for Inherited)
+-- parent_cost_value: the parent's effective cost value
+--
+-- Returns: (effective_tag, effective_value)
+let propagate_cost term_tag annotated_cost_tag annotated_cost_value parent_cost_tag parent_cost_value : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(3)] =
+  if term_tag == 0 then
+    -- Unit: O(1) cost
+    (2, 1)
+  else if term_tag == 1 then
+    -- Inherited: use parent's cost
+    (parent_cost_tag, parent_cost_value)
+  else
+    -- Annotated: use the explicit annotation
+    (annotated_cost_tag, annotated_cost_value)
+
+-- ============================================================
+-- Cost checking
+-- ============================================================
+
+-- Check if an operation satisfies its cost bound.
+-- actual_steps: measured step count
+-- bound_tag: CostBound variant
+-- bound_value: CostBound value
+-- input_size: size of the input (for Linear, NLogN, etc.)
+--
+-- Returns: 1 if within bounds, 0 if exceeded.
+let check_cost_bound actual_steps bound_tag bound_value input_size : Int -> Int -> Int -> Int -> Int [cost: Const(6)] =
+  if bound_tag == 0 then 1
+  else if bound_tag == 1 then
+    if actual_steps == 0 then 1 else 0
+  else if bound_tag == 2 then
+    if actual_steps <= bound_value then 1 else 0
+  else if bound_tag == 3 then
+    -- Linear(n): actual <= c * n
+    if actual_steps <= bound_value * input_size then 1 else 0
+  else if bound_tag == 4 then
+    -- NLogN(n): actual <= c * n * log2(n)
+    -- Approximate log2 as bit length
+    let log_n = if input_size <= 1 then 1
+      else if input_size <= 4 then 2
+      else if input_size <= 8 then 3
+      else if input_size <= 16 then 4
+      else if input_size <= 32 then 5
+      else if input_size <= 64 then 6
+      else if input_size <= 128 then 7
+      else if input_size <= 256 then 8
+      else if input_size <= 1024 then 10
+      else 20
+    in
+    if actual_steps <= bound_value * input_size * log_n then 1 else 0
+  else if bound_tag == 5 then
+    -- Polynomial: bound_value is the coefficient, degree encoded elsewhere
+    -- Simplified: treat as quadratic
+    if actual_steps <= bound_value * input_size * input_size then 1 else 0
+  else
+    -- For complex bounds (Sum, Par, Mul, etc.) return 1 (let the proof kernel handle it)
+    1
+
+-- ============================================================
+-- HardwareProfile validation
+-- ============================================================
+
+-- Validate a HardwareProfile's parameter count.
+-- Returns 1 if param_count is reasonable (1-100).
+let validate_hw_profile param_count : Int -> Int [cost: Const(2)] =
+  if param_count >= 1 then
+    if param_count <= 100 then 1 else 0
+  else 0
+
+-- ============================================================
+-- Cost term validation
+-- ============================================================
+
+-- Validate a CostTerm tag is in range.
+let is_valid_cost_term tag : Int -> Int [cost: Const(2)] =
+  if tag >= 0 then
+    if tag <= 2 then 1 else 0
+  else 0
+
+-- Validate a CostBound tag is in range.
+let is_valid_cost_bound tag : Int -> Int [cost: Const(2)] =
+  if tag >= 0 then
+    if tag <= 12 then 1 else 0
+  else 0

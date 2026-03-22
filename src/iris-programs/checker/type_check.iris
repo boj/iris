@@ -1,0 +1,22 @@
+-- Basic type consistency check: verify all nodes have valid kinds.
+--
+-- Input:
+--   program : SemanticGraph
+--
+-- Output: Int (number of nodes that pass the type check)
+--
+-- For each node, check that graph_get_kind returns a valid (>= 0) kind.
+-- Uses fold with a lambda to iterate over all node IDs and sum up
+-- the number of passing nodes.
+--
+-- Note: this is a Tier 1 program (uses Fold). The Rust test
+-- equivalent also uses Fold with Lambda, which is Tier 1.
+
+let type_check program : Int -> Int [cost: Linear(n)] =
+  let nodes = graph_nodes program in
+  fold 0 (\pair ->
+    let acc = pair.0 in
+    let nid = pair.1 in
+    let kind = graph_get_kind program nid in
+    acc + bool_to_int (0 <= kind)
+  ) nodes

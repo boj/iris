@@ -1,0 +1,44 @@
+-- Lambda Lifting: graph → graph pre-pass for AOT compilation.
+--
+-- Validates that a SemanticGraph can be AOT-compiled with fold+lambda
+-- loop strategy:
+--   1. All Lambda nodes must be direct fold step functions (port 1)
+--   2. No nested folds-with-lambdas (depth ≤ 1)
+--
+-- NodeKind discriminants:
+--   0=Prim 1=Apply 2=Lambda 3=Let 5=Lit 8=Fold 11=Tuple
+--   13=Project 14=TypeAbst 15=TypeApp 17=Guard 18=Rewrite
+
+-- Check if all Lambda nodes in the graph appear as direct step children
+-- of Fold nodes (port 1). Any Lambda that isn't a fold step means the
+-- program uses closures and can't be AOT-compiled.
+let is_lambda_safe program =
+  let nodes = graph_nodes program in
+  let edges = graph_edges program in
+  fold 1 (\safe n ->
+    if safe == 0 then 0
+    else
+      let kind = graph_get_kind program n in
+      if kind == 2 then
+        -- Lambda node: verify it's targeted by a Fold on port 1
+        fold 0 (\found e ->
+          if found == 1 then 1
+          else
+            let src = list_nth e 0 in
+            let tgt = list_nth e 1 in
+            let port = list_nth e 2 in
+            if tgt == n then
+              if port == 1 then
+                let src_kind = graph_get_kind program src in
+                if src_kind == 8 then 1 else found
+              else found
+            else found
+        ) edges
+      else 1
+  ) nodes
+
+-- Full lambda-lift validation: returns 1 if the graph can be AOT-compiled
+-- with the loop-based fold+lambda strategy.
+-- Checks lambda safety only (nested fold support deferred).
+let lambda_lift_check program =
+  is_lambda_safe program

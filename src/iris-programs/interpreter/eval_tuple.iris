@@ -1,0 +1,36 @@
+-- Evaluate a Tuple node: collect elements into a product type.
+--
+-- Mirrors the tuple handling from iris-exec interpreter.rs eval_tuple.
+--
+-- A Tuple node has Argument edges (port 0..n-1) pointing to
+-- the element expressions. Each element is evaluated and collected
+-- into a Tuple value.
+--
+-- Inputs:
+--   Elements provided as individual arguments.
+--
+-- Output: Tuple of the evaluated elements.
+--
+-- In the Rust interpreter:
+--   eval_tuple evaluates all argument edges in order and wraps
+--   the results in Value::Tuple(elements).
+
+-- Construct a pair (2-tuple).
+let eval_tuple_pair a b : Int -> Int -> (Int, Int) [cost: Const(2)] =
+  (a, b)
+
+-- Construct a triple (3-tuple).
+let eval_tuple_triple a b c : Int -> Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  (a, b, c)
+
+-- Access the first element of a pair.
+let eval_tuple_fst pair : (Int, Int) -> Int [cost: Const(1)] =
+  pair.0
+
+-- Access the second element of a pair.
+let eval_tuple_snd pair : (Int, Int) -> Int [cost: Const(1)] =
+  pair.1
+
+-- Swap elements of a pair.
+let eval_tuple_swap pair : (Int, Int) -> (Int, Int) [cost: Const(2)] =
+  (pair.1, pair.0)

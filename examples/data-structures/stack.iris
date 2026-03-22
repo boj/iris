@@ -1,0 +1,57 @@
+-- Stack (LIFO)
+-- Implemented as a tuple where the last element is the top.
+-- All operations are O(1) amortized using list_append/list_take.
+
+-- Create an empty stack.
+let stack_new x : Int -> Tuple [cost: Const(1)] = ()
+
+-- Push a value onto the stack.
+let stack_push s val : Tuple -> Int -> Tuple [cost: Const(1)] =
+  list_append s val
+
+-- Pop the top value. Returns (new_stack, top_value).
+-- Returns ((), -1) if empty.
+let stack_pop s : Tuple -> Tuple [cost: Const(1)] =
+  let n = list_len s in
+  if n == 0 then ((), -1)
+  else
+    let top = list_nth s (n - 1) in
+    let rest = list_take s (n - 1) in
+    (rest, top)
+
+-- Peek at the top value without removing it. Returns -1 if empty.
+let stack_peek s : Tuple -> Int [cost: Const(1)] =
+  let n = list_len s in
+  if n == 0 then -1
+  else list_nth s (n - 1)
+
+-- Check if the stack is empty.
+let stack_empty s : Tuple -> Bool [cost: Const(1)] =
+  list_len s == 0
+
+-- Size of the stack.
+let stack_size s : Tuple -> Int [cost: Const(1)] =
+  list_len s
+
+-- Reverse a list using a stack (classic application).
+let reverse_via_stack xs : Tuple -> Tuple [cost: Linear(xs)] =
+  let stk = fold () (\s x -> stack_push s x) xs in
+  -- Pop everything off
+  fold ((), stk) (\pair step ->
+    let result = pair.0 in
+    let s = pair.1 in
+    let popped = stack_pop s in
+    (list_append result popped.1, popped.0)
+  ) (list_range 0 (list_len xs))
+  |> (\pair -> pair.0)
+
+-- Test
+let test_stack x : Int -> Tuple =
+  let s = stack_new 0 in
+  let s = stack_push s 10 in
+  let s = stack_push s 20 in
+  let s = stack_push s 30 in
+  let top = stack_peek s in
+  let popped = stack_pop s in
+  let size = stack_size popped.0 in
+  (top, popped.1, size)

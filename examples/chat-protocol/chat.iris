@@ -1,0 +1,52 @@
+-- Chat Protocol
+-- Simple chat protocol over TCP. Messages are "USER:message\n" format.
+-- Server maintains a list of connected clients and broadcasts messages.
+
+-- Format a chat message: "USER:message\n"
+let format_message user message : String -> String -> String [cost: Const(3)] =
+  str_concat user (str_concat ":" (str_concat message "\n"))
+
+-- Parse a chat message: extract (user, message) from "USER:message"
+let parse_message raw : String -> Tuple [cost: Unknown] =
+  let trimmed = str_trim raw in
+  let parts = str_split trimmed ":" in
+  let user = list_nth parts 0 in
+  let message = if list_len parts > 1 then list_nth parts 1 else "" in
+  (user, message)
+
+-- Build the client list as a State map: key = "client_N", value = conn handle.
+let add_client clients conn client_id : State -> Int -> Int -> State [cost: Const(1)] =
+  let key = str_concat "client_" (int_to_string client_id) in
+  map_insert clients key conn
+
+-- Remove a client from the list.
+let remove_client clients client_id : State -> Int -> State [cost: Const(1)] =
+  let key = str_concat "client_" (int_to_string client_id) in
+  map_remove clients key
+
+-- Broadcast a message to all connected clients.
+let broadcast clients message : State -> String -> Int [cost: Unknown] =
+  let ks = map_keys clients in
+  fold 0 (\acc k ->
+    if str_starts_with k "client_" then
+      let conn = map_get clients k in
+      let w = tcp_write conn message in
+      acc + 1
+    else acc
+  ) ks
+
+-- Handle a single client: read one message and broadcast it.
+let handle_client conn clients username : Int -> State -> String -> Int [cost: Unknown] =
+  let data = tcp_read conn 4096 in
+  if data == 0 then tcp_close conn
+  else
+    let msg = format_message username data in
+    broadcast clients msg
+
+-- Start the chat server on a port.
+-- Accepts one connection (single-client demo mode).
+let main port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  let clients = map_insert state_empty "client_0" conn in
+  handle_client conn clients "user0"

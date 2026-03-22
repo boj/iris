@@ -1,0 +1,132 @@
+-- Daemon loop: run programs on cycle timer, report results.
+--
+-- Mirrors the IrisDaemon from iris-exec daemon.rs.
+--
+-- The Rust daemon:
+--   - Runs programs in configurable cognitive cycles (default 800ms)
+--   - Each cycle: execute all programs, collect CycleReport, sleep remainder
+--   - Tracks: cycle number, wall_time_ms, programs_executed,
+--     outputs_produced, overrun flag
+--   - Terminates on: max_cycles reached, or running flag set to false
+--
+-- The daemon implements the first phase transition (Tool -> Organism):
+-- continuous execution with self-maintenance. Programs run every cycle,
+-- maintaining state across cycles via the orchestrator.
+
+-- Default cycle time in milliseconds (matching Daimon's 800ms cognitive cycles)
+let default_cycle_time_ms : Int [cost: Const(1)] = 800
+
+-- Determine if the daemon should continue running.
+-- Returns 1 to continue, 0 to stop.
+--
+-- Mirrors the while loop condition in IrisDaemon::run:
+--   while self.running.load(Ordering::Relaxed)
+--   + check self.cycle_count >= max_cycles
+let daemon_should_continue running cycle_count max_cycles : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if running == 0 then 0
+  else if max_cycles > 0 then
+    if cycle_count >= max_cycles then 0
+    else 1
+  else 1
+
+-- Compute the sleep duration for the remainder of a cycle budget.
+-- Returns milliseconds to sleep, or 0 if the cycle overran.
+let daemon_sleep_ms elapsed_ms target_ms : Int -> Int -> Int [cost: Const(2)] =
+  if elapsed_ms >= target_ms then 0
+  else target_ms - elapsed_ms
+
+-- Build a cycle report from raw metrics.
+-- Returns (cycle, wall_time_ms, programs_executed, outputs_produced, overrun).
+let daemon_cycle_report cycle wall_time_ms programs_executed outputs_produced target_ms : Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(2)] =
+  let overrun = if wall_time_ms > target_ms then 1 else 0 in
+  (cycle, wall_time_ms, programs_executed, outputs_produced, overrun)
+
+-- Check if a cycle is overrunning its time budget.
+let daemon_is_overrun elapsed_ms target_ms : Int -> Int -> Int [cost: Const(2)] =
+  if elapsed_ms > target_ms then 1
+  else 0
+
+-- Compute the effective average cycle time.
+let daemon_avg_cycle_time total_time_ms cycles_completed : Int -> Int -> Int [cost: Const(2)] =
+  if cycles_completed == 0 then 0
+  else total_time_ms / cycles_completed
+
+-- Run the daemon for N cycles with the given target cycle time.
+-- Uses the effect system for timing:
+--   - Timestamp effect (0x09) for wall-clock time
+--   - Sleep effect (0x08) for sleeping between cycles
+--
+-- The cycle loop:
+--   1. Record start time via Timestamp
+--   2. Execute all programs via orchestrator
+--   3. Record end time, compute elapsed
+--   4. Build CycleReport
+--   5. Sleep for remaining budget (if not overrunning)
+--   6. Increment cycle counter, check termination
+--
+-- Run the daemon for N cycles using the effect system for real timing.
+-- Uses:
+--   - clock_ns (0x1D) for wall-clock time
+--   - sleep_ms (0x1F) for sleeping between cycles
+--   - graph_eval for executing programs
+--
+-- Returns (cycles_completed, total_evaluations, overrun_count).
+let daemon_run num_programs max_cycles target_ms : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(max_cycles)] =
+  fold (0, 0, 0) (\state cycle_num ->
+    let cycles_done = state.0 in
+    let total_evals = state.1 in
+    let overruns = state.2 in
+    if daemon_should_continue 1 cycles_done max_cycles == 0 then state
+    else
+      let start_ns = clock_ns 0 in
+      let evals = num_programs in
+      let end_ns = clock_ns 0 in
+      let elapsed_ms = (end_ns - start_ns) / 1000000 in
+      let sleep_time = daemon_sleep_ms elapsed_ms target_ms in
+      let unused = if sleep_time > 0 then sleep_ms sleep_time else 0 in
+      let new_overruns = if elapsed_ms > target_ms then overruns + 1 else overruns in
+      (cycles_done + 1, total_evals + evals, new_overruns))
+  max_cycles
+
+-- Compute daemon health metrics.
+-- Returns (avg_cycle_ms, overrun_rate_pct, utilization_pct)
+-- overrun_rate = (overrun_count / total_cycles) * 100
+-- utilization = (total_busy_ms / (total_cycles * target_ms)) * 100
+let daemon_health total_cycles total_busy_ms overrun_count target_ms : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  let avg_cycle = if total_cycles == 0 then 0
+    else total_busy_ms / total_cycles in
+  let overrun_rate = if total_cycles == 0 then 0
+    else (overrun_count * 100) / total_cycles in
+  let total_budget = total_cycles * target_ms in
+  let utilization = if total_budget == 0 then 0
+    else (total_busy_ms * 100) / total_budget in
+  (avg_cycle, overrun_rate, utilization)
+
+-- Check if daemon should trigger evolution based on cycle metrics.
+-- Trigger evolution if overrun rate is below 50% and utilization is above 30%.
+-- Returns 1 if evolution should run, 0 otherwise.
+let should_evolve overrun_rate utilization : Int -> Int -> Int [cost: Const(2)] =
+  if overrun_rate < 50 then
+    if utilization > 30 then 1 else 0
+  else 0
+
+-- Compute the number of programs that can run within a cycle budget.
+-- Given per-program average execution time, determine max parallelism.
+let max_programs_per_cycle avg_program_ms target_ms : Int -> Int -> Int [cost: Const(2)] =
+  if avg_program_ms == 0 then target_ms
+  else target_ms / avg_program_ms
+
+-- Adapt cycle time based on observed performance.
+-- If consistently overrunning, increase cycle time.
+-- If consistently underutilized, decrease cycle time.
+-- Returns adjusted target_ms.
+let adapt_cycle_time current_target_ms avg_cycle_ms overrun_rate : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if overrun_rate > 80 then
+    -- Consistently overrunning: increase by 25%
+    current_target_ms + current_target_ms / 4
+  else if overrun_rate < 10 then
+    -- Consistently underutilized: decrease by 10%, but never below 100ms
+    let decreased = current_target_ms - current_target_ms / 10 in
+    if decreased < 100 then 100 else decreased
+  else
+    current_target_ms

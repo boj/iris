@@ -1,0 +1,50 @@
+-- TODO List Application
+-- Uses State (map) for persistent storage of todo items.
+-- Each item is stored with a unique key and a status tag.
+--
+-- Item encoding in the store:
+--   key: "item_N" (string)
+--   value: (description, status) where status is 0=pending, 1=done
+
+-- Create a new empty TODO list with next_id counter.
+let todo_new x : Int -> State [cost: Const(1)] =
+  map_insert state_empty "next_id" 0
+
+-- Set a key-value pair in the store.
+let kv_set store key v : State -> String -> Int -> State [cost: Const(1)] =
+  map_insert store key v
+
+-- Get a value by key.
+let kv_get store key : State -> String -> Value [cost: Const(1)] =
+  map_get store key
+
+-- Delete a key from the store.
+let kv_delete store key : State -> String -> State [cost: Const(1)] =
+  map_remove store key
+
+-- Get the number of item entries (excludes metadata keys).
+let todo_count store : State -> Int [cost: Unknown] =
+  let ks = map_keys store in
+  fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) ks
+
+-- Count pending items (status == 0).
+let todo_count_pending store : State -> Int [cost: Unknown] =
+  let ks = map_keys store in
+  fold 0 (\acc k ->
+    if str_starts_with k "item_" then
+      let item = map_get store k in
+      let status = list_nth item 1 in
+      if status == 0 then acc + 1 else acc
+    else acc
+  ) ks
+
+-- Count done items (status == 1).
+let todo_count_done store : State -> Int [cost: Unknown] =
+  let ks = map_keys store in
+  fold 0 (\acc k ->
+    if str_starts_with k "item_" then
+      let item = map_get store k in
+      let status = list_nth item 1 in
+      if status == 1 then acc + 1 else acc
+    else acc
+  ) ks

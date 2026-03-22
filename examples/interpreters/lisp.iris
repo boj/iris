@@ -1,0 +1,97 @@
+-- Lisp Interpreter
+-- A minimal Lisp interpreter operating on S-expressions encoded as nested tuples.
+--
+-- Encoding:
+--   Atoms: integers directly
+--   Symbols: negative integers (-1 = "+", -2 = "-", -3 = "*", -4 = "/",
+--            -5 = "if", -6 = "quote", -7 = "lambda", -8 = "define", -9 = "eq")
+--   Lists: tuples of values, e.g. (+ 1 2) = (-1, 1, 2)
+--   Nil: ()
+--
+-- Environment: State map from symbol-id (as string) to value
+
+-- Symbol constants
+let sym_plus x : Int -> Int = -1
+let sym_minus x : Int -> Int = -2
+let sym_mul x : Int -> Int = -3
+let sym_div x : Int -> Int = -4
+let sym_if x : Int -> Int = -5
+let sym_quote x : Int -> Int = -6
+let sym_eq x : Int -> Int = -9
+let sym_lt x : Int -> Int = -10
+let sym_car x : Int -> Int = -11
+let sym_cdr x : Int -> Int = -12
+let sym_cons x : Int -> Int = -13
+let sym_list x : Int -> Int = -14
+let sym_null x : Int -> Int = -15
+
+-- Check if a value is a list (tuple).
+-- FIXME: is_unit can distinguish () from integers, but we also need
+-- to distinguish Tuple from Int. There's no is_tuple primitive.
+-- We'll use a convention: atoms are ints, lists are tuples.
+
+-- Evaluate an expression in an environment.
+let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
+  -- If it's a positive integer, it's a literal
+  if is_unit expr then 0
+  else
+    -- Check if it's a symbol (negative int = variable lookup)
+    let is_symbol = expr < 0 in
+    if is_symbol then
+      -- Look up in environment
+      if map_contains_key env expr then map_get env expr
+      else expr  -- unbound symbol evaluates to itself
+    else
+      -- It's a literal integer
+      expr
+
+-- Apply a built-in operation to arguments.
+let apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
+  if op == -1 then  -- +
+    fold 0 (+) args
+  else if op == -2 then  -- -
+    if list_len args == 1 then neg (list_nth args 0)
+    else list_nth args 0 - fold 0 (+) (list_drop args 1)
+  else if op == -3 then  -- *
+    fold 1 (*) args
+  else if op == -4 then  -- /
+    let a = list_nth args 0 in
+    let b = list_nth args 1 in
+    if b == 0 then 0 else a / b
+  else if op == -9 then  -- eq
+    if list_nth args 0 == list_nth args 1 then 1 else 0
+  else if op == -10 then  -- lt
+    if list_nth args 0 < list_nth args 1 then 1 else 0
+  else 0  -- unknown builtin
+
+-- Evaluate a list expression: (op arg1 arg2 ...)
+let eval_list expr env : Tuple -> State -> Int [cost: Unknown] =
+  let n = list_len expr in
+  if n == 0 then 0
+  else
+    let op = list_nth expr 0 in
+    -- Special form: if
+    if op == -5 then
+      let cond = list_nth expr 1 in
+      -- FIXME: need recursive eval but let rec doesn't work across
+      -- multiple top-level functions in IRIS. We inline the condition check.
+      if cond != 0 then list_nth expr 2
+      else list_nth expr 3
+    -- Special form: quote
+    else if op == -6 then
+      list_nth expr 1
+    else
+      -- Normal function application: evaluate args, apply
+      let args = map (\a -> a) (list_drop expr 1) in
+      apply_builtin op args
+
+-- Test: (+ 1 2) = 3, (* 3 (+ 1 2)) as (* 3 3) = 9
+let test_lisp x : Int -> Tuple =
+  let env = state_empty in
+  let r1 = eval_list (-1, 1, 2) env in        -- (+ 1 2) = 3
+  let r2 = eval_list (-3, 3, 4) env in        -- (* 3 4) = 12
+  let r3 = eval_list (-2, 10, 3) env in       -- (- 10 3) = 7
+  let r4 = eval_list (-9, 5, 5) env in        -- (eq 5 5) = 1
+  let r5 = eval_list (-5, 1, 42, 99) env in   -- (if 1 42 99) = 42
+  let r6 = eval_list (-5, 0, 42, 99) env in   -- (if 0 42 99) = 99
+  (r1, r2, r3, r4, r5, r6)

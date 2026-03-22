@@ -1,0 +1,198 @@
+-- Improvement tracker: linear regression of latency over time,
+-- acceleration tracking, and causal operator attribution.
+--
+-- Phase Transition 3: Slow -> Recursive
+-- Tracks whether self-improvement is COMPOUNDING — each cycle faster
+-- than the last, with the rate of improvement itself increasing.
+--
+-- Provides:
+--   - Linear regression slope of latency over measurement windows
+--   - Acceleration: slope of improvement rate (is rate increasing?)
+--   - Causal attribution: which mutation operator caused each improvement
+--   - Problems-per-hour tracking
+
+-- =========================================================================
+-- Linear regression (slope computation)
+-- =========================================================================
+
+-- Compute mean of a list of integers
+let mean xs n : Int -> Int -> Int [cost: Linear(xs)] =
+  if n == 0 then 0
+  else
+    let sum = fold 0 (\acc x -> acc + x) xs in
+    sum / n
+
+-- Compute sum of (x_i - mean_x) * (y_i - mean_y) over paired data
+-- pairs: list of (x, y) tuples
+-- mx: mean of x values
+-- my: mean of y values
+let sum_cross_deviations pairs mx my : Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0
+    (\acc pair ->
+      let dx = pair.0 - mx in
+      let dy = pair.1 - my in
+      acc + dx * dy)
+    pairs
+
+-- Compute sum of (x_i - mean_x)^2 over x values
+-- xs: list of x values
+-- mx: mean of x values
+let sum_sq_deviations xs mx : Int -> Int -> Int [cost: Linear(xs)] =
+  fold 0
+    (\acc x ->
+      let dx = x - mx in
+      acc + dx * dx)
+    xs
+
+-- Linear regression slope: beta = sum((xi-mx)(yi-my)) / sum((xi-mx)^2)
+-- data: list of (timestamp, latency) pairs
+-- n: number of data points
+-- Returns: slope scaled by 1000 (negative = latency decreasing = good)
+let regression_slope data n : Int -> Int -> Int [cost: Linear(data)] =
+  if n < 2 then 0
+  else
+    let timestamps = map (\d -> d.0) data in
+    let latencies = map (\d -> d.1) data in
+    let mx = mean timestamps n in
+    let my = mean latencies n in
+    let numerator = sum_cross_deviations data mx my in
+    let denominator = sum_sq_deviations timestamps mx in
+    if denominator == 0 then 0
+    else (numerator * 1000) / denominator
+
+-- =========================================================================
+-- Windowed improvement rate
+-- =========================================================================
+
+-- Take the last W elements from a list (sliding window)
+-- Uses fold to count total, then filter to keep only last W
+let window_last data window_size : Int -> Int -> Int [cost: Linear(data)] =
+  let total = fold 0 (\acc x -> acc + 1) data in
+  let skip = if total > window_size then total - window_size else 0 in
+  let result = fold (0, ())
+    (\state item ->
+      let idx = state.0 in
+      if idx >= skip then (idx + 1, item)
+      else (idx + 1, state.1))
+    data in
+  result.1
+
+-- Compute improvement rate for a component using last W measurements
+-- measurements: list of (timestamp_ms, latency_ns) pairs
+-- window_size: number of recent measurements to use
+-- Returns: slope * 1000 (negative = improving)
+let improvement_rate measurements window_size : Int -> Int -> Int [cost: Linear(measurements)] =
+  let n = fold 0 (\acc x -> acc + 1) measurements in
+  let effective_n = if n > window_size then window_size else n in
+  regression_slope measurements effective_n
+
+-- =========================================================================
+-- Acceleration tracking
+-- =========================================================================
+
+-- Compute acceleration: slope of improvement rate over time
+-- rate_history: list of (timestamp, improvement_rate) pairs
+-- Returns: acceleration * 1000 (negative = improvement accelerating)
+let compute_acceleration rate_history : Int -> Int [cost: Linear(rate_history)] =
+  let n = fold 0 (\acc x -> acc + 1) rate_history in
+  regression_slope rate_history n
+
+-- Check if improvement is compounding (acceleration < 0)
+-- acceleration: the second derivative of latency (slope of slopes)
+-- Returns: 1 if compounding, 0 if not
+let is_compounding acceleration : Int -> Int [cost: Const(1)] =
+  if acceleration < 0 then 1 else 0
+
+-- =========================================================================
+-- Causal operator attribution
+-- =========================================================================
+
+-- Record an operator application and its fitness effect
+-- operator_stats: (times_used, improvements_caused, total_delta)
+-- fitness_delta: change in fitness (positive = improvement)
+-- Returns: updated operator stats
+let record_operator_application stats fitness_delta : Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  let used = stats.0 + 1 in
+  let imps = if fitness_delta > 0 then stats.1 + 1 else stats.1 in
+  let total = if fitness_delta > 0 then stats.2 + fitness_delta else stats.2 in
+  (used, imps, total)
+
+-- Compute operator success rate (improvements / total uses, scaled by 1000)
+let operator_success_rate stats : Int -> Int [cost: Const(1)] =
+  if stats.0 == 0 then 0
+  else (stats.1 * 1000) / stats.0
+
+-- Compute operator average improvement (total_delta / improvements, scaled by 1000)
+let operator_avg_improvement stats : Int -> Int [cost: Const(1)] =
+  if stats.1 == 0 then 0
+  else (stats.2 * 1000) / stats.1
+
+-- Rank operators by total fitness contribution (descending)
+-- operators: list of (name_hash, times_used, improvements, total_delta)
+-- Returns the operator with highest total_delta
+let best_operator operators : Int -> Int [cost: Linear(operators)] =
+  fold (0, 0, 0, 0)
+    (\best op ->
+      if op.3 > best.3 then op else best)
+    operators
+
+-- =========================================================================
+-- Problems-per-hour tracking
+-- =========================================================================
+
+-- Compute problems per hour from (first_timestamp, first_count, last_timestamp, last_count)
+-- Returns: problems per hour scaled by 100
+let problems_per_hour first_ts first_count last_ts last_count : Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  let elapsed_ms = last_ts - first_ts in
+  if elapsed_ms == 0 then 0
+  else
+    let problems = last_count - first_count in
+    -- problems_per_hour = problems / (elapsed_ms / 3600000)
+    -- = problems * 3600000 / elapsed_ms
+    -- Scale by 100 for integer precision
+    (problems * 360000000) / elapsed_ms
+
+-- =========================================================================
+-- Adaptive operator weighting
+-- =========================================================================
+
+-- Compute adaptive weight for an operator based on empirical stats
+-- base_weight: default uniform weight (scaled by 1000)
+-- min_samples: minimum uses before trusting empirical data
+-- Returns: adjusted weight (scaled by 1000)
+let adaptive_weight stats base_weight min_samples : Int -> Int -> Int -> Int [cost: Const(4)] =
+  if stats.0 < min_samples then base_weight
+  else
+    let success = operator_success_rate stats in
+    let avg_imp = min (operator_avg_improvement stats) 1000 in
+    -- Blend: 60% success rate + 40% avg improvement
+    let empirical = (success * 6 + avg_imp * 4) / 10 in
+    -- Mix: 70% empirical + 30% baseline
+    let blended = (empirical * 7 + base_weight * 3) / 10 in
+    if blended < base_weight / 10 then base_weight / 10
+    else blended
+
+-- =========================================================================
+-- Full tracker update
+-- =========================================================================
+
+-- Update tracker state with a new measurement
+-- state: (rate, acceleration, problems_solved, last_rate_timestamp)
+-- measurement: (timestamp_ms, latency_ns, correctness_pct)
+-- window_measurements: recent measurement list for regression
+-- rate_history: list of (timestamp, rate) for acceleration
+-- Returns: (new_rate, new_acceleration, new_problems_solved, is_compounding)
+let tracker_update state measurement window_measurements rate_history : Int -> Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Unknown] =
+  let ts = measurement.0 in
+  let rate = improvement_rate window_measurements 20 in
+  let accel = compute_acceleration rate_history in
+  let compounding = is_compounding accel in
+  let probs = state.2 in
+  (rate, accel, probs, compounding)
+
+-- Summary report for the tracker
+-- Returns: (improvement_rate, acceleration, is_compounding, problems_per_hour)
+let tracker_summary rate accel first_ts first_count last_ts last_count : Int -> Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Const(5)] =
+  let compounding = is_compounding accel in
+  let pph = problems_per_hour first_ts first_count last_ts last_count in
+  (rate, accel, compounding, pph)

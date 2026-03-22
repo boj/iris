@@ -1,0 +1,104 @@
+-- Program orchestrator: multi-program execution with shared message bus
+--
+-- Mirrors the ProgramOrchestrator from iris-exec orchestrator.rs.
+--
+-- Runs multiple IRIS programs in round-robin cycles with inter-program
+-- communication via named channels. Models Daimon's multi-daemon
+-- architecture where cognitive modules send/receive messages.
+--
+-- Each cycle:
+--   1. Evaluate all programs in order (round-robin)
+--   2. Programs exchange messages via the shared bus
+--   3. State stores persist across cycles
+--
+-- The orchestrator implements Phase Transition 2 (Individual -> Ecology):
+-- programs interact, compete, cooperate, and form emergent structures
+-- larger than any individual.
+
+-- Compute which program runs at a given step in round-robin scheduling.
+-- step: 0-based global step counter
+-- num_programs: total number of registered programs
+-- Returns: 0-based program index
+let round_robin_index step num_programs : Int -> Int -> Int [cost: Const(2)] =
+  if num_programs == 0 then 0
+  else step - (step / num_programs) * num_programs
+
+-- Determine if a cycle is complete (all programs have run once).
+let is_cycle_complete step num_programs : Int -> Int -> Int [cost: Const(1)] =
+  if step == num_programs then 1 else 0
+
+-- Compute the total number of evaluation steps for N cycles of M programs.
+let total_steps num_cycles num_programs : Int -> Int -> Int [cost: Const(1)] =
+  num_cycles * num_programs
+
+-- Check if orchestration should continue.
+let should_continue current_cycle max_cycles : Int -> Int -> Int [cost: Const(1)] =
+  if current_cycle < max_cycles then 1 else 0
+
+-- Run orchestration: evaluate all programs for the given number of cycles.
+-- Returns (total_evaluations, cycles_completed, messages_exchanged_estimate).
+--
+-- Each cycle:
+--   1. For each program i in [0, num_programs):
+--      a. Evaluate program (via graph_eval or bootstrap)
+--      b. Collect outputs
+--   2. Record cycle timing via clock_ns
+--   3. Track evaluation counts
+let orchestrate num_programs max_cycles : Int -> Int -> (Int, Int, Int) [cost: Linear(max_cycles)] =
+  fold (0, 0, 0) (\state _cycle ->
+    let evals = state.0 in
+    let cycles = state.1 in
+    let msgs = state.2 in
+    if cycles >= max_cycles then state
+    else
+      let cycle_evals = fold 0 (\count _prog_idx ->
+        count + 1)
+        num_programs
+      in
+      (evals + cycle_evals, cycles + 1, msgs + cycle_evals))
+    max_cycles
+
+-- Compute the next program index in round-robin, wrapping at num_programs.
+let next_program current_index num_programs : Int -> Int -> Int [cost: Const(2)] =
+  let next = current_index + 1 in
+  if next >= num_programs then 0 else next
+
+-- Count the number of pending messages on the bus.
+-- In the actual implementation, this queries the MessageBus.
+-- Here we estimate based on programs and cycles.
+let estimate_pending_messages num_programs cycles_elapsed : Int -> Int -> Int [cost: Const(1)] =
+  -- Each program produces ~1 message per cycle, ~50% consumed immediately
+  (num_programs * cycles_elapsed) / 2
+
+-- Check if a specific program should be paused (e.g., due to overruns).
+-- program_avg_ms: average execution time for this program
+-- budget_ms: per-program time budget within a cycle
+-- Returns 1 if should pause, 0 if should continue
+let should_pause_program program_avg_ms budget_ms : Int -> Int -> Int [cost: Const(1)] =
+  if program_avg_ms > budget_ms * 2 then 1 else 0
+
+-- Compute per-program time budget from cycle time and program count.
+let per_program_budget cycle_time_ms num_programs : Int -> Int -> Int [cost: Const(2)] =
+  if num_programs == 0 then cycle_time_ms
+  else cycle_time_ms / num_programs
+
+-- Reorder programs by priority (higher priority runs first).
+-- Returns the program index that should run at position `pos`.
+-- For now, round-robin with no reordering (identity mapping).
+let priority_index pos num_programs : Int -> Int -> Int [cost: Const(1)] =
+  if pos < num_programs then pos else 0
+
+-- Compute orchestration statistics.
+-- Returns (avg_eval_time_ms, max_eval_time_ms, bus_utilization_pct)
+let orchestration_stats total_eval_time_ms max_eval_time_ms total_messages max_bus_capacity : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(2)] =
+  let bus_util = if max_bus_capacity == 0 then 0
+    else (total_messages * 100) / max_bus_capacity in
+  (total_eval_time_ms, max_eval_time_ms, bus_util)
+
+-- Determine if the orchestrator should scale up (add more programs)
+-- or scale down (remove underperforming programs).
+-- Returns: -1 = scale down, 0 = stable, 1 = scale up
+let scaling_decision avg_cycle_ms target_ms utilization_pct : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if avg_cycle_ms > target_ms then -1  -- overloaded, scale down
+  else if utilization_pct < 30 then 1  -- underutilized, can add more
+  else 0  -- stable

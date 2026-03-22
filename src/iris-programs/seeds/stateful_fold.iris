@@ -1,0 +1,35 @@
+-- Seed generator: construct a stateful fold with accumulator
+--
+-- Builds a fold program that maintains state across iterations.
+-- The accumulator starts at 0 and the step function combines
+-- the running state with each list element.
+--
+-- Unlike the simple fold_add seed (which is a pure sum), the
+-- stateful fold emphasizes the accumulator-as-state pattern:
+--
+--   fold(initial_state, transition_fn, input)
+--
+-- This seeds evolutionary discovery of:
+--   - Counters:     fold(0, \acc _ -> acc + 1) for list length
+--   - Products:     fold(1, mul) for factorial/product
+--   - State machines: fold(s0, step) for sequential computation
+--   - Running stats: fold(0, \acc x -> acc + x*x) for sum of squares
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(0)        initial accumulator value
+--     port 1 -> Prim(add)     state transition (acc + element)
+--
+-- Opcode: add = 0x00
+
+-- Build the stateful fold: add an accumulation step and wire it
+let generate_stateful_fold program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let add_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root add_id 1
+
+-- Set a new initial accumulator value by replacing the base opcode
+let set_accumulator_op program new_op : Int -> Int -> Int [cost: Const(2)] =
+  graph_set_prim_op program () new_op

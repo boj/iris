@@ -1,0 +1,44 @@
+-- Fragment registry: maintain a collection of named fragments for
+-- cross-fragment composition via Ref nodes.
+--
+-- The interpreter resolves Ref nodes by looking up fragments in the
+-- registry. Fragments can be builtin library functions or previously
+-- evolved programs.
+--
+-- Registry operations:
+--   register: add a fragment by its ID (hash)
+--   lookup:   find a fragment and evaluate it
+--   count:    number of registered fragments
+--   contains: check if a fragment ID exists
+
+-- Count the number of fragments in a registry (tuple of entries)
+let registry_count entries : Int -> Int [cost: Linear(entries)] =
+  fold 0 (\acc entry -> acc + 1) entries
+
+-- Check if a fragment ID exists in the registry
+-- Returns 1 if found, 0 otherwise
+let registry_contains entries target_id : Int -> Int -> Int [cost: Linear(entries)] =
+  fold 0
+    (\found entry ->
+      if entry.0 == target_id then 1 else found)
+    entries
+
+-- Look up a fragment by ID and evaluate it with given inputs
+-- Returns the evaluation result, or 0 if not found
+let registry_eval entries target_id inputs : Int -> Int -> Int -> Int [cost: Unknown] =
+  let found = fold 0
+    (\result entry ->
+      if entry.0 == target_id then graph_eval entry.1 inputs
+      else result)
+    entries in
+  found
+
+-- Compute a registry fingerprint: XOR of all fragment IDs
+-- Useful for detecting registry changes
+let registry_fingerprint entries : Int -> Int [cost: Linear(entries)] =
+  fold 0 (\fp entry -> bitxor fp entry.0) entries
+
+-- Filter registry to remove a specific fragment by ID
+-- Returns entries without the target
+let registry_remove entries target_id : Int -> Int -> Int [cost: Linear(entries)] =
+  filter (\entry -> entry.0 != target_id) entries

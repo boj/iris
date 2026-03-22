@@ -1,0 +1,36 @@
+-- Set operations: a set is a sorted, deduplicated list.
+--
+-- Uses list_sort + list_dedup to maintain the invariant.
+-- All set operations preserve sorted-deduped form.
+
+-- Create a set from a list (sort then dedup)
+let set_from_list xs = list_dedup (list_sort xs)
+
+-- Create an empty set
+let set_empty = ()
+
+-- Insert an element into a set
+let set_insert s x = list_dedup (list_sort (list_append s (x,)))
+
+-- Check membership (returns 1 or 0)
+-- Linear scan since we operate on sorted lists
+let set_contains s x = fold 0 (\acc el -> if el == x then 1 else acc) s
+
+-- Remove an element from a set
+let set_remove s x = filter (\el -> el != x) s
+
+-- Union of two sets
+let set_union a b = list_dedup (list_sort (list_append a b))
+
+-- Intersection of two sets
+let set_intersect a b = filter (\x -> fold 0 (\acc el -> if el == x then 1 else acc) b) a
+
+-- Difference: elements in a but not in b
+let set_diff a b = filter (\x -> fold 1 (\acc el -> if el == x then 0 else acc) b) a
+
+-- Size of a set
+let set_size s = fold 0 (\acc x -> acc + 1) s
+
+-- Is subset: all elements of a are in b (returns 1 or 0)
+let set_is_subset a b =
+  fold 1 (\acc x -> acc * (fold 0 (\a2 el -> if el == x then 1 else a2) b)) a

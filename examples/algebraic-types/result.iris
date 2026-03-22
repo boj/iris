@@ -1,0 +1,33 @@
+-- Error handling with the Result type.
+-- Demonstrates how sum types replace error codes with named alternatives.
+
+type Result<T, E> = Ok(T) | Err(E)
+
+-- Safe division: returns Err if divisor is zero.
+let safe_divide a b : Int -> Int -> Int =
+    if b == 0 then Err 0
+    else Ok (a / b)
+
+-- Chain two operations, propagating errors.
+let and_then r f : Int -> Int -> Int =
+    match r with
+      | Ok(v) -> f v
+      | Err(e) -> Err e
+
+-- Provide a fallback value for errors.
+let unwrap_or r default_val : Int -> Int -> Int =
+    match r with
+      | Ok(v) -> v
+      | Err(e) -> default_val
+
+-- Transform the success value, leaving errors untouched.
+let map_ok r f : Int -> Int -> Int =
+    match r with
+      | Ok(v) -> Ok (f v)
+      | Err(e) -> Err e
+
+-- Transform the error value, leaving successes untouched.
+let map_err r f : Int -> Int -> Int =
+    match r with
+      | Ok(v) -> Ok v
+      | Err(e) -> Err (f e)

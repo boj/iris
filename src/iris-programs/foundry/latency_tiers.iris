@@ -1,0 +1,78 @@
+-- Latency tier selection and budget computation
+--
+-- Mirrors the Rust LatencyTier enum and FoundryConfig:
+--   Tier 0 (Instant):  <100ms, library lookup only, no evolution
+--   Tier 1 (Fast):     <10s, pop=16, gen=50, from library seeds
+--   Tier 2 (Standard): <10min, full evolution (config-driven)
+--   Tier 3 (Deep):     hours, multi-deme, novelty-driven search
+--
+-- Each tier returns a budget tuple: (population, generations, timeout_ms, num_demes)
+
+-- Return the budget for a given tier
+-- Inputs:
+--   tier   : 0=Instant, 1=Fast, 2=Standard, 3=Deep
+--   config : (max_population, max_generations, timeout_secs) tuple
+-- Output: (population, generations, timeout_ms, num_demes) tuple
+let tier_budget tier config : Int -> (Int, Int, Int) -> (Int, Int, Int, Int) [cost: Const(5)] =
+  if tier == 0 then (0, 0, 100, 1)
+  else if tier == 1 then (16, 50, 10000, 1)
+  else if tier == 2 then (config.0, config.1, config.2 * 1000, 1)
+  else (config.0 * 2, config.1 * 5, config.2 * 10000, 4)
+
+-- Classify a problem into an appropriate tier based on heuristics
+-- Simple heuristic: more test cases or larger inputs suggest higher tier
+-- Inputs:
+--   n_tests     : number of test cases
+--   max_input   : maximum input size across test cases
+--   has_library : 1 if library has candidates, 0 otherwise
+-- Output: tier (0-3)
+let classify_tier n_tests max_input has_library : Int -> Int -> Int -> Int [cost: Const(6)] =
+  if has_library == 1 then
+    if n_tests <= 4 then 0
+    else if n_tests <= 20 then
+      if max_input <= 100 then 2
+      else 3
+    else 3
+  else if n_tests <= 4 then
+    if max_input <= 10 then 1
+    else if max_input <= 100 then 2
+    else 3
+  else if n_tests <= 20 then
+    if max_input <= 100 then 2
+    else 3
+  else 3
+
+-- Check if a tier allows evolution (non-Instant)
+let tier_allows_evolution tier : Int -> Int [cost: Const(1)] =
+  if tier == 0 then 0 else 1
+
+-- Check if a tier uses multiple demes (Deep only)
+let tier_is_multi_deme tier : Int -> Int [cost: Const(1)] =
+  if tier == 3 then 1 else 0
+
+-- Compute novelty weight for a tier
+-- Only Deep tier uses novelty-driven search (weight = 2)
+let tier_novelty_weight tier : Int -> Int [cost: Const(1)] =
+  if tier == 3 then 2 else 0
+
+-- Check if a result meets the tier's quality threshold
+-- Instant/Fast need exact match (score >= 99), Standard/Deep allow partial
+-- Inputs:
+--   tier  : latency tier
+--   score : correctness score (0-100)
+-- Output: 1 if acceptable, 0 otherwise
+let meets_tier_threshold tier score : Int -> Int -> Int [cost: Const(3)] =
+  if tier <= 1 then
+    if score >= 99 then 1 else 0
+  else if tier == 2 then
+    if score >= 90 then 1 else 0
+  else
+    if score >= 50 then 1 else 0
+
+-- Select the effective tier: if library has hits, downgrade to Instant
+-- Otherwise use the requested tier
+let effective_tier requested_tier library_has_hits : Int -> Int -> Int [cost: Const(2)] =
+  if library_has_hits == 1 then
+    if requested_tier >= 1 then 0
+    else requested_tier
+  else requested_tier

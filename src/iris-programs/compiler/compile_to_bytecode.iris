@@ -1,0 +1,304 @@
+-- Bytecode compilation: SemanticGraph -> complete instruction stream
+--
+-- Mirrors the Rust compile_bytecode module in iris-exec/src/compile_bytecode.rs.
+-- Walks the graph recursively from root (post-order), emitting bytecode
+-- instructions for each node.  The output is a Bytes value containing packed
+-- 4-byte LE instructions terminated by Halt.
+--
+-- Instruction encoding: each instruction is 4 bytes LE = opcode * 65536 + operand
+--
+-- OpCode table:
+--   0 = Halt, 1 = LoadConst, 2 = LoadArg, 3 = Add, 4 = Sub,
+--   5 = Mul, 6 = Div, 7 = Mod, 8 = Max, 9 = Min,
+--   10 = Eq, 11 = Lt, 12 = Le, 13 = Gt, 14 = Ge, 15 = Ne,
+--   19 = Neg, 20 = Abs, 21 = MkTuple, 22 = TupleGet,
+--   24 = FoldPrim, 32 = JumpIfFalse, 31 = Jump, 33 = Pow
+--
+-- Supported node kinds:
+--   Prim (0), Guard (3), Project (4), Lit (5), Inject (6),
+--   Tuple (8), Fold (12), TypeAbst (14), TypeApp (15), Let (17)
+--
+-- Self-recursive via self_graph + graph_eval for child compilation.
+
+-- =========================================================================
+-- Opcode mapping
+-- =========================================================================
+
+-- Map a Prim opcode to the corresponding bytecode OpCode
+let opcode_to_bytecode prim_opcode : Int -> Int [cost: Const(20)] =
+  if prim_opcode == 0 then 3        -- add -> Add
+  else if prim_opcode == 1 then 4   -- sub -> Sub
+  else if prim_opcode == 2 then 5   -- mul -> Mul
+  else if prim_opcode == 3 then 6   -- div -> Div
+  else if prim_opcode == 4 then 7   -- mod -> Mod
+  else if prim_opcode == 5 then 19  -- neg -> Neg
+  else if prim_opcode == 6 then 20  -- abs -> Abs
+  else if prim_opcode == 7 then 9   -- min -> Min
+  else if prim_opcode == 8 then 8   -- max -> Max
+  else if prim_opcode == 9 then 33  -- pow -> Pow
+  else if prim_opcode == 32 then 10 -- eq -> Eq
+  else if prim_opcode == 33 then 15 -- ne -> Ne
+  else if prim_opcode == 34 then 11 -- lt -> Lt
+  else if prim_opcode == 35 then 13 -- gt -> Gt
+  else if prim_opcode == 36 then 12 -- le -> Le
+  else if prim_opcode == 37 then 14 -- ge -> Ge
+  else -1
+
+-- Map higher-order Prim opcodes
+let higher_order_to_bytecode prim_opcode : Int -> Int [cost: Const(8)] =
+  if prim_opcode == 48 then 36      -- map -> MapPrim
+  else if prim_opcode == 49 then 37 -- filter -> FilterPrim
+  else if prim_opcode == 50 then 38 -- zip -> Zip
+  else if prim_opcode == 51 then 41 -- take -> Take
+  else if prim_opcode == 52 then 42 -- drop -> Drop
+  else if prim_opcode == 53 then 40 -- concat -> Concat
+  else if prim_opcode == 54 then 39 -- reverse -> Reverse
+  else -1
+
+-- =========================================================================
+-- Instruction encoding helpers
+-- =========================================================================
+
+-- Encode a single bytecode instruction as 4 bytes LE
+let encode_instr opcode operand : Int -> Int -> Bytes [cost: Const(4)] =
+  let v = opcode * 65536 + operand in
+  let b0 = bitand v 255 in
+  let b1 = bitand (shr v 8) 255 in
+  let b2 = bitand (shr v 16) 255 in
+  let b3 = bitand (shr v 24) 255 in
+  bytes_from_ints (b0, b1, b2, b3)
+
+let emit_halt_instr : Bytes [cost: Const(1)] = bytes_from_ints (0, 0, 0, 0)
+
+let emit_load_const_instr idx : Int -> Bytes [cost: Const(4)] = encode_instr 1 idx
+
+let emit_load_arg_instr idx : Int -> Bytes [cost: Const(4)] = encode_instr 2 idx
+
+let emit_arith_instr bc_op : Int -> Bytes [cost: Const(4)] = encode_instr bc_op 0
+
+let emit_make_tuple_instr n : Int -> Bytes [cost: Const(4)] = encode_instr 21 n
+
+let emit_tuple_get_instr idx : Int -> Bytes [cost: Const(4)] = encode_instr 22 idx
+
+let emit_jump_instr offset : Int -> Bytes [cost: Const(4)] = encode_instr 31 offset
+
+let emit_jump_if_false_instr offset : Int -> Bytes [cost: Const(4)] = encode_instr 32 offset
+
+let emit_fold_prim_instr step_op : Int -> Bytes [cost: Const(4)] = encode_instr 24 step_op
+
+-- =========================================================================
+-- Recursive node compiler
+-- =========================================================================
+
+-- Compile a single node to bytecode instructions (Bytes).
+-- Self-recursive via self_graph + graph_eval for child nodes.
+-- Children are compiled first (post-order), then the node's own instruction.
+let compile_node program node_id =
+  let kind = graph_get_kind program node_id in
+
+  -- Lit node (kind == 5): LoadConst or LoadArg
+  if eq kind 5 then
+    let lit_info = graph_get_lit_value program node_id in
+    let type_tag = list_nth lit_info 0 in
+    let lit_val = list_nth lit_info 1 in
+    if eq type_tag 255 then
+      emit_load_arg_instr lit_val
+    else
+      emit_load_const_instr lit_val
+
+  -- Prim node (kind == 0): compile children then emit op
+  else if eq kind 0 then
+    let opcode = graph_get_prim_op program node_id in
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    -- Check higher-order ops first
+    if opcode >= 48 then
+      if opcode <= 54 then
+        let bc = higher_order_to_bytecode opcode in
+        if bc == -1 then bytes_from_ints ()
+        else
+          -- Compile collection child
+          let n_children = list_len children in
+          let child_code = fold (bytes_from_ints ()) (\acc i ->
+            if i < n_children then
+              let child_id = list_nth children i in
+              let cc = graph_eval me (program, child_id) in
+              bytes_concat acc cc
+            else acc
+          ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+          bytes_concat child_code (emit_arith_instr bc)
+      else bytes_from_ints ()
+    else
+      let bytecode_op = opcode_to_bytecode opcode in
+      if bytecode_op == -1 then bytes_from_ints ()
+      else
+        -- Unary ops (neg=5, abs=6): one child
+        if eq opcode 5 then
+          let child0 = list_nth children 0 in
+          let code0 = graph_eval me (program, child0) in
+          bytes_concat code0 (emit_arith_instr bytecode_op)
+        else if eq opcode 6 then
+          let child0 = list_nth children 0 in
+          let code0 = graph_eval me (program, child0) in
+          bytes_concat code0 (emit_arith_instr bytecode_op)
+        -- Binary ops: compile both children then emit
+        else
+          let child0 = list_nth children 0 in
+          let child1 = list_nth children 1 in
+          let code0 = graph_eval me (program, child0) in
+          let code1 = graph_eval me (program, child1) in
+          bytes_concat (bytes_concat code0 code1) (emit_arith_instr bytecode_op)
+
+  -- Guard node (kind == 3): cond + JumpIfFalse + then + Jump + else
+  else if eq kind 3 then
+    let children = graph_outgoing program node_id in
+    let cond_id = list_nth children 0 in
+    let then_id = list_nth children 1 in
+    let else_id = list_nth children 2 in
+    let me = self_graph in
+    let cond_code = graph_eval me (program, cond_id) in
+    let then_code = graph_eval me (program, then_id) in
+    let else_code = graph_eval me (program, else_id) in
+    -- Instruction count: then_instrs + 1 (for the Jump at end of then)
+    let then_instrs = bytes_len then_code / 4 in
+    let else_instrs = bytes_len else_code / 4 in
+    let jif = emit_jump_if_false_instr (then_instrs + 1) in
+    let jmp = emit_jump_instr else_instrs in
+    bytes_concat cond_code (bytes_concat jif (bytes_concat then_code (bytes_concat jmp else_code)))
+
+  -- Project node (kind == 4): compile child then TupleGet
+  else if eq kind 4 then
+    let children = graph_outgoing program node_id in
+    let child0 = list_nth children 0 in
+    let me = self_graph in
+    let code0 = graph_eval me (program, child0) in
+    let field_idx = graph_get_prim_op program node_id in
+    bytes_concat code0 (emit_tuple_get_instr field_idx)
+
+  -- Inject node (kind == 6): compile child then Inject tag
+  else if eq kind 6 then
+    let children = graph_outgoing program node_id in
+    let child0 = list_nth children 0 in
+    let me = self_graph in
+    let code0 = graph_eval me (program, child0) in
+    let tag = graph_get_prim_op program node_id in
+    bytes_concat code0 (encode_instr 28 tag)
+
+  -- Tuple node (kind == 8): compile all children then MkTuple
+  else if eq kind 8 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let n_children = list_len children in
+    let child_code = fold (bytes_from_ints ()) (\acc i ->
+      if i < n_children then
+        let child_id = list_nth children i in
+        let cc = graph_eval me (program, child_id) in
+        bytes_concat acc cc
+      else acc
+    ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+    bytes_concat child_code (emit_make_tuple_instr n_children)
+
+  -- Fold node (kind == 12): compile base + collection, emit FoldPrim
+  else if eq kind 12 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let base_id = list_nth children 0 in
+    let base_code = graph_eval me (program, base_id) in
+    if list_len children >= 3 then
+      let step_id = list_nth children 1 in
+      let coll_id = list_nth children 2 in
+      let step_kind = graph_get_kind program step_id in
+      let step_op = if eq step_kind 0 then graph_get_prim_op program step_id else 0 in
+      let coll_code = graph_eval me (program, coll_id) in
+      let bytecode_step = opcode_to_bytecode step_op in
+      let bc_step = if bytecode_step == -1 then 3 else bytecode_step in
+      bytes_concat (bytes_concat base_code coll_code) (emit_fold_prim_instr bc_step)
+    else
+      base_code
+
+  -- Lambda (kind == 2): compile body (first child)
+  else if eq kind 2 then
+    let children = graph_outgoing program node_id in
+    if list_len children >= 1 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      graph_eval me (program, child0)
+    else bytes_from_ints ()
+
+  -- TypeAbst (kind == 14), TypeApp (kind == 15), Let (kind == 17): compile body
+  else if eq kind 14 then
+    let children = graph_outgoing program node_id in
+    if list_len children >= 1 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      graph_eval me (program, child0)
+    else bytes_from_ints ()
+
+  else if eq kind 15 then
+    let children = graph_outgoing program node_id in
+    if list_len children >= 1 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      graph_eval me (program, child0)
+    else bytes_from_ints ()
+
+  else if eq kind 17 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let n_ch = list_len children in
+    if n_ch >= 2 then
+      -- Let: compile binding, then body
+      let bind_id = list_nth children 0 in
+      let body_id = list_nth children 1 in
+      let bind_code = graph_eval me (program, bind_id) in
+      let body_code = graph_eval me (program, body_id) in
+      bytes_concat bind_code body_code
+    else if n_ch >= 1 then
+      let child0 = list_nth children 0 in
+      graph_eval me (program, child0)
+    else bytes_from_ints ()
+
+  -- Match (kind == 11): compile discriminant + branches
+  else if eq kind 11 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let n_ch = list_len children in
+    if n_ch >= 1 then
+      let discrim_id = list_nth children 0 in
+      let discrim_code = graph_eval me (program, discrim_id) in
+      -- Compile all branch bodies and concatenate
+      let branch_code = fold (bytes_from_ints ()) (\acc i ->
+        if i < n_ch then
+          let br_id = list_nth children i in
+          let bc = graph_eval me (program, br_id) in
+          bytes_concat acc bc
+        else acc
+      ) (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+      let n_branches = n_ch - 1 in
+      bytes_concat discrim_code (bytes_concat branch_code (encode_instr 27 n_branches))
+    else bytes_from_ints ()
+
+  -- Rewrite (kind == 13): compile body (pass-through)
+  else if eq kind 13 then
+    let children = graph_outgoing program node_id in
+    if list_len children >= 1 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      graph_eval me (program, child0)
+    else bytes_from_ints ()
+
+  -- Unsupported: emit empty
+  else
+    bytes_from_ints ()
+
+-- =========================================================================
+-- Entry point
+-- =========================================================================
+
+-- Compile a SemanticGraph to a complete bytecode instruction stream.
+-- Takes (program, compiler) where compiler is the compile_node graph.
+-- Returns: Bytes containing packed 4-byte LE instructions ending with Halt.
+let compile_to_bytecode program =
+  let root = graph_get_root program in
+  let body = compile_node program root in
+  bytes_concat body emit_halt_instr

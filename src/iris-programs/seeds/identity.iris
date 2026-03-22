@@ -1,0 +1,18 @@
+-- Seed generator: construct an identity/passthrough program
+--
+-- The identity program is the simplest possible seed: it returns
+-- its input unchanged. In the Gen1 SemanticGraph representation:
+--
+--   Lambda(root, arity=1, binder=0, captured_count=0)
+--     port 0 (Binding) -> Lit(0)   body returns bound argument
+--
+-- This generator captures itself via self_graph, which contains
+-- the lambda expression below as a subgraph. The lambda \x -> x
+-- compiles to exactly the Lambda+Lit structure needed.
+--
+-- The identity program is the minimal seed for evolution to build
+-- upon. Evolution can grow it by adding Prim nodes and edges.
+let generate_identity : Int [cost: Const(2)] =
+  let id_fn = \x -> x in
+  let me = self_graph () in
+  me

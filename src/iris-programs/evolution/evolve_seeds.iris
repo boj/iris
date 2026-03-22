@@ -1,0 +1,104 @@
+-- Evolve seed generators: co-evolve the programs that produce starting
+-- populations for evolution.
+--
+-- Mirrors the Rust evolve_seeds.rs (1424 LOC) in iris-evolve.
+--
+-- A seed generator is an IRIS program that takes a random Int and produces
+-- a new program. Evolution refines generators to produce better starting
+-- points. Strategy: use self_graph + graph_set_prim_op to vary opcodes.
+--
+-- Safety caps: max 16 generators, 20 generations, 64-node generators.
+
+-- External stub (defined in codec/feature_codec.iris)
+let node_count program : Int -> Int [cost: Linear(program)] =
+  fold 0 (\acc x -> acc + 1) (graph_nodes program)
+
+-- Constants
+let max_generator_nodes : Int [cost: Const(1)] = 64
+let max_generated_seed_nodes : Int [cost: Const(1)] = 200
+let seeds_per_generator : Int [cost: Const(1)] = 16
+let generator_step_limit : Int [cost: Const(1)] = 10000
+
+-- Run a generator program with a given random seed.
+-- graph_eval is legitimate: evaluating a candidate generator program.
+let run_generator generator rand_seed : Int -> Int -> Int [cost: Unknown] =
+  let result = graph_eval generator rand_seed in
+  let nc = node_count result in
+  if nc > max_generated_seed_nodes then 0
+  else if nc == 0 then 0
+  else result
+
+-- Evaluate a single generator by running it seeds_per_generator times
+-- and scoring the generated seeds against test cases.
+-- Returns: average fitness across all generated seeds.
+let evaluate_generator generator test_cases : Int -> Int -> Int [cost: Unknown] =
+  let scores = fold (0, 0)
+    (\state seed_idx ->
+      let seed_prog = run_generator generator seed_idx in
+      if seed_prog == 0 then state
+      else
+        let fitness = fold 0
+          (\acc tc ->
+            let result = graph_eval seed_prog (tc.0) in
+            acc + (if result == tc.1 then 1 else 0))
+          test_cases in
+        (state.0 + fitness, state.1 + 1))
+    seeds_per_generator in
+  if scores.1 == 0 then 0
+  else scores.0 / scores.1
+
+-- Mutate a generator by changing a random opcode in its graph.
+let mutate_generator generator rand : Int -> Int -> Int [cost: Linear(generator)] =
+  let nc = node_count generator in
+  if nc == 0 then generator
+  else
+    let nodes = graph_nodes generator in
+    let target_idx = rand % nc in
+    let target = fold (0, 0)
+      (\state nid ->
+        if state.0 == target_idx then (state.0 + 1, nid)
+        else (state.0 + 1, state.1))
+      nodes in
+    let new_op = rand % 20 in
+    graph_set_prim_op generator target.1 new_op
+
+-- Evolve a population of generators for n_generations.
+-- Uses (1+1) ES per generator: mutate, keep if better.
+-- Returns the best generator found.
+let evolve_generators generators test_cases n_generations : Int -> Int -> Int -> Int [cost: Unknown] =
+  fold generators
+    (\pop gen ->
+      fold pop
+        (\best_so_far gen_entry ->
+          let gen_prog = gen_entry.0 in
+          let gen_score = gen_entry.1 in
+          let mutant = mutate_generator gen_prog (gen * 31 + gen_score) in
+          let mut_nc = node_count mutant in
+          if mut_nc > max_generator_nodes then gen_entry
+          else
+            let mut_score = evaluate_generator mutant test_cases in
+            if mut_score > gen_score then (mutant, mut_score)
+            else gen_entry)
+        pop)
+    n_generations
+
+-- Compare seed strategies: run each generator on the same test cases,
+-- return the index of the best one.
+let compare_seed_strategies generators test_cases : Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  fold (0, 0 - 1, 0)
+    (\state gen_entry ->
+      let score = evaluate_generator gen_entry.0 test_cases in
+      if score > state.1 then (state.2, score, state.2 + 1)
+      else (state.0, state.1, state.2 + 1))
+    generators
+
+-- Main entry: try to replace Rust seed generators with evolved IRIS ones.
+-- Takes initial generators (from programs/seeds/), test cases, and budget.
+-- Returns (success, best_generator, best_score).
+let try_replace_rust_seeds generators test_cases n_gens : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let evolved = evolve_generators generators test_cases n_gens in
+  let comparison = compare_seed_strategies evolved test_cases in
+  let best_idx = comparison.0 in
+  let best_score = comparison.1 in
+  if best_score > 0 then (1, best_idx, best_score)
+  else (0, 0, 0)

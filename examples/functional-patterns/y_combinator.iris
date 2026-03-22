@@ -1,0 +1,58 @@
+-- Y Combinator (Fixed-Point Combinator)
+-- Enables recursion without explicit `let rec` by deriving the fixed point
+-- of a non-recursive function.
+--
+-- Y f = f (Y f)
+--
+-- In a strict language like IRIS, we need the Z combinator (applicative-order Y):
+-- Z f = f (\x -> Z f x)
+--
+-- IRIS has native `let rec`, so this is pedagogical -- showing that recursion
+-- can be derived from lambdas alone.
+
+-- FIXME: The Z combinator requires passing a function that takes itself as
+-- an argument. IRIS's type system may not support the self-referential type
+-- (a -> b) -> (a -> b) needed for the true Z combinator.
+-- We demonstrate the pattern using `let rec` as the fixed-point mechanism.
+
+-- Factorial written in "open recursion" style: takes `self` as first arg.
+let fact_open self n : (Int -> Int) -> Int -> Int [cost: Unknown] =
+  if n <= 1 then 1
+  else n * self (n - 1)
+
+-- Fixed point via let rec: close the recursion.
+let rec fix_fact n : Int -> Int [cost: Unknown] =
+  fact_open fix_fact n
+
+-- Fibonacci in open recursion style.
+let fib_open self n : (Int -> Int) -> Int -> Int [cost: Unknown] =
+  if n <= 1 then n
+  else self (n - 1) + self (n - 2)
+
+let rec fix_fib n : Int -> Int [cost: Unknown] =
+  fib_open fix_fib n
+
+-- GCD in open recursion style.
+let gcd_open self a b : (Int -> Int -> Int) -> Int -> Int -> Int [cost: Unknown] =
+  if b == 0 then a
+  else self b (a % b)
+
+let rec fix_gcd a b : Int -> Int -> Int [cost: Unknown] =
+  gcd_open fix_gcd a b
+
+-- Ackermann function (extremely fast-growing, tests deep recursion).
+let ack_open self m n : (Int -> Int -> Int) -> Int -> Int -> Int [cost: Unknown] =
+  if m == 0 then n + 1
+  else if n == 0 then self (m - 1) 1
+  else self (m - 1) (self m (n - 1))
+
+let rec fix_ack m n : Int -> Int -> Int [cost: Unknown] =
+  ack_open fix_ack m n
+
+-- Test
+let test_y_combinator x : Int -> Tuple =
+  let f5 = fix_fact 5 in       -- 120
+  let f10 = fix_fib 10 in      -- 55
+  let g = fix_gcd 48 18 in     -- 6
+  let a = fix_ack 2 3 in       -- 9
+  (f5, f10, g, a)

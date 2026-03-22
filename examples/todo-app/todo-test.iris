@@ -1,0 +1,56 @@
+-- TODO App Tests
+-- Verifies all TODO list operations.
+
+-- Test: new list with next_id has no items.
+let test_new_store x : Int -> Int [cost: Const(2)] =
+  let store = map_insert state_empty "next_id" 0 in
+  let ks = map_keys store in
+  let item_count = fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) ks in
+  if item_count == 0 then 1 else 0 - 1
+
+-- Test: add item makes it retrievable (check description via list_nth).
+let test_add_item x : Int -> Int [cost: Const(5)] =
+  let store = map_insert state_empty "next_id" 0 in
+  let s1 = map_insert store "item_0" ("Buy milk", 0) in
+  let item = map_get s1 "item_0" in
+  let desc = list_nth item 0 in
+  if str_eq desc "Buy milk" then 1 else 0 - 1
+
+-- Test: complete item changes status to 1.
+let test_complete_item x : Int -> Int [cost: Const(5)] =
+  let store = map_insert state_empty "item_0" ("Read book", 0) in
+  let s1 = map_insert store "item_0" ("Read book", 1) in
+  let item = map_get s1 "item_0" in
+  let status = list_nth item 1 in
+  if status == 1 then 1 else 0 - 1
+
+-- Test: remove item reduces count.
+let test_remove_item x : Int -> Int [cost: Const(4)] =
+  let s1 = map_insert (map_insert state_empty "item_0" 1) "item_1" 2 in
+  let s2 = map_remove s1 "item_0" in
+  let ks = map_keys s2 in
+  let item_count = fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) ks in
+  if item_count == 1 then 1 else 0 - 1
+
+-- Test: item count reflects number of item_N keys.
+let test_item_count x : Int -> Int [cost: Const(3)] =
+  let s1 = map_insert state_empty "item_0" ("a", 0) in
+  let s2 = map_insert s1 "item_1" ("b", 0) in
+  let ks = map_keys s2 in
+  let item_count = fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) ks in
+  if item_count == 2 then 1 else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(30)] =
+  let base = map_insert state_empty "next_id" 0 in
+  let t1 = if fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) (map_keys base) == 0 then 1 else 0 - 1 in
+  let s1 = map_insert base "item_0" ("task", 0) in
+  let desc = list_nth (map_get s1 "item_0") 0 in
+  let t2 = if str_eq desc "task" then 1 else 0 - 1 in
+  let s2 = map_insert s1 "item_0" ("task", 1) in
+  let t3 = if list_nth (map_get s2 "item_0") 1 == 1 then 1 else 0 - 1 in
+  let s3 = map_insert (map_insert base "item_0" ("a", 0)) "item_1" ("b", 0) in
+  let t4 = if fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) (map_keys s3) == 2 then 1 else 0 - 1 in
+  let s4 = map_remove s3 "item_0" in
+  let t5 = if fold 0 (\acc k -> if str_starts_with k "item_" then acc + 1 else acc) (map_keys s4) == 1 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5)

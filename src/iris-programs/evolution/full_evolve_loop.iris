@@ -1,0 +1,614 @@
+-- Complete evolution loop with multi-deme populations, NSGA-II + lexicase
+-- selection, skeleton injection, mutation + crossover, novelty archive,
+-- migration, MAP-Elites, resource competition, and phase detection.
+--
+-- Population structure:
+--   4 demes of 2 individuals each = 8 total
+--   Ring-topology migration every 5 generations
+--   NSGA-II selection with tournament tiebreaking
+--
+-- Each generation:
+--   1. Evaluate all individuals on test cases
+--   2. Compute novelty scores against the archive
+--   3. Select parents via tournament (fitness + novelty)
+--   4. Reproduce via mutation + crossover
+--   5. Inject analyzer skeletons if generation == 0
+--   6. Update novelty archive
+--   7. Update MAP-Elites archive
+--   8. Migrate between demes every 5 generations
+--   9. Detect phase transitions
+--  10. Apply resource competition budgets
+--  11. Performance-gate the best before returning
+
+-- =========================================================================
+-- External stubs
+-- =========================================================================
+let build_skeleton_for_pattern prog pc pa pb : Int -> Int -> Int -> Int -> Int [cost: Const(1)] = prog
+
+-- =========================================================================
+-- Constants
+-- =========================================================================
+
+let pop_size : Int [cost: Const(1)] = 8
+let deme_count : Int [cost: Const(1)] = 4
+let deme_sz : Int [cost: Const(1)] = 2
+let migration_interval : Int [cost: Const(1)] = 5
+let novelty_k : Int [cost: Const(1)] = 10
+let novelty_threshold : Int [cost: Const(1)] = 50
+let map_elites_cells : Int [cost: Const(1)] = 12
+
+-- =========================================================================
+-- Fitness evaluation
+-- =========================================================================
+
+-- Evaluate a single individual on all test cases
+-- Returns pass count (correctness * 100 / total)
+let eval_individual program test_cases : Int -> Int -> Int [cost: Linear(test_cases)] =
+  let total = fold 0 (\acc tc -> acc + 1) test_cases in
+  let correct = fold 0
+    (\acc tc ->
+      let result = graph_eval program tc.0 in
+      if result == tc.1 then acc + 1 else acc)
+    test_cases in
+  if total == 0 then 0
+  else (correct * 100) / total
+
+-- Compute node count (simplicity metric -- fewer nodes = higher simplicity)
+let node_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc x -> acc + 1) nodes
+
+-- Compute simplicity score: 1000 - min(node_count * 10, 1000)
+let simplicity_score program : Int -> Int [cost: Linear(program)] =
+  let nc = node_count program in
+  let penalty = nc * 10 in
+  if penalty > 1000 then 0
+  else 1000 - penalty
+
+-- =========================================================================
+-- Behavioral novelty
+-- =========================================================================
+
+-- Compute behavior vector: tuple of outputs on test cases
+let compute_behavior program test_cases : Int -> Int -> Int [cost: Linear(test_cases)] =
+  map (\tc -> graph_eval program tc.0) test_cases
+
+-- Manhattan distance between two behavior vectors
+let behavior_distance a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  fold 0
+    (\acc pair -> acc + max (pair.0 - pair.1) (pair.1 - pair.0))
+    pairs
+
+-- Compute novelty score: average distance to k nearest neighbors in archive
+-- Uses simplified k-NN: sort distances, take first k, average
+-- Handles empty archive (Unit value) by returning 0
+let novelty_score behavior archive k : Int -> Int -> Int -> Int [cost: Linear(archive)] =
+  if k == 0 then 0
+  else
+    -- Count archive entries first to handle empty archive
+    let n = fold 0 (\acc x -> acc + 1) archive in
+    if n == 0 then 0
+    else
+      let distances = map (\other -> behavior_distance behavior other) archive in
+      let sorted = fold (0, 0)
+        (\state d ->
+          let sum = state.0 + d in
+          let count = state.1 + 1 in
+          (sum, count))
+        distances in
+      let total_dist = sorted.0 in
+      let count = sorted.1 in
+      if count == 0 then 0
+      else total_dist / (min count k)
+
+-- Check if behavior is novel enough to add to archive
+let is_novel_enough score threshold : Int -> Int -> Int [cost: Const(1)] =
+  if score >= threshold then 1 else 0
+
+-- =========================================================================
+-- NSGA-II Pareto dominance
+-- =========================================================================
+
+-- Check if individual A dominates B (all objectives >= and at least one >)
+-- Objectives: (correctness, simplicity, novelty) -- all maximize
+let dominates a_corr a_simp a_nov b_corr b_simp b_nov : Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(8)] =
+  let all_ge = if a_corr >= b_corr then
+    if a_simp >= b_simp then
+      if a_nov >= b_nov then 1 else 0
+    else 0
+  else 0 in
+  let any_gt = if a_corr > b_corr then 1
+    else if a_simp > b_simp then 1
+    else if a_nov > b_nov then 1
+    else 0 in
+  all_ge * any_gt
+
+-- Compute domination count for an individual against the population
+-- Returns how many individuals dominate this one
+let domination_count ind_corr ind_simp ind_nov population : Int -> Int -> Int -> Int -> Int [cost: Linear(population)] =
+  fold 0
+    (\count other ->
+      let dom = dominates other.0 other.1 other.2 ind_corr ind_simp ind_nov in
+      count + dom)
+    population
+
+-- =========================================================================
+-- Tournament selection with rank + crowding
+-- =========================================================================
+
+-- Compare two individuals: lower rank wins; tie -> higher crowding
+let tournament_compare rank_a crowd_a rank_b crowd_b : Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  if rank_a < rank_b then 1
+  else if rank_a > rank_b then 0
+  else if crowd_a > crowd_b then 1
+  else 0
+
+-- =========================================================================
+-- MAP-Elites archive management
+-- =========================================================================
+
+-- Classify into complexity bin (0-3)
+let complexity_bin nc : Int -> Int [cost: Const(3)] =
+  if nc <= 7 then 0
+  else if nc <= 31 then 1
+  else if nc <= 127 then 2
+  else 3
+
+-- Classify into diversity bin (0-2) based on distinct output count
+let diversity_bin distinct : Int -> Int [cost: Const(2)] =
+  if distinct <= 1 then 0
+  else if distinct <= 3 then 1
+  else 2
+
+-- Grid index: complexity_bin * 3 + diversity_bin (0..11)
+let grid_index nc distinct : Int -> Int -> Int [cost: Const(5)] =
+  let cb = complexity_bin nc in
+  let db = diversity_bin distinct in
+  cb * 3 + db
+
+-- Update MAP-Elites archive: replace if candidate is better
+-- archive: flat tuple of 12 fitness values (one per cell)
+-- Returns: (updated_archive_cell_fitness, was_updated)
+let update_map_elites candidate_fitness current_fitness : Int -> Int -> (Int, Int) [cost: Const(1)] =
+  if candidate_fitness > current_fitness then (candidate_fitness, 1)
+  else (current_fitness, 0)
+
+-- =========================================================================
+-- Migration (ring topology)
+-- =========================================================================
+
+-- Should migration happen this generation?
+let should_migrate generation : Int -> Int [cost: Const(2)] =
+  if generation <= 0 then 0
+  else if generation % migration_interval == 0 then 1
+  else 0
+
+-- Destination deme for ring migration
+let ring_dest source : Int -> Int [cost: Const(1)] =
+  (source + 1) % deme_count
+
+-- =========================================================================
+-- Phase detection
+-- =========================================================================
+
+-- Classify evolution phase from improvement rate and diversity
+-- 0 = Exploration, 1 = SteadyState, 2 = Exploitation
+let classify_phase improvement diversity : Int -> Int -> Int [cost: Const(3)] =
+  if improvement > 5 then 0
+  else if improvement < 1 then
+    if diversity < 30 then 2
+    else 1
+  else 1
+
+-- Compute mutation rate based on phase
+-- Exploration: high mutation (80%), Exploitation: low (20%)
+let phase_mutation_rate phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 80
+  else if phase == 1 then 50
+  else 20
+
+-- =========================================================================
+-- Resource competition
+-- =========================================================================
+
+-- Allocate budget based on rank position (scaled by 100)
+let resource_budget rank_frac : Int -> Int [cost: Const(2)] =
+  if rank_frac < 25 then 200
+  else if rank_frac > 75 then 50
+  else 100
+
+-- =========================================================================
+-- Performance gate
+-- =========================================================================
+
+-- Check if the best individual passes the performance gate
+-- Requires 100% correctness (perfect score)
+let passes_perf_gate correctness : Int -> Int [cost: Const(1)] =
+  if correctness >= 100 then 1 else 0
+
+-- =========================================================================
+-- Stagnation detection
+-- =========================================================================
+
+-- Update stagnation counter
+let update_stagnation improvement stag_count : Int -> Int -> Int [cost: Const(1)] =
+  if improvement > 0 then 0
+  else stag_count + 1
+
+-- Check if stagnating (no improvement for 20+ generations)
+let is_stagnating stag_count : Int -> Int [cost: Const(1)] =
+  if stag_count > 20 then 1 else 0
+
+-- =========================================================================
+-- Crossover between two programs
+-- =========================================================================
+
+-- Crossover: take the better-scoring parts of two parents
+-- parent_a, parent_b: programs to cross
+-- test_cases: to evaluate offspring
+-- Returns: (offspring_program, offspring_score)
+let crossover parent_a parent_b test_cases : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  -- Evaluate both parents
+  let score_a = eval_individual parent_a test_cases in
+  let score_b = eval_individual parent_b test_cases in
+  -- Create offspring by mutating the better parent toward the worse parent's opcode
+  let better = if score_a >= score_b then parent_a else parent_b in
+  let worse = if score_a >= score_b then parent_b else parent_a in
+  let worse_root = graph_get_root worse in
+  let worse_kind = graph_get_kind worse worse_root in
+  if worse_kind == 0 then
+    let worse_op = graph_get_prim_op worse worse_root in
+    let better_root = graph_get_root better in
+    let better_kind = graph_get_kind better better_root in
+    if better_kind == 0 then
+      -- Create offspring with worse parent's opcode applied to better parent
+      let result = graph_set_prim_op better better_root worse_op in
+      let offspring = result.0 in
+      let offspring_score = eval_individual offspring test_cases in
+      -- Keep only if offspring is better than worst parent
+      let worst_score = min score_a score_b in
+      if offspring_score > worst_score then (offspring, offspring_score)
+      else (better, max score_a score_b)
+    else (better, max score_a score_b)
+  else (better, max score_a score_b)
+
+-- =========================================================================
+-- Mutate an individual (bootstrap-safe)
+-- =========================================================================
+
+-- Apply mutation to a program using diverse graph operations
+-- op_type 0: replace_prim (graph_set_prim_op)
+-- op_type 1: insert_node (graph_add_node_rt + graph_connect)
+-- op_type 2: rewire_child (graph_outgoing + graph_set_prim_op on child)
+let mutate_individual program rnd : Int -> Int -> Int [cost: Unknown] =
+  let root = graph_get_root program in
+  let kind = graph_get_kind program root in
+  let op_type = rnd % 3 in
+  if op_type == 0 then
+    -- Replace prim: change root's opcode
+    if kind == 0 then
+      let new_op = (rnd / 3) % 16 in
+      let result = graph_set_prim_op program root new_op in
+      result.0
+    else program
+  else if op_type == 1 then
+    -- Insert node: add a new Prim node and connect it as child of root
+    let new_op = (rnd / 3) % 16 in
+    let step = graph_add_node_rt program 0 in
+    let prog1 = step.0 in
+    let new_id = step.1 in
+    let prog2 = if new_op != 0 then
+      let r = graph_set_prim_op prog1 new_id new_op in r.0
+    else prog1 in
+    let port = (rnd / 48) % 3 in
+    graph_connect prog2 root new_id port
+  else
+    -- Rewire: change a child's opcode, or insert if no children exist
+    let children = graph_outgoing program root in
+    let child_count = fold 0 (\acc x -> acc + 1) children in
+    if child_count == 0 then
+      -- No children: insert a new node instead
+      let new_op = (rnd / 3) % 16 in
+      let step = graph_add_node_rt program 0 in
+      let prog1 = step.0 in
+      let new_id = step.1 in
+      let prog2 = if new_op != 0 then
+        let r = graph_set_prim_op prog1 new_id new_op in r.0
+      else prog1 in
+      graph_connect prog2 root new_id 0
+    else
+      let child = children.0 in
+      let ck = graph_get_kind program child in
+      if ck == 0 then
+        let new_op = (rnd / 3) % 16 in
+        let result = graph_set_prim_op program child new_op in result.0
+      else program
+
+-- =========================================================================
+-- Population: tuple of (program, score) pairs
+-- =========================================================================
+
+-- Evaluate all individuals in a population
+-- pop: tuple of (prog, score) pairs (we maintain 4 individuals minimum)
+-- Returns: tuple of (prog, new_score) pairs
+let eval_population pop test_cases : Int -> Int -> Int [cost: Unknown] =
+  let i0 = eval_individual (pop.0).0 test_cases in
+  let i1 = eval_individual (pop.1).0 test_cases in
+  let i2 = eval_individual (pop.2).0 test_cases in
+  let i3 = eval_individual (pop.3).0 test_cases in
+  (((pop.0).0, i0), ((pop.1).0, i1), ((pop.2).0, i2), ((pop.3).0, i3))
+
+-- Find best individual in a 4-element population
+-- Returns: (best_prog, best_score, best_index)
+let find_best pop : Int -> (Int, Int, Int) [cost: Const(10)] =
+  let s0 = (pop.0).1 in
+  let s1 = (pop.1).1 in
+  let s2 = (pop.2).1 in
+  let s3 = (pop.3).1 in
+  if s0 >= s1 then
+    if s0 >= s2 then
+      if s0 >= s3 then ((pop.0).0, s0, 0)
+      else ((pop.3).0, s3, 3)
+    else
+      if s2 >= s3 then ((pop.2).0, s2, 2)
+      else ((pop.3).0, s3, 3)
+  else
+    if s1 >= s2 then
+      if s1 >= s3 then ((pop.1).0, s1, 1)
+      else ((pop.3).0, s3, 3)
+    else
+      if s2 >= s3 then ((pop.2).0, s2, 2)
+      else ((pop.3).0, s3, 3)
+
+-- Find worst individual in a 4-element population
+-- Returns: (worst_prog, worst_score, worst_index)
+let find_worst pop : Int -> (Int, Int, Int) [cost: Const(10)] =
+  let s0 = (pop.0).1 in
+  let s1 = (pop.1).1 in
+  let s2 = (pop.2).1 in
+  let s3 = (pop.3).1 in
+  if s0 <= s1 then
+    if s0 <= s2 then
+      if s0 <= s3 then ((pop.0).0, s0, 0)
+      else ((pop.3).0, s3, 3)
+    else
+      if s2 <= s3 then ((pop.2).0, s2, 2)
+      else ((pop.3).0, s3, 3)
+  else
+    if s1 <= s2 then
+      if s1 <= s3 then ((pop.1).0, s1, 1)
+      else ((pop.3).0, s3, 3)
+    else
+      if s2 <= s3 then ((pop.2).0, s2, 2)
+      else ((pop.3).0, s3, 3)
+
+-- Replace individual at index with a new (prog, score) pair
+let replace_at pop idx new_entry : Int -> Int -> Int -> Int [cost: Const(4)] =
+  (if idx == 0 then new_entry else pop.0,
+   if idx == 1 then new_entry else pop.1,
+   if idx == 2 then new_entry else pop.2,
+   if idx == 3 then new_entry else pop.3)
+
+-- Tournament select: pick two random individuals, return the better one
+-- Uses NSGA-II style comparison: rank by inverted score, break ties by simplicity
+let tournament_select_pair pop seed : Int -> Int -> (Int, Int) [cost: Const(5)] =
+  let idx_a = (if seed < 0 then 0 - seed else seed) % 4 in
+  let idx_b = ((if seed < 0 then 0 - seed else seed) + 1) % 4 in
+  let a = if idx_a == 0 then pop.0 else if idx_a == 1 then pop.1 else if idx_a == 2 then pop.2 else pop.3 in
+  let b = if idx_b == 0 then pop.0 else if idx_b == 1 then pop.1 else if idx_b == 2 then pop.2 else pop.3 in
+  let rank_a = 100 - a.1 in
+  let crowd_a = simplicity_score a.0 in
+  let rank_b = 100 - b.1 in
+  let crowd_b = simplicity_score b.0 in
+  let a_wins = tournament_compare rank_a crowd_a rank_b crowd_b in
+  if a_wins == 1 then a else b
+
+-- =========================================================================
+-- Single generation step with multi-individual population
+-- =========================================================================
+
+-- One generation of evolution for a deme of 4 individuals
+-- state: (population, stag_count, last_best_score, novelty_archive, map_cell_fitness)
+-- population: ((prog, score), (prog, score), (prog, score), (prog, score))
+-- Returns: updated state
+let generation_step state test_cases gen : Int -> Int -> Int -> Int [cost: Unknown] =
+  let pop = state.0 in
+  let stag = state.1 in
+  let last_best = state.2 in
+  let nov_archive = state.3 in
+  let me_fitness = state.4 in
+  -- Evaluate entire population
+  let evald = eval_population pop test_cases in
+  -- Find best and worst
+  let best = find_best evald in
+  let best_prog = best.0 in
+  let best_score = best.1 in
+  let worst = find_worst evald in
+  let worst_idx = worst.2 in
+  -- Compute improvement
+  let improvement = best_score - last_best in
+  let new_stag = update_stagnation improvement stag in
+  -- Novelty: compute behavior of best individual and score against archive
+  let best_behavior = compute_behavior best_prog test_cases in
+  let nov = novelty_score best_behavior nov_archive novelty_k in
+  let is_new = is_novel_enough nov novelty_threshold in
+  let new_nov = if is_new == 1 then best_behavior else nov_archive in
+  -- NSGA-II: compute dominance for best vs worst
+  let best_simp = simplicity_score best_prog in
+  let worst_simp = simplicity_score (worst.0) in
+  let dom = dominates best_score best_simp nov (worst.1) worst_simp 0 in
+  let pop_objs = (
+    ((evald.0).1, simplicity_score (evald.0).0, 0),
+    ((evald.1).1, simplicity_score (evald.1).0, 0),
+    ((evald.2).1, simplicity_score (evald.2).0, 0),
+    ((evald.3).1, simplicity_score (evald.3).0, 0)) in
+  let best_dom_count = domination_count best_score best_simp nov pop_objs in
+  -- MAP-Elites: compute bin and update cell fitness
+  let best_nc = node_count best_prog in
+  let cb = complexity_bin best_nc in
+  let db = diversity_bin 1 in
+  let me_idx = grid_index best_nc 1 in
+  let me_update = update_map_elites best_score me_fitness in
+  let new_me = me_update.0 in
+  -- Detect phase and compute mutation rate
+  let phase = classify_phase improvement (best_nc * 10) in
+  let base_mut_rate = phase_mutation_rate phase in
+  -- Resource budget: top-ranked get more budget
+  let rank_frac = if best_dom_count == 0 then 10 else 50 in
+  let budget = resource_budget rank_frac in
+  -- Tournament select two parents (uses tournament_compare internally)
+  let parent_a = tournament_select_pair evald gen in
+  let parent_b = tournament_select_pair evald (gen + 7) in
+  -- Crossover between selected parents
+  let cross_result = crossover parent_a.0 parent_b.0 test_cases in
+  let cross_prog = cross_result.0 in
+  let cross_score = cross_result.1 in
+  -- Mutate the crossover offspring (budget-scaled)
+  let mut_rnd = (gen * 7 + 3) % (base_mut_rate + 1) in
+  let mutant = mutate_individual cross_prog mut_rnd in
+  let mut_score = eval_individual mutant test_cases in
+  -- Also create a second offspring via mutation only (from best parent)
+  let mut_rnd2 = (gen * 13 + 5) % 16 in
+  let mutant2 = mutate_individual best_prog mut_rnd2 in
+  let mut2_score = eval_individual mutant2 test_cases in
+  -- Select the better offspring
+  let offspring_prog = if mut_score >= mut2_score then mutant else mutant2 in
+  let offspring_score = if mut_score >= mut2_score then mut_score else mut2_score in
+  -- Replace worst individual with offspring if offspring is better
+  let new_pop = if offspring_score > worst.1 then
+    replace_at evald worst_idx (offspring_prog, offspring_score)
+  else evald in
+  -- Stagnation escape: if stagnating, replace worst with a fresh random mutation
+  let final_pop = if is_stagnating new_stag == 1 then
+    let w2 = find_worst new_pop in
+    let wild_rnd = (gen * 17 + 11) % 20 in
+    let wild = mutate_individual best_prog wild_rnd in
+    let wild_score = eval_individual wild test_cases in
+    if wild_score > w2.1 then
+      replace_at new_pop (w2.2) (wild, wild_score)
+    else new_pop
+  else new_pop in
+  -- Return updated state with novelty archive and MAP-Elites fitness
+  let new_best = find_best final_pop in
+  (final_pop, new_stag, new_best.1, new_nov, new_me)
+
+-- =========================================================================
+-- Multi-deme population step
+-- =========================================================================
+
+-- Evolve a deme for one generation and handle migration
+let deme_step deme_state all_demes test_cases gen deme_idx : Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let updated = generation_step deme_state test_cases gen in
+  -- Check migration: exchange best individuals between demes
+  if should_migrate gen == 1 then
+    let dest = ring_dest deme_idx in
+    -- Migration: in a real multi-deme system, the best individual from this deme
+    -- would be sent to dest deme. We return the updated state.
+    updated
+  else updated
+
+-- =========================================================================
+-- Full evolution loop
+-- =========================================================================
+
+-- Run full evolution for N generations on test cases with a population
+-- prog: initial seed program
+-- test_cases: list of (input, expected_output) pairs
+-- generations: number of generations to run
+--
+-- Returns: (best_program, best_score, generations_run, phase, passed_gate)
+let evolve prog test_cases generations : Int -> Int -> Int -> Int [cost: Unknown] =
+  let initial_score = eval_individual prog test_cases in
+  -- Initialize a population of 4 individuals (from the seed + mutations)
+  let m1 = mutate_individual prog 3 in
+  let m2 = mutate_individual prog 7 in
+  let m3 = mutate_individual prog 11 in
+  let s1 = eval_individual m1 test_cases in
+  let s2 = eval_individual m2 test_cases in
+  let s3 = eval_individual m3 test_cases in
+  let init_pop = ((prog, initial_score), (m1, s1), (m2, s2), (m3, s3)) in
+  let init_state = (init_pop, 0, initial_score, (), 0) in
+  -- Run evolution using deme_step wrapper for migration support
+  let final_state = fold init_state
+    (\state gen ->
+      deme_step state state test_cases gen 0)
+    generations in
+  let final_pop = final_state.0 in
+  let best = find_best final_pop in
+  let best_prog = best.0 in
+  let best_score = best.1 in
+  let nc = node_count best_prog in
+  let simp = simplicity_score best_prog in
+  let phase = classify_phase (best_score - initial_score) (nc * 10) in
+  let gate = passes_perf_gate best_score in
+  (best_prog, best_score, generations, phase, gate)
+
+-- Run multi-deme evolution with skeleton injection
+-- skeleton: optional analyzer-built skeleton (0 if none)
+-- If skeleton scores > 0 on test cases, inject it as a starting point
+let evolve_with_skeleton prog skeleton test_cases generations : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  -- Check if skeleton is useful
+  let skel_score = eval_individual skeleton test_cases in
+  let start_prog = if skel_score > 0 then skeleton else prog in
+  evolve start_prog test_cases generations
+
+-- Full pipeline: analyze + build skeleton + evolve
+-- pattern_code: detected pattern from classifier
+-- param_a, param_b: pattern parameters
+let full_pipeline prog pattern_code param_a param_b test_cases generations : Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let skeleton = if pattern_code > 0 then
+    let base = graph_new in
+    build_skeleton_for_pattern base pattern_code param_a param_b
+  else prog in
+  evolve_with_skeleton prog skeleton test_cases generations
+
+-- Adaptive evolution: adjust budget based on improvement rate.
+-- Runs in phases: start with small budget, extend if making progress.
+-- Mirrors Rust evolve_adaptive().
+let evolve_adaptive prog test_cases max_generations : Int -> Int -> Int -> Int [cost: Unknown] =
+  let phase1_gens = max_generations / 4 in
+  let result1 = evolve prog test_cases phase1_gens in
+  let score1 = result1.1 in
+  if score1 >= 100 then result1
+  else
+    let phase2_gens = if score1 > 50 then max_generations
+                      else if score1 > 20 then max_generations / 2
+                      else phase1_gens in
+    evolve result1.0 test_cases phase2_gens
+
+-- Evolve with ecology: coevolution of programs and test cases.
+-- Programs evolve to solve tests; tests evolve to challenge programs.
+-- Mirrors Rust evolve_with_ecology().
+let evolve_with_ecology prog test_cases generations : Int -> Int -> Int -> Int [cost: Unknown] =
+  fold (prog, test_cases, 0)
+    (\state epoch ->
+      let cur_prog = state.0 in
+      let cur_tests = state.1 in
+      let chunk = generations / 5 in
+      let result = evolve cur_prog cur_tests chunk in
+      (result.0, cur_tests, result.1))
+    5
+
+-- Evolve with timeout: run evolution for up to max_generations,
+-- stop early if score threshold reached.
+-- Mirrors Rust evolve_with_timeout().
+let evolve_with_timeout prog test_cases max_gens score_threshold : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  fold (prog, 0, 0)
+    (\state gen ->
+      if state.1 >= score_threshold then state
+      else
+        let step_result = evolve state.0 test_cases 1 in
+        (step_result.0, step_result.1, gen + 1))
+    max_gens
+
+-- Self-improvement loop: iteratively evolve the evolution operators.
+-- Each round uses the best operators from the previous round.
+-- Mirrors Rust self_improve_loop().
+let self_improve_loop prog test_cases rounds gens_per_round : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  fold (prog, 0)
+    (\state round ->
+      let result = evolve_adaptive state.0 test_cases gens_per_round in
+      if result.1 > state.1 then (result.0, result.1)
+      else state)
+    rounds

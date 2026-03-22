@@ -1,0 +1,60 @@
+-- Luhn Algorithm
+-- Validates credit card numbers and other identification numbers.
+-- Used by Visa, MasterCard, etc.
+--
+-- Steps:
+-- 1. Starting from the rightmost digit, double every second digit.
+-- 2. If doubling produces a number > 9, subtract 9.
+-- 3. Sum all digits.
+-- 4. If the total modulo 10 is 0, the number is valid.
+
+-- Double a digit, subtracting 9 if the result is > 9.
+let luhn_double d : Int -> Int [cost: Const(2)] =
+  let doubled = d * 2 in
+  if doubled > 9 then doubled - 9 else doubled
+
+-- Validate a number given as a tuple of digits.
+let luhn_valid digits : Tuple -> Bool [cost: Linear(digits)] =
+  let n = list_len digits in
+  let sum = fold (0, 0) (\state i ->
+    let idx = n - 1 - i in
+    let d = list_nth digits idx in
+    let pos = state.1 in
+    let total = state.0 in
+    if pos % 2 == 1 then
+      (total + luhn_double d, pos + 1)
+    else
+      (total + d, pos + 1)
+  ) (list_range 0 n) in
+  sum.0 % 10 == 0
+
+-- Extract digits from an integer.
+let rec int_to_digits n : Int -> Tuple [cost: Unknown] =
+  if n < 10 then (n,)
+  else list_append (int_to_digits (n / 10)) (n % 10)
+
+-- Validate an integer.
+let luhn_valid_int n : Int -> Bool [cost: Unknown] =
+  luhn_valid (int_to_digits n)
+
+-- Compute the check digit for a partial number (without the last digit).
+-- Try digits 0-9 and return the one that makes it valid.
+let rec luhn_check_digit_aux digits d : Tuple -> Int -> Int [cost: Unknown] =
+  if d > 9 then -1  -- should not happen
+  else
+    let full = list_append digits d in
+    if luhn_valid full then d
+    else luhn_check_digit_aux digits (d + 1)
+
+let luhn_check_digit digits : Tuple -> Int [cost: Unknown] =
+  luhn_check_digit_aux digits 0
+
+-- Test
+let test_luhn x : Int -> Tuple =
+  -- 4539578763621486 is a valid Visa test number
+  let valid = luhn_valid (4, 5, 3, 9, 5, 7, 8, 7, 6, 3, 6, 2, 1, 4, 8, 6) in
+  -- 1234567890123456 is invalid
+  let invalid = luhn_valid (1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6) in
+  -- Check digit for 7992739871
+  let check = luhn_check_digit (7, 9, 9, 2, 7, 3, 9, 8, 7, 1) in
+  (valid, invalid, check)

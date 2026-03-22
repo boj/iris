@@ -1,0 +1,19 @@
+-- TCP Echo Server
+-- Listens on a port, accepts a connection, reads data, and echoes it back.
+-- Demonstrates: TCP primitives, let-in bindings.
+
+-- Serve a single connection: read data and echo it back.
+-- This is a single-shot handler (reads once, writes, closes).
+let serve conn : Int -> Int [cost: Unknown] =
+  let data = tcp_read conn 4096 in
+  if data == 0 then tcp_close conn
+  else
+    let w = tcp_write conn data in
+    tcp_close conn
+
+-- Start the echo server on the given port.
+-- Accepts one connection and serves it.
+let main port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  serve conn

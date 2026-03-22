@@ -1,0 +1,21 @@
+-- Detect negation pattern: output = -input for all test cases
+--
+-- Takes a list of (input, output) pairs and the count n.
+-- Negation means every output is the arithmetic negation of its input.
+-- Returns confidence score 0-100.
+
+-- Check if a single pair satisfies output == -input
+let is_negation_pair pair : (Int, Int) -> Int [cost: Const(1)] =
+  if pair.1 == 0 - pair.0 then 1 else 0
+
+-- Count how many test case pairs satisfy output == -input
+let count_negation_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_negation_pair pair) pairs
+
+-- Detect negation pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_negation pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_negation_matches pairs in
+    (matches * 100) / n

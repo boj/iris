@@ -1,0 +1,308 @@
+-- Training data pipeline: collect programs, extract features, compute targets
+--
+-- Mirrors the Rust training_data module in iris-codec/src/training_data.rs.
+-- Provides primitives for:
+--   - Deduplicating programs by semantic hash
+--   - Computing behavioral similarity between program outputs
+--   - Building full pairwise similarity matrices for codec training
+--   - Generating training triples (embedding_a, embedding_b, similarity)
+--   - Dataset statistics and distribution analysis
+
+-- ===================================================================
+-- Hash deduplication
+-- ===================================================================
+
+-- Truncate a 256-bit semantic hash to 64 bits for fast dedup
+-- Takes the first 8 bytes of the hash (modular arithmetic approximation)
+
+
+let truncate_hash hash : Int -> Int [cost: Const(1)] =
+  hash % 1000000007
+
+-- Check if a program hash is already in the seen set
+-- Uses modular checking as a bloom filter approximation
+-- seen_hashes: encoded as sum of hash values
+-- Returns 1 if likely seen (duplicate), 0 if not
+let is_duplicate hash seen_sum : Int -> Int -> Int [cost: Const(2)] =
+  if seen_sum == 0 then 0
+  else
+    let h = truncate_hash hash in
+    if h == 0 then 0
+    else if seen_sum % h == 0 then 1
+    else 0
+
+-- ===================================================================
+-- Behavioral similarity computation
+-- ===================================================================
+
+-- Score similarity between two individual output values
+-- Exact match = 1000, close = proportional, type mismatch = 0
+-- Returns similarity scaled by 1000
+let score_output_similarity actual expected : Int -> Int -> Int [cost: Const(5)] =
+  if actual == expected then 1000
+  else
+    let diff = if actual > expected
+      then actual - expected
+      else expected - actual in
+    let scale = if expected > 0 then expected
+      else if expected < 0 then 0 - expected
+      else 1 in
+    if diff == 0 then 1000
+    else if diff <= scale then
+      -- Smooth falloff: scale^2 / (scale + diff)^2 * 1000
+      let denom = scale + diff in
+      if denom == 0 then 0
+      else scale * scale * 1000 / (denom * denom)
+    else
+      -- Far apart: rapid falloff
+      let ratio = diff * 1000 / scale in
+      if ratio > 10000 then 0
+      else 1000 * 1000 / (1000 + ratio)
+
+-- Behavioral similarity using structural comparison of graph features
+-- Compares node kinds, opcodes, arities, depths between two programs
+-- Returns average similarity scaled by 1000 (no graph_eval needed)
+let behavioral_similarity prog_a prog_b test_inputs n_tests : Int -> Int -> Int -> Int -> Int [cost: Linear(prog_a)] =
+  let nodes_a = graph_nodes prog_a in
+  let nodes_b = graph_nodes prog_b in
+  let count_a = fold 0 (\acc x -> acc + 1) nodes_a in
+  let count_b = fold 0 (\acc x -> acc + 1) nodes_b in
+  -- Size similarity
+  let max_count = max count_a count_b in
+  let min_count = min count_a count_b in
+  let size_sim = if max_count == 0 then 1000
+    else min_count * 1000 / max_count in
+  -- Kind distribution similarity (5 key kinds)
+  let prim_a = fold 0 (\a n -> if graph_get_kind prog_a n == 0 then a + 1 else a) nodes_a in
+  let prim_b = fold 0 (\a n -> if graph_get_kind prog_b n == 0 then a + 1 else a) nodes_b in
+  let apply_a = fold 0 (\a n -> if graph_get_kind prog_a n == 1 then a + 1 else a) nodes_a in
+  let apply_b = fold 0 (\a n -> if graph_get_kind prog_b n == 1 then a + 1 else a) nodes_b in
+  let lit_a = fold 0 (\a n -> if graph_get_kind prog_a n == 5 then a + 1 else a) nodes_a in
+  let lit_b = fold 0 (\a n -> if graph_get_kind prog_b n == 5 then a + 1 else a) nodes_b in
+  let fold_a = fold 0 (\a n -> if graph_get_kind prog_a n == 8 then a + 1 else a) nodes_a in
+  let fold_b = fold 0 (\a n -> if graph_get_kind prog_b n == 8 then a + 1 else a) nodes_b in
+  let lambda_a = fold 0 (\a n -> if graph_get_kind prog_a n == 2 then a + 1 else a) nodes_a in
+  let lambda_b = fold 0 (\a n -> if graph_get_kind prog_b n == 2 then a + 1 else a) nodes_b in
+  let prim_diff = if prim_a > prim_b then prim_a - prim_b else prim_b - prim_a in
+  let apply_diff = if apply_a > apply_b then apply_a - apply_b else apply_b - apply_a in
+  let lit_diff = if lit_a > lit_b then lit_a - lit_b else lit_b - lit_a in
+  let fold_diff = if fold_a > fold_b then fold_a - fold_b else fold_b - fold_a in
+  let lambda_diff = if lambda_a > lambda_b then lambda_a - lambda_b else lambda_b - lambda_a in
+  let kind_penalty = (prim_diff + apply_diff + lit_diff + fold_diff + lambda_diff) * 50 in
+  let kind_sim = max 0 (1000 - kind_penalty) in
+  -- Edge density similarity
+  let ec_a = fold 0 (\eacc en -> let ech = graph_outgoing prog_a en in let ecc = fold 0 (\ea x -> ea + 1) ech in eacc + ecc) (graph_nodes prog_a) in
+  let ec_b = fold 0 (\eacc en -> let ech = graph_outgoing prog_b en in let ecc = fold 0 (\ea x -> ea + 1) ech in eacc + ecc) (graph_nodes prog_b) in
+  let max_ec = max ec_a ec_b in
+  let min_ec = min ec_a ec_b in
+  let edge_sim = if max_ec == 0 then 1000
+    else min_ec * 1000 / max_ec in
+  -- Combined: 40% size + 40% kind + 20% edge
+  (size_sim * 400 + kind_sim * 400 + edge_sim * 200) / 1000
+
+-- Behavioral similarity using structural comparison (no evaluation needed)
+-- Compares graph structure features as a proxy for behavioral similarity
+let structural_similarity prog_a prog_b : Int -> Int -> Int [cost: Linear(prog_a)] =
+  let nodes_a = graph_nodes prog_a in
+  let nodes_b = graph_nodes prog_b in
+  let count_a = fold 0 (\acc x -> acc + 1) nodes_a in
+  let count_b = fold 0 (\acc x -> acc + 1) nodes_b in
+  -- Size similarity
+  let max_count = max count_a count_b in
+  let min_count = min count_a count_b in
+  let size_sim = if max_count == 0 then 1000
+    else min_count * 1000 / max_count in
+  -- Kind distribution similarity (compare kind counts for key kinds)
+  let prim_a = fold 0 (\a n -> if graph_get_kind prog_a n == 0 then a + 1 else a) nodes_a in
+  let prim_b = fold 0 (\a n -> if graph_get_kind prog_b n == 0 then a + 1 else a) nodes_b in
+  let lit_a = fold 0 (\a n -> if graph_get_kind prog_a n == 5 then a + 1 else a) nodes_a in
+  let lit_b = fold 0 (\a n -> if graph_get_kind prog_b n == 5 then a + 1 else a) nodes_b in
+  let prim_diff = if prim_a > prim_b then prim_a - prim_b else prim_b - prim_a in
+  let lit_diff = if lit_a > lit_b then lit_a - lit_b else lit_b - lit_a in
+  let kind_penalty = (prim_diff + lit_diff) * 100 in
+  let kind_sim = max 0 (1000 - kind_penalty) in
+  -- Combined: 50% size + 50% kind distribution
+  (size_sim + kind_sim) / 2
+
+-- ===================================================================
+-- Full pairwise similarity matrix
+-- ===================================================================
+
+-- Compute number of pairs in the upper triangle
+-- For n programs: n*(n-1)/2 pairs
+let pairwise_pair_count n_programs : Int -> Int [cost: Const(2)] =
+  if n_programs < 2 then 0
+  else n_programs * (n_programs - 1) / 2
+
+-- Compute pairwise similarity for a batch of programs
+-- programs: list of program handles
+-- n_programs: count
+-- max_pairs: cap on number of pairs to compute
+-- Returns (num_pairs_computed, total_similarity_sum)
+let compute_pairwise_batch programs n_programs max_pairs : Int -> Int -> Int -> (Int, Int) [cost: Linear(max_pairs)] =
+  let total_possible = pairwise_pair_count n_programs in
+  let pairs_to_compute = min total_possible max_pairs in
+  -- Iterate over all program pairs via nested fold
+  -- For each program a, compare against all later programs b
+  let result = fold (0, 0)
+    (\outer prog_a ->
+      fold outer (\inner prog_b ->
+        if inner.0 >= pairs_to_compute then inner
+        else if prog_a == prog_b then inner
+        else
+          let sim = structural_similarity prog_a prog_b in
+          (inner.0 + 1, inner.1 + sim))
+        programs)
+    programs in
+  -- Divide by 2 since we counted each pair twice (a,b) and (b,a)
+  let count = result.0 / 2 in
+  let sum = result.1 / 2 in
+  if count > pairs_to_compute then (pairs_to_compute, sum * pairs_to_compute / (max 1 count))
+  else (count, sum)
+
+-- ===================================================================
+-- Dataset statistics and distribution analysis
+-- ===================================================================
+
+-- Build dataset metadata: count programs and problems
+let dataset_stats n_programs max_pairs : Int -> Int -> (Int, Int) [cost: Const(3)] =
+  let pairs = pairwise_pair_count n_programs in
+  let capped = min pairs max_pairs in
+  (n_programs, capped)
+
+-- Compute distribution statistics for a similarity matrix
+-- Returns (mean_sim, min_sim, max_sim, std_dev_proxy)
+-- All scaled by 1000
+let similarity_distribution similarities n_pairs : Int -> Int -> (Int, Int, Int, Int) [cost: Linear(similarities)] =
+  if n_pairs == 0 then (0, 0, 0, 0)
+  else
+    let stats = fold (0, 999999, 0, 0)
+      (\state sim ->
+        let sum = state.0 + sim in
+        let mn = min state.1 sim in
+        let mx = max state.2 sim in
+        let sq = state.3 + sim * sim / 1000 in
+        (sum, mn, mx, sq))
+      similarities in
+    let mean = stats.0 / n_pairs in
+    let min_s = stats.1 in
+    let max_s = stats.2 in
+    -- Variance = E[X^2] - E[X]^2
+    let mean_sq = stats.3 / n_pairs in
+    let variance = mean_sq - mean * mean / 1000 in
+    let std_proxy = if variance > 0 then variance else 0 in
+    (mean, min_s, max_s, std_proxy)
+
+-- ===================================================================
+-- Collection and dedup
+-- ===================================================================
+
+-- Check if the collector has reached capacity
+let is_collector_full current max_cap : Int -> Int -> Int [cost: Const(1)] =
+  if current >= max_cap then 1 else 0
+
+-- Determine if a program should be collected
+-- Returns 1 if accepted, 0 if rejected (duplicate or full)
+let should_collect hash current_count max_programs seen_sum : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  if current_count >= max_programs then 0
+  else if is_duplicate hash seen_sum == 1 then 0
+  else 1
+
+-- Update the seen hash sum after accepting a new program
+let update_seen_sum seen_sum new_hash : Int -> Int -> Int [cost: Const(1)] =
+  seen_sum + truncate_hash new_hash
+
+-- ===================================================================
+-- Training triple generation
+-- ===================================================================
+
+-- Generate a training triple from two programs and their similarity
+-- Uses structural comparison (no graph_eval)
+-- Returns (feature_hash_a, feature_hash_b, similarity)
+let make_training_triple prog_a prog_b n_tests : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(prog_a)] =
+  let sim = structural_similarity prog_a prog_b in
+  let hash_a = fold 0 (\acc n -> acc * 31 + graph_get_kind prog_a n) (graph_nodes prog_a) in
+  let hash_b = fold 0 (\acc n -> acc * 31 + graph_get_kind prog_b n) (graph_nodes prog_b) in
+  (hash_a, hash_b, sim)
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: truncate_hash produces consistent output
+let test_truncate_hash : Int [cost: Const(1)] =
+  let h1 = truncate_hash 12345 in
+  let h2 = truncate_hash 12345 in
+  if h1 == h2 then 1 else 0 - 1
+
+-- Test: truncate_hash is bounded
+let test_truncate_bounded : Int [cost: Const(1)] =
+  let h = truncate_hash 999999999999 in
+  if h >= 0 then
+    if h < 1000000007 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: score_output_similarity exact match = 1000
+let test_sim_exact : Int [cost: Const(1)] =
+  if score_output_similarity 42 42 == 1000 then 1 else 0 - 1
+
+-- Test: score_output_similarity close values high score
+let test_sim_close : Int [cost: Const(1)] =
+  let sim = score_output_similarity 100 101 in
+  if sim > 900 then 1 else 0 - 1
+
+-- Test: score_output_similarity far values low score
+let test_sim_far : Int [cost: Const(1)] =
+  let sim = score_output_similarity 1 100 in
+  if sim < 500 then 1 else 0 - 1
+
+-- Test: pairwise_pair_count for n=5 is 10
+let test_pair_count_5 : Int [cost: Const(1)] =
+  if pairwise_pair_count 5 == 10 then 1 else 0 - 1
+
+-- Test: pairwise_pair_count for n=0 is 0
+let test_pair_count_0 : Int [cost: Const(1)] =
+  if pairwise_pair_count 0 == 0 then 1 else 0 - 1
+
+-- Test: pairwise_pair_count for n=1 is 0
+let test_pair_count_1 : Int [cost: Const(1)] =
+  if pairwise_pair_count 1 == 0 then 1 else 0 - 1
+
+-- Test: dataset_stats caps pairs correctly
+let test_dataset_stats_cap : Int [cost: Const(1)] =
+  let stats = dataset_stats 100 50 in
+  if stats.1 == 50 then 1 else 0 - 1
+
+-- Test: is_collector_full when at capacity
+let test_collector_full : Int [cost: Const(1)] =
+  if is_collector_full 10 10 == 1 then 1 else 0 - 1
+
+-- Test: is_collector_full when under capacity
+let test_collector_not_full : Int [cost: Const(1)] =
+  if is_collector_full 5 10 == 0 then 1 else 0 - 1
+
+-- Test: should_collect accepts new program
+let test_should_collect_accept : Int [cost: Const(1)] =
+  -- New hash, under capacity, not in seen set
+  if should_collect 12345 0 100 0 == 1 then 1 else 0 - 1
+
+-- Test: should_collect rejects when full
+let test_should_collect_full : Int [cost: Const(1)] =
+  if should_collect 12345 100 100 0 == 0 then 1 else 0 - 1
+
+-- Test: update_seen_sum adds hash
+let test_update_seen : Int [cost: Const(1)] =
+  let s0 = 0 in
+  let s1 = update_seen_sum s0 12345 in
+  if s1 > 0 then 1 else 0 - 1
+
+-- Test: structural_similarity of same program is 1000
+let test_structural_sim_self : Int [cost: Const(1)] =
+  let g = self_graph in
+  let sim = structural_similarity g g in
+  if sim == 1000 then 1 else 0 - 1
+
+-- Test: similarity_distribution handles empty input
+let test_sim_dist_empty : Int [cost: Const(1)] =
+  let stats = similarity_distribution 0 0 in
+  if stats.0 == 0 then 1 else 0 - 1

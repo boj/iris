@@ -1,0 +1,66 @@
+-- Type-indexed fragment storage
+--
+-- Mirrors the Rust FragmentLibrary: stores fragments indexed by a
+-- type signature hash computed from input types and output type.
+-- Supports register (add) and lookup (search by type).
+--
+-- Fragment entries are stored as (fragment, type_hash, solve_count) tuples.
+-- Type signature hash = (input_count * 65537) XOR output_type_tag
+--
+-- This is the flywheel: every solved problem adds fragments that make
+-- the next problem easier via Instant-tier lookup.
+
+-- Compute a type signature hash from input count and output type tag
+-- Uses a simple hash: (n_inputs * 65537) XOR output_tag
+let type_sig_hash n_inputs output_tag : Int -> Int -> Int [cost: Const(3)] =
+  bitxor (n_inputs * 65537) output_tag
+
+-- Register a fragment in the library by adding a tagged node.
+-- Sets the new node's opcode to type_hash so search_by_type can find it.
+-- Returns the updated library program.
+let register library fragment type_hash : Int -> Int -> Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt library 0 in
+  let lib = step.0 in
+  let node_id = step.1 in
+  let step2 = graph_set_prim_op lib node_id type_hash in
+  let lib2 = step2.0 in
+  let new_node_id = step2.1 in
+  let root = graph_get_root lib2 in
+  graph_connect lib2 root new_node_id 0
+
+-- Search by type signature: find entries matching the target hash.
+-- Returns (count, best_node_id, best_score).
+let search_by_type library target_hash : Int -> Int -> (Int, Int, Int) [cost: Linear(library)] =
+  let nodes = graph_nodes library in
+  fold (0, 0, 0)
+    (\state node ->
+      let kind = graph_get_kind library node in
+      if kind == 0 then
+        let op = graph_get_prim_op library node in
+        if op == target_hash then (state.0 + 1, node, state.2 + 1)
+        else state
+      else state)
+    nodes
+
+-- Search by test cases: find the best-matching fragment
+-- Evaluates each library node against the test cases
+-- Returns (found, best_node, best_score)
+let search_by_tests library test_cases : Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let nodes = graph_nodes library in
+  fold (0, 0, 0)
+    (\state node ->
+      let score = graph_eval node test_cases in
+      if score > state.2 then (1, node, score)
+      else state)
+    nodes
+
+-- Record a hit: increment solve count proxy
+let record_hit library node_id : Int -> Int -> Int [cost: Const(2)] =
+  let current = graph_get_prim_op library node_id in
+  let step = graph_set_prim_op library node_id (current + 1) in
+  step.0
+
+-- Library size: count all fragment entries
+let library_size library : Int -> Int [cost: Linear(library)] =
+  let nodes = graph_nodes library in
+  fold 0 (\acc x -> acc + 1) nodes

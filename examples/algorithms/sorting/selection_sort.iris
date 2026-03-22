@@ -1,0 +1,44 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Selection Sort
+-- Find the minimum element, move it to front, repeat for remaining.
+-- O(n^2) time, not stable.
+
+-- Find the index of the minimum element starting from index `start`.
+let rec find_min_idx xs start current_min_idx : Tuple -> Int -> Int -> Int [cost: Linear(xs)] =
+  let n = list_len xs in
+  if start >= n then current_min_idx
+  else
+    let current = list_nth xs start in
+    let min_val = list_nth xs current_min_idx in
+    if current < min_val then
+      find_min_idx xs (start + 1) start
+    else
+      find_min_idx xs (start + 1) current_min_idx
+
+-- Swap elements at indices i and j in a list using list_set.
+let swap xs i j : Tuple -> Int -> Int -> Tuple [cost: Const(2)] =
+  let vi = list_nth xs i in
+  let vj = list_nth xs j in
+  list_set (list_set xs i vj) j vi
+
+-- Selection sort: select minimum n-1 times.
+let rec selection_sort_aux xs i : Tuple -> Int -> Tuple [cost: Unknown] =
+  let n = list_len xs in
+  if i >= n - 1 then xs
+  else
+    let min_idx = find_min_idx xs i i in
+    let swapped = if min_idx == i then xs else swap xs i min_idx in
+    selection_sort_aux swapped (i + 1)
+
+let selection_sort xs : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len xs in
+  if n <= 1 then xs
+  else selection_sort_aux xs 0
+
+-- Test
+let test_selection_sort x : Int -> Tuple =
+  let xs = (64, 25, 12, 22, 11) in
+  selection_sort xs

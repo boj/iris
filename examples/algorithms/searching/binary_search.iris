@@ -1,0 +1,38 @@
+-- Binary Search
+-- Search a sorted list for a target value.
+-- Returns the index if found, or -1 if not present.
+-- O(log n) time.
+
+let rec binary_search_aux xs target lo hi : Tuple -> Int -> Int -> Int -> Int [cost: Unknown] =
+  if lo > hi then -1
+  else
+    let mid = lo + (hi - lo) / 2 in
+    let val = list_nth xs mid in
+    if val == target then mid
+    else if val < target then binary_search_aux xs target (mid + 1) hi
+    else binary_search_aux xs target lo (mid - 1)
+
+let binary_search xs target : Tuple -> Int -> Int [cost: Unknown] =
+  let n = list_len xs in
+  if n == 0 then -1
+  else binary_search_aux xs target 0 (n - 1)
+
+-- Find insertion point (index where target should be inserted to keep sorted order).
+let rec lower_bound_aux xs target lo hi : Tuple -> Int -> Int -> Int -> Int [cost: Unknown] =
+  if lo >= hi then lo
+  else
+    let mid = lo + (hi - lo) / 2 in
+    let val = list_nth xs mid in
+    if val < target then lower_bound_aux xs target (mid + 1) hi
+    else lower_bound_aux xs target lo mid
+
+let lower_bound xs target : Tuple -> Int -> Int [cost: Unknown] =
+  lower_bound_aux xs target 0 (list_len xs)
+
+-- Test
+let test_binary_search x : Int -> Tuple =
+  let xs = (2, 5, 8, 12, 16, 23, 38, 56, 72, 91) in
+  let found = binary_search xs 23 in
+  let not_found = binary_search xs 50 in
+  let insert_at = lower_bound xs 20 in
+  (found, not_found, insert_at)

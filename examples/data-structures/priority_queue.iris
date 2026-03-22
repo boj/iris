@@ -1,0 +1,58 @@
+-- Priority Queue (Min-Heap)
+-- Implemented as a sorted tuple where index 0 is the minimum.
+-- Insert maintains sorted order; extract-min removes index 0.
+--
+-- A proper binary heap would be more efficient, but IRIS's immutable tuples
+-- make the sorted-list approach simpler and still correct.
+
+-- Create an empty priority queue.
+let pq_new x : Int -> Tuple [cost: Const(1)] = ()
+
+-- Insert: append then re-sort to maintain order.
+let pq_insert pq val : Tuple -> Int -> Tuple [cost: Linear(pq)] =
+  sort_by (\a b -> a - b) (list_append pq val)
+
+-- Extract minimum (the first element). Returns (new_pq, min_value).
+let pq_extract_min pq : Tuple -> Tuple [cost: Const(1)] =
+  let n = list_len pq in
+  if n == 0 then ((), -1)
+  else (list_drop pq 1, list_nth pq 0)
+
+-- Peek at minimum without removing.
+let pq_peek_min pq : Tuple -> Int [cost: Const(1)] =
+  if list_len pq == 0 then -1
+  else list_nth pq 0
+
+-- Size.
+let pq_size pq : Tuple -> Int [cost: Const(1)] =
+  list_len pq
+
+-- Check if empty.
+let pq_empty pq : Tuple -> Bool [cost: Const(1)] =
+  list_len pq == 0
+
+-- Build a priority queue from a list.
+let pq_from_list xs : Tuple -> Tuple [cost: Unknown] =
+  fold () (\pq x -> pq_insert pq x) xs
+
+-- Heap sort: build PQ then extract all elements.
+let heap_sort xs : Tuple -> Tuple [cost: Unknown] =
+  let pq = pq_from_list xs in
+  fold ((), pq) (\(result, q) step ->
+    let (new_q, min_val) = pq_extract_min q in
+    (list_append result min_val, new_q)
+  ) (list_range 0 (list_len xs))
+  |> (\(result, _) -> result)
+
+-- Test
+let test_priority_queue x : Int -> Tuple =
+  let pq = pq_new 0 in
+  let pq = pq_insert pq 5 in
+  let pq = pq_insert pq 2 in
+  let pq = pq_insert pq 8 in
+  let pq = pq_insert pq 1 in
+  let min_val = pq_peek_min pq in
+  let e1 = pq_extract_min pq in
+  let e2 = pq_extract_min e1.0 in
+  let sorted = heap_sort (5, 2, 8, 1, 3) in
+  (min_val, e1.1, e2.1, sorted)

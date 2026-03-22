@@ -1,0 +1,314 @@
+-- Tests for capability wiring subsystem
+-- depends: programs/exec/capability_wiring.iris, programs/testing/test_harness.iris
+
+-- =========================================================================
+-- effect_name_to_tag tests
+-- =========================================================================
+
+-- Test: FileRead (hash=764, len=8) -> KnownTag(4)
+let test_effect_tag_fileread : Int [cost: Const(5)] =
+  match (effect_name_to_tag 764 8) with
+  | KnownTag(t) -> assert_eq t 4 0
+  | UnknownTag -> 0 - 1
+
+-- Test: FileWrite (hash=907, len=9) -> KnownTag(5)
+let test_effect_tag_filewrite : Int [cost: Const(5)] =
+  match (effect_name_to_tag 907 9) with
+  | KnownTag(t) -> assert_eq t 5 0
+  | UnknownTag -> 0 - 1
+
+-- Test: Print (hash=525, len=5) -> KnownTag(0)
+let test_effect_tag_print : Int [cost: Const(5)] =
+  match (effect_name_to_tag 525 5) with
+  | KnownTag(t) -> assert_eq t 0 0
+  | UnknownTag -> 0 - 1
+
+-- Test: HttpGet (hash=704, len=7) -> KnownTag(2)
+let test_effect_tag_httpget : Int [cost: Const(5)] =
+  match (effect_name_to_tag 704 7) with
+  | KnownTag(t) -> assert_eq t 2 0
+  | UnknownTag -> 0 - 1
+
+-- Test: ThreadSpawn (hash=1121, len=11) -> KnownTag(32)
+let test_effect_tag_threadspawn : Int [cost: Const(5)] =
+  match (effect_name_to_tag 1121 11) with
+  | KnownTag(t) -> assert_eq t 32 0
+  | UnknownTag -> 0 - 1
+
+-- Test: FfiCall (hash=657, len=7) -> KnownTag(43)
+let test_effect_tag_fficall : Int [cost: Const(5)] =
+  match (effect_name_to_tag 657 7) with
+  | KnownTag(t) -> assert_eq t 43 0
+  | UnknownTag -> 0 - 1
+
+-- Test: MmapExec (hash=784, len=8) -> KnownTag(41)
+let test_effect_tag_mmapexec : Int [cost: Const(5)] =
+  match (effect_name_to_tag 784 8) with
+  | KnownTag(t) -> assert_eq t 41 0
+  | UnknownTag -> 0 - 1
+
+-- Test: Unknown effect -> UnknownTag
+let test_effect_tag_unknown : Int [cost: Const(5)] =
+  match (effect_name_to_tag 999 5) with
+  | KnownTag(_) -> 0 - 1
+  | UnknownTag -> 1
+
+-- Test: Hash collision guard — wrong length rejects
+let test_effect_tag_wrong_len : Int [cost: Const(5)] =
+  match (effect_name_to_tag 764 7) with
+  | KnownTag(_) -> 0 - 1
+  | UnknownTag -> 1
+
+-- =========================================================================
+-- pow2 tests
+-- =========================================================================
+
+-- Test: pow2(0) = 1
+let test_pow2_zero : Int [cost: Const(5)] =
+  assert_eq (pow2 0) 1 0
+
+-- Test: pow2(4) = 16 (FileRead bit)
+let test_pow2_four : Int [cost: Const(5)] =
+  assert_eq (pow2 4) 16 0
+
+-- Test: pow2(10) = 1024
+let test_pow2_ten : Int [cost: Const(5)] =
+  assert_eq (pow2 10) 1024 0
+
+-- Test: pow2(32) = 4294967296 (ThreadSpawn bit)
+let test_pow2_thirtytwo : Int [cost: Const(5)] =
+  assert_eq (pow2 32) 4294967296 0
+
+-- Test: pow2(43) = 8796093022208 (FfiCall bit)
+let test_pow2_fortythree : Int [cost: Const(5)] =
+  assert_eq (pow2 43) 8796093022208 0
+
+-- Test: pow2(44) = 0 (out of range)
+let test_pow2_out_of_range : Int [cost: Const(5)] =
+  assert_eq (pow2 44) 0 0
+
+-- =========================================================================
+-- cap_from_declarations tests
+-- =========================================================================
+
+-- Test: Single allow FileRead → tag 4 bit is set
+let test_cap_allow_fileread : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let entries = list_append mt (1, 764, 8, 0, 0) in
+  let cap = cap_from_declarations entries 1 in
+  -- effects_mask should have bit 4 set (pow2(4) = 16)
+  let ok1 = assert_eq (cap.0) 16 0 in
+  -- Structural flags should be 0 (only explicitly allowed effects)
+  let ok2 = assert_eq (cap.6) 0 1 in
+  let ok3 = assert_eq (cap.7) 0 2 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Allow FileRead + FileWrite → both bits set
+let test_cap_allow_two_effects : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let e1 = list_append mt (1, 764, 8, 0, 0) in
+  let entries = list_append e1 (1, 907, 9, 0, 0) in
+  let cap = cap_from_declarations entries 2 in
+  -- effects_mask = pow2(4) + pow2(5) = 16 + 32 = 48
+  assert_eq (cap.0) 48 0
+
+-- Test: Allow ThreadSpawn → threads flag is 1
+let test_cap_allow_threadspawn : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let entries = list_append mt (1, 1121, 11, 0, 0) in
+  let cap = cap_from_declarations entries 1 in
+  -- can_spawn_threads should be 1
+  let ok1 = assert_eq (cap.6) 1 0 in
+  -- effects_mask should have bit 32 set
+  let ok2 = assert_eq (cap.0) 4294967296 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: Deny FileWrite from unrestricted → everything except bit 5
+let test_cap_deny_filewrite : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let entries = list_append mt (0, 907, 9, 0, 0) in
+  let cap = cap_from_declarations entries 1 in
+  -- All effects should be on (17592186044415) minus bit 5 (32)
+  let expected = 17592186044415 - 32 in
+  assert_eq (cap.0) expected 0
+
+-- Test: Allow FileRead then deny FileRead → bit 4 OFF
+let test_cap_allow_then_deny : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let e1 = list_append mt (1, 764, 8, 0, 0) in
+  let entries = list_append e1 (0, 764, 8, 0, 0) in
+  let cap = cap_from_declarations entries 2 in
+  -- FileRead was allowed then denied → should be 0
+  assert_eq (cap.0) 0 0
+
+-- Test: Empty entries → unrestricted (all bits on)
+let test_cap_empty_entries : Int [cost: Const(256)] =
+  let mt = list_range 0 0 in
+  let cap = cap_from_declarations mt 0 in
+  -- No entries = unrestricted
+  assert_eq (cap.0) 17592186044415 0
+
+-- =========================================================================
+-- cap_enforce_effect tests
+-- =========================================================================
+
+-- Test: Unrestricted cap allows everything
+let test_enforce_unrestricted : Int [cost: Const(10)] =
+  let cap = (17592186044415, 0, 0, 0, 0, 0, 1, 1, 1, 1) in
+  let ok1 = assert_eq (cap_enforce_effect cap 0) 1 0 in
+  let ok2 = assert_eq (cap_enforce_effect cap 4) 1 1 in
+  let ok3 = assert_eq (cap_enforce_effect cap 32) 1 2 in
+  let ok4 = assert_eq (cap_enforce_effect cap 43) 1 3 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then (if ok4 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Zero cap denies everything
+let test_enforce_nothing : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  let ok1 = assert_eq (cap_enforce_effect cap 0) 0 0 in
+  let ok2 = assert_eq (cap_enforce_effect cap 4) 0 1 in
+  let ok3 = assert_eq (cap_enforce_effect cap 32) 0 2 in
+  let ok4 = assert_eq (cap_enforce_effect cap 43) 0 3 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then (if ok4 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: FileRead-only cap allows FileRead, denies FileWrite
+let test_enforce_fileread_only : Int [cost: Const(10)] =
+  let cap = (16, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  let ok1 = assert_eq (cap_enforce_effect cap 4) 1 0 in
+  let ok2 = assert_eq (cap_enforce_effect cap 5) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: ThreadSpawn uses structural flag (cap.6), not bitmask
+let test_enforce_threadspawn_flag : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 1, 0, 0, 0) in
+  assert_eq (cap_enforce_effect cap 32) 1 0
+
+-- Test: FfiCall uses structural flag (cap.7)
+let test_enforce_ffi_flag : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 1, 0, 0) in
+  assert_eq (cap_enforce_effect cap 43) 1 0
+
+-- Test: MmapExec uses structural flag (cap.8)
+let test_enforce_mmap_flag : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 0, 1, 0) in
+  assert_eq (cap_enforce_effect cap 41) 1 0
+
+-- =========================================================================
+-- cap_compose_for_ref tests
+-- =========================================================================
+
+-- Test: Intersection of unrestricted with restricted → restricted
+let test_compose_restrict : Int [cost: Const(256)] =
+  let caller = (17592186044415, 0, 0, 0, 10, 5, 1, 1, 1, 1) in
+  let callee = (48, 0, 0, 0, 2, 1, 0, 0, 0, 0) in
+  let result = cap_compose_for_ref caller callee in
+  -- effects_mask: AND of all-on and 48 → 48
+  let ok1 = assert_eq (result.0) 48 0 in
+  -- threads: AND(1, 0) → 0
+  let ok2 = assert_eq (result.6) 0 1 in
+  -- paths: min(10, 2) → 2
+  let ok3 = assert_eq (result.4) 2 2 in
+  -- hosts: min(5, 1) → 1
+  let ok4 = assert_eq (result.5) 1 3 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then (if ok4 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Intersection of two identical caps → same cap
+let test_compose_identity : Int [cost: Const(256)] =
+  let cap = (48, 100, 1000, 5000, 3, 2, 1, 0, 1, 0) in
+  let result = cap_compose_for_ref cap cap in
+  let ok1 = assert_eq (result.0) 48 0 in
+  let ok2 = assert_eq (result.1) 100 1 in
+  let ok3 = assert_eq (result.6) 1 2 in
+  let ok4 = assert_eq (result.8) 1 3 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then (if ok4 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Intersection with zero → zero
+let test_compose_zero : Int [cost: Const(256)] =
+  let cap = (48, 100, 1000, 5000, 3, 2, 1, 1, 1, 1) in
+  let zero = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  let result = cap_compose_for_ref cap zero in
+  let ok1 = assert_eq (result.0) 0 0 in
+  let ok2 = assert_eq (result.6) 0 1 in
+  let ok3 = assert_eq (result.7) 0 2 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1
+
+-- =========================================================================
+-- cap_violation_code tests
+-- =========================================================================
+
+-- Test: Allowed effect returns 0 (no violation)
+let test_violation_allowed : Int [cost: Const(10)] =
+  let cap = (16, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  assert_eq (cap_violation_code cap 4) 0 0
+
+-- Test: Denied effect returns 1 (bitmask violation)
+let test_violation_denied_bitmask : Int [cost: Const(10)] =
+  let cap = (16, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  assert_eq (cap_violation_code cap 5) 1 0
+
+-- Test: ThreadSpawn denied returns 2
+let test_violation_threadspawn : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  assert_eq (cap_violation_code cap 32) 2 0
+
+-- Test: FfiCall denied returns 3
+let test_violation_fficall : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  assert_eq (cap_violation_code cap 43) 3 0
+
+-- Test: MmapExec denied returns 4
+let test_violation_mmapexec : Int [cost: Const(10)] =
+  let cap = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  assert_eq (cap_violation_code cap 41) 4 0
+
+-- =========================================================================
+-- End-to-end: cap_from_declarations → cap_enforce_effect
+-- =========================================================================
+
+-- Test: Full pipeline — allow FileRead, verify enforcement
+let test_e2e_allow_fileread_enforce : Int [cost: Const(512)] =
+  let mt = list_range 0 0 in
+  let entries = list_append mt (1, 764, 8, 0, 0) in
+  let cap = cap_from_declarations entries 1 in
+  -- FileRead (tag 4) should be allowed
+  let ok1 = assert_eq (cap_enforce_effect cap 4) 1 0 in
+  -- FileWrite (tag 5) should be denied
+  let ok2 = assert_eq (cap_enforce_effect cap 5) 0 1 in
+  -- Print (tag 0) should be denied
+  let ok3 = assert_eq (cap_enforce_effect cap 0) 0 2 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Full pipeline — deny FileWrite from unrestricted
+let test_e2e_deny_filewrite_enforce : Int [cost: Const(512)] =
+  let mt = list_range 0 0 in
+  let entries = list_append mt (0, 907, 9, 0, 0) in
+  let cap = cap_from_declarations entries 1 in
+  -- FileRead (tag 4) should still be allowed
+  let ok1 = assert_eq (cap_enforce_effect cap 4) 1 0 in
+  -- FileWrite (tag 5) should be denied
+  let ok2 = assert_eq (cap_enforce_effect cap 5) 0 1 in
+  -- Print (tag 0) should still be allowed
+  let ok3 = assert_eq (cap_enforce_effect cap 0) 1 2 in
+  if ok1 > 0 then (if ok2 > 0 then (if ok3 > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: Full pipeline — allow FileRead, deny FileRead → nothing
+let test_e2e_allow_deny_cancel : Int [cost: Const(512)] =
+  let mt = list_range 0 0 in
+  let e1 = list_append mt (1, 764, 8, 0, 0) in
+  let entries = list_append e1 (0, 764, 8, 0, 0) in
+  let cap = cap_from_declarations entries 2 in
+  -- FileRead should be denied (allow then deny = off)
+  let ok1 = assert_eq (cap_enforce_effect cap 4) 0 0 in
+  -- Violation code should be 1 (bitmask)
+  let ok2 = assert_eq (cap_violation_code cap 4) 1 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: Full pipeline — composition of allow FileRead caller with allow FileWrite callee
+let test_e2e_compose_disjoint : Int [cost: Const(512)] =
+  let mt = list_range 0 0 in
+  let caller_entries = list_append mt (1, 764, 8, 0, 0) in
+  let caller_cap = cap_from_declarations caller_entries 1 in
+  let callee_entries = list_append mt (1, 907, 9, 0, 0) in
+  let callee_cap = cap_from_declarations callee_entries 1 in
+  let composed = cap_compose_for_ref caller_cap callee_cap in
+  -- Intersection of {FileRead} and {FileWrite} → empty
+  assert_eq (composed.0) 0 0

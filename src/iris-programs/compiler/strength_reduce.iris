@@ -1,0 +1,152 @@
+-- Strength reduction: replace expensive ops with cheaper equivalents
+--
+-- Transforms (applied to Prim nodes):
+--   mul(x, 2)  -> add(x, x)     (multiply by 2 = double via add)
+--   mul(x, 1)  -> identity       (multiply by 1 = passthrough)
+--   mul(x, 0)  -> 0              (multiply by 0 = zero)
+--   add(x, 0)  -> identity       (add 0 = passthrough)
+--   sub(x, 0)  -> identity       (sub 0 = passthrough)
+--   div(x, 1)  -> identity       (divide by 1 = passthrough)
+--
+-- Strategy:
+--   1. Walk all nodes in the program
+--   2. For each Prim node, check the opcode and second argument's value
+--   3. Apply the appropriate strength reduction transformation
+--   4. Either change the opcode or replace with identity/constant
+--
+-- Returns the transformed program with reduced-strength operations
+
+-- Check if a Prim node is a multiply
+-- mul opcode = 0x02 = 2
+let is_mul program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then
+    let op = graph_get_prim_op program node_id in
+    if op == 2 then 1 else 0
+  else 0
+
+-- Check if a Prim node is an add
+-- add opcode = 0x00 = 0
+let is_add program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then
+    let op = graph_get_prim_op program node_id in
+    if op == 0 then 1 else 0
+  else 0
+
+-- Check if a Prim node is a sub
+-- sub opcode = 0x01 = 1
+let is_sub program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then
+    let op = graph_get_prim_op program node_id in
+    if op == 1 then 1 else 0
+  else 0
+
+-- Check if a Prim node is a div
+-- div opcode = 0x03 = 3
+let is_div program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then
+    let op = graph_get_prim_op program node_id in
+    if op == 3 then 1 else 0
+  else 0
+
+-- Get the value of a Lit child node at a given port
+-- Returns (is_lit, value) pair
+let get_child_lit_value program node_id port : Int -> Int -> Int -> (Int, Int) [cost: Const(3)] =
+  let children = graph_outgoing program node_id in
+  if port < list_len children then
+    let child = list_nth children port in
+    let child_kind = graph_get_kind program child in
+    if child_kind == 5 then
+      let v = graph_get_lit_value program child in
+      (1, v)
+    else (0, 0)
+  else (0, 0)
+
+-- Apply strength reduction to a single Prim node
+-- Returns the transformed program
+let reduce_node program node_id : Int -> Int -> Int [cost: Const(8)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then
+    let op = graph_get_prim_op program node_id in
+    let rhs = get_child_lit_value program node_id 1 in
+    let rhs_is_lit = rhs.0 in
+    let rhs_val = rhs.1 in
+    if op == 2 then
+      -- mul: check right operand
+      if rhs_is_lit == 1 then
+        if rhs_val == 2 then
+          -- mul(x, 2) -> add(x, x): change opcode from mul(2) to add(0)
+          let result = graph_set_prim_op program node_id 0 in
+          -- Also connect port 1 to the same source as port 0 (x, x)
+          let g = result.0 in
+          let children = graph_outgoing program node_id in
+          if list_len children > 0 then
+            let x_node = list_nth children 0 in
+            graph_connect g (result.1) x_node 1
+          else g
+        else if rhs_val == 1 then
+          -- mul(x, 1) -> identity: replace with passthrough
+          -- Just redirect to the left operand
+          let children = graph_outgoing program node_id in
+          if list_len children > 0 then
+            let x_node = list_nth children 0 in
+            graph_replace_subtree program node_id program x_node
+          else program
+        else if rhs_val == 0 then
+          -- mul(x, 0) -> 0: replace with Lit(0)
+          let result = graph_set_lit_value program node_id 0 0 in
+          result.0
+        else program
+      else program
+    else if op == 0 then
+      -- add: check right operand
+      if rhs_is_lit == 1 then
+        if rhs_val == 0 then
+          -- add(x, 0) -> identity
+          let children = graph_outgoing program node_id in
+          if list_len children > 0 then
+            let x_node = list_nth children 0 in
+            graph_replace_subtree program node_id program x_node
+          else program
+        else program
+      else program
+    else if op == 1 then
+      -- sub: check right operand
+      if rhs_is_lit == 1 then
+        if rhs_val == 0 then
+          -- sub(x, 0) -> identity
+          let children = graph_outgoing program node_id in
+          if list_len children > 0 then
+            let x_node = list_nth children 0 in
+            graph_replace_subtree program node_id program x_node
+          else program
+        else program
+      else program
+    else if op == 3 then
+      -- div: check right operand
+      if rhs_is_lit == 1 then
+        if rhs_val == 1 then
+          -- div(x, 1) -> identity
+          let children = graph_outgoing program node_id in
+          if list_len children > 0 then
+            let x_node = list_nth children 0 in
+            graph_replace_subtree program node_id program x_node
+          else program
+        else program
+      else program
+    else program
+  else program
+
+-- Apply strength reduction to all nodes in a program
+-- Returns the transformed program
+let strength_reduce program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold program
+    (\g nid ->
+      let kind = graph_get_kind g nid in
+      if kind == 0 then reduce_node g nid
+      else g)
+    nodes

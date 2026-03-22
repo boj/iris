@@ -1,0 +1,173 @@
+-- LSP document synchronization
+--
+-- Mirrors the DocumentStore in iris-lsp lib.rs.
+--
+-- Handles document lifecycle:
+-- - textDocument/didOpen: store new document
+-- - textDocument/didChange: update existing document (full sync)
+-- - textDocument/didClose: remove document
+--
+-- Uses textDocumentSync = 1 (Full): the entire document content
+-- is sent with each change notification.
+
+-- ============================================================
+-- Document store operations
+-- ============================================================
+
+-- Document store is modeled as a key-value map: URI -> text content.
+-- In IRIS, we represent operations as pure functions.
+
+-- Open a document: add it to the store.
+-- uri_hash: hash of the document URI
+-- text_len: length of the document text
+-- Returns: (uri_hash, text_len, version) for the new document entry.
+let doc_open uri_hash text_len : Int -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  (uri_hash, text_len, 1)
+
+-- Update a document: replace its text content.
+-- old_version: the current version number
+-- new_text_len: length of the new text
+-- Returns: (uri_hash, new_text_len, new_version).
+let doc_update uri_hash old_version new_text_len : Int -> Int -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  (uri_hash, new_text_len, old_version + 1)
+
+-- Close a document: mark it for removal.
+-- Returns: 0 (indicating the document should be removed from the store).
+let doc_close uri_hash : Int -> Int [cost: Const(1)] =
+  0
+
+-- Check if a document exists in the store.
+-- doc_entry_version: the version number (0 = not in store)
+-- Returns: 1 if exists, 0 if not.
+let doc_exists doc_entry_version : Int -> Int [cost: Const(1)] =
+  if doc_entry_version > 0 then 1 else 0
+
+-- ============================================================
+-- Text document sync kinds
+-- ============================================================
+
+-- textDocumentSync values from LSP spec:
+-- 0 = None: no sync
+-- 1 = Full: full document sent on change
+-- 2 = Incremental: only changes sent
+let sync_none : Int [cost: Const(1)] = 0
+let sync_full : Int [cost: Const(1)] = 1
+let sync_incremental : Int [cost: Const(1)] = 2
+
+-- ============================================================
+-- didOpen processing
+-- ============================================================
+
+-- Process a textDocument/didOpen notification.
+-- Extracts the URI and text from params.textDocument.
+-- Returns: (should_publish_diagnostics, uri_hash, text_len)
+let process_did_open uri_hash text_len : Int -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  -- Always publish diagnostics on open
+  (1, uri_hash, text_len)
+
+-- ============================================================
+-- didChange processing
+-- ============================================================
+
+-- Process a textDocument/didChange notification.
+-- With Full sync, params.contentChanges[0].text is the full new content.
+-- Returns: (should_publish_diagnostics, uri_hash, new_text_len)
+let process_did_change uri_hash new_text_len : Int -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  -- Always publish diagnostics on change
+  (1, uri_hash, new_text_len)
+
+-- ============================================================
+-- didClose processing
+-- ============================================================
+
+-- Process a textDocument/didClose notification.
+-- Returns: (should_clear_diagnostics, uri_hash)
+let process_did_close uri_hash : Int -> (Int, Int) [cost: Const(1)] =
+  -- Clear diagnostics on close
+  (1, uri_hash)
+
+-- ============================================================
+-- Document version tracking
+-- ============================================================
+
+-- Check if a document change is valid (monotonically increasing version).
+-- current_version: the stored version
+-- incoming_version: the version in the notification
+-- Returns: 1 if valid (incoming >= current), 0 if stale.
+let is_valid_version current_version incoming_version : Int -> Int -> Int [cost: Const(1)] =
+  if incoming_version >= current_version then 1 else 0
+
+-- ============================================================
+-- URI handling
+-- ============================================================
+
+-- Simple URI hash for document identification.
+-- Combines the length and first few character codes.
+let compute_uri_hash len char0 char1 char2 : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  len * 65537 + char0 * 31 + char1 * 997 + char2
+
+-- Check if a URI ends with ".iris" (the expected file extension).
+-- last5_hash: hash of the last 5 characters
+-- Returns: 1 if .iris file, 0 otherwise.
+let is_iris_file last5_hash : Int -> Int [cost: Const(1)] =
+  -- ".iris" = 46, 105, 114, 105, 115 -> hash
+  if last5_hash == 46 * 31 + 105 * 997 + 114 * 65537 + 105 * 100003 + 115 then 1
+  else 0
+
+-- ============================================================
+-- Change event extraction
+-- ============================================================
+
+-- Extract the text from a full-sync content change.
+-- The JSON structure is: {"contentChanges": [{"text": "..."}]}
+-- change_count: number of content changes
+-- first_change_has_text: 1 if the first change has a "text" field
+-- Returns: 1 if we can extract text, 0 if malformed.
+let can_extract_text change_count first_change_has_text : Int -> Int -> Int [cost: Const(2)] =
+  if change_count >= 1 then
+    first_change_has_text
+  else 0
+
+-- ============================================================
+-- Document metrics
+-- ============================================================
+
+-- Estimate the number of lines in a document.
+-- text_len: total character count
+-- newline_count: number of newline characters
+let document_line_count text_len newline_count : Int -> Int -> Int [cost: Const(1)] =
+  newline_count + 1
+
+-- Estimate the average line length.
+let avg_line_length text_len line_count : Int -> Int -> Int [cost: Const(2)] =
+  if line_count == 0 then 0
+  else text_len / line_count
+
+-- ============================================================
+-- Diagnostic trigger
+-- ============================================================
+
+-- Determine if diagnostics should be recomputed.
+-- text_changed: 1 if the document text changed
+-- Returns: 1 if recompute, 0 if skip.
+let should_recompute_diagnostics text_changed : Int -> Int [cost: Const(1)] =
+  text_changed
+
+-- ============================================================
+-- Clear diagnostics on close
+-- ============================================================
+
+-- Build the empty diagnostics notification for a closed document.
+-- Returns: diagnostic count (always 0 for close).
+let close_diagnostic_count : Int [cost: Const(1)] = 0
+
+-- ============================================================
+-- Store capacity
+-- ============================================================
+
+-- Maximum documents in the store (safety limit).
+let max_documents : Int [cost: Const(1)] = 10000
+
+-- Check if the store can accept a new document.
+let can_open_document current_count : Int -> Int [cost: Const(1)] =
+  if current_count < 10000 then 1 else 0

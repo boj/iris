@@ -1,0 +1,4 @@
+-- Replace the root Prim node's opcode in a program
+let replace_prim program new_opcode =
+  let nid = graph_get_root program in
+  graph_set_prim_op program nid new_opcode

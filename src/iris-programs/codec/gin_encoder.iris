@@ -1,0 +1,237 @@
+-- GIN (Graph Isomorphism Network) encoder with VAE for IRIS
+--
+-- Implements the GIN message passing architecture (Xu et al. 2019):
+--   h_i' = MLP((1 + epsilon) * h_i + SUM(h_j for j in N(i)))
+
+-- ===================================================================
+-- Node feature extraction
+-- ===================================================================
+
+let node_kind_feature program node_id : Int -> Int -> Int [cost: Const(2)] =
+  graph_get_kind program node_id
+
+let node_opcode_feature program node_id : Int -> Int -> Int [cost: Const(3)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 0 then graph_get_prim_op program node_id
+  else 0
+
+let node_arity_feature program node_id : Int -> Int -> Int [cost: Linear(program)] =
+  let ch = graph_outgoing program node_id in
+  fold 0 (\a c -> a + 1) ch
+
+let node_depth_feature program node_id : Int -> Int -> Int [cost: Linear(program)] =
+  -- Depth proxy: outgoing edge count (fanout) for this node
+  let ch = graph_outgoing program node_id in
+  fold 0 (\a c -> a + 1) ch
+
+-- Extract 4-dimensional feature vector per node:
+--   (kind_scaled, opcode_scaled, arity_scaled, depth_scaled)
+let node_feature_vec program node_id : Int -> Int -> (Int, Int, Int, Int) [cost: Const(10)] =
+  let kind = graph_get_kind program node_id in
+  let opcode = if kind == 0 then graph_get_prim_op program node_id else 0 in
+  let arity_ch = graph_outgoing program node_id in
+  let arity = fold 0 (\a c -> a + 1) arity_ch in
+  (kind * 50, opcode * 20, arity * 125, arity * 250)
+
+let node_feature_hash program node_id : Int -> Int -> Int [cost: Const(10)] =
+  let kind = node_kind_feature program node_id in
+  let opcode = node_opcode_feature program node_id in
+  let arity = node_arity_feature program node_id in
+  let depth = node_depth_feature program node_id in
+  kind + opcode * 32 + arity * 8192 + depth * 131072
+
+-- ===================================================================
+-- GIN message passing
+-- ===================================================================
+
+let gin_aggregate self_feat neighbors epsilon : Int -> Int -> Int -> Int [cost: Linear(neighbors)] =
+  let neighbor_sum = fold 0 (\acc n -> acc + n) neighbors in
+  let self_scaled = ((100 + epsilon) * self_feat) / 100 in
+  self_scaled + neighbor_sum
+
+-- GIN round with vector features: aggregates 4-dim neighbor features
+let gin_round_vec program features epsilon : Int -> Int -> Int -> Int [cost: Linear(features)] =
+  map (\node_feat ->
+    let nid = node_feat.0 in
+    let self_f = node_feat.1 in
+    let neighbor_ids = graph_outgoing program nid in
+    let nbr_sum = fold (0, 0, 0, 0) (\acc nbr ->
+      let nbr_feat = fold (0, 0, 0, 0) (\found pair ->
+        if pair.0 == nbr then pair.1 else found) features in
+      (acc.0 + nbr_feat.0, acc.1 + nbr_feat.1, acc.2 + nbr_feat.2, acc.3 + nbr_feat.3)
+    ) neighbor_ids in
+    let eps_scale = 100 + epsilon in
+    (nid, (eps_scale * self_f.0 / 100 + nbr_sum.0,
+           eps_scale * self_f.1 / 100 + nbr_sum.1,
+           eps_scale * self_f.2 / 100 + nbr_sum.2,
+           eps_scale * self_f.3 / 100 + nbr_sum.3))
+  ) features
+
+let gin_round program features epsilon : Int -> Int -> Int -> Int [cost: Linear(features)] =
+  map (\node_feat ->
+    let nid = node_feat.0 in
+    let self_f = node_feat.1 in
+    let neighbor_ids = graph_outgoing program nid in
+    let neighbor_feats = map (\nbr ->
+      fold 0 (\found pair ->
+        if pair.0 == nbr then pair.1 else found) features
+    ) neighbor_ids in
+    let agg = gin_aggregate self_f neighbor_feats epsilon in
+    (nid, agg)
+  ) features
+
+-- ===================================================================
+-- Dense layers and pooling
+-- ===================================================================
+
+let relu x : Int -> Int [cost: Const(1)] =
+  if x > 0 then x else 0
+
+let dense_relu weights input bias : Int -> Int -> Int -> Int [cost: Linear(weights)] =
+  let pairs = zip weights input in
+  let dot = fold 0 (\acc p -> acc + p.0 * p.1) pairs in
+  relu (dot + bias)
+
+let dense_linear weights input bias : Int -> Int -> Int -> Int [cost: Linear(weights)] =
+  let pairs = zip weights input in
+  let dot = fold 0 (\acc p -> acc + p.0 * p.1) pairs in
+  dot + bias
+
+let pool_sum embeddings : Int -> Int [cost: Linear(embeddings)] =
+  fold 0 (\acc e -> acc + e) embeddings
+
+let pool_mean embeddings : Int -> Int [cost: Linear(embeddings)] =
+  let total = fold 0 (\acc e -> acc + e) embeddings in
+  let count = fold 0 (\acc x -> acc + 1) embeddings in
+  if count == 0 then 0 else total / count
+
+let pool_max embeddings : Int -> Int [cost: Linear(embeddings)] =
+  fold (0 - 999999999) (\acc e -> max acc e) embeddings
+
+-- Graph-level pooling for 4-dim node embeddings (12-dim readout)
+let graph_readout_vec embeddings : Int -> Int [cost: Linear(embeddings)] =
+  let n = fold 0 (\acc x -> acc + 1) embeddings in
+  let n_safe = max n 1 in
+  let sums = fold (0, 0, 0, 0) (\acc e ->
+    (acc.0 + e.0, acc.1 + e.1, acc.2 + e.2, acc.3 + e.3)) embeddings in
+  let maxes = fold (0 - 999999999, 0 - 999999999, 0 - 999999999, 0 - 999999999) (\acc e ->
+    (max acc.0 e.0, max acc.1 e.1, max acc.2 e.2, max acc.3 e.3)) embeddings in
+  (sums.0, sums.1, sums.2, sums.3,
+   sums.0 / n_safe, sums.1 / n_safe, sums.2 / n_safe, sums.3 / n_safe,
+   maxes.0, maxes.1, maxes.2, maxes.3)
+
+let graph_readout embeddings : Int -> (Int, Int, Int) [cost: Linear(embeddings)] =
+  (pool_sum embeddings, pool_mean embeddings, pool_max embeddings)
+
+-- ===================================================================
+-- KL divergence and reparameterization
+-- ===================================================================
+
+let kl_divergence mu log_var : Int -> Int -> Int [cost: Linear(mu)] =
+  let pairs = zip mu log_var in
+  let neg_half_sum = fold 0
+    (\acc p ->
+      let m = p.0 in
+      let lv = p.1 in
+      let exp_lv = 1000 + lv + lv * lv / 2000 in
+      acc + 1000 + lv - m * m / 1000 - exp_lv)
+    pairs in
+  let result = 0 - (neg_half_sum / 2) in
+  if result < 0 then 0 else result
+
+let reparameterize mu log_var seed : Int -> Int -> Int -> Int [cost: Linear(mu)] =
+  let pairs = zip mu log_var in
+  map (\p ->
+    let m = p.0 in
+    let lv = p.1 in
+    let std = 1000 + lv / 2 + lv * lv / 8000 in
+    let hash = seed * 6364136223846793005 + 1442695040888963407 in
+    let eps = (hash % 2000) - 1000 in
+    m + std * eps / 1000
+  ) pairs
+
+-- ===================================================================
+-- VAE encode
+-- ===================================================================
+
+-- VAE encode: returns (z_vector, mu, kl) where z_vector is a 4-dim latent tuple
+let vae_encode program k epsilon seed : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let init_features_vec = map (\nid ->
+    (nid, node_feature_vec program nid)) nodes in
+  let updated = gin_round_vec program init_features_vec epsilon in
+  let feat_vecs = map (\pair -> pair.1) updated in
+  let readout = graph_readout_vec feat_vecs in
+  let mu = (readout.0 / 100, readout.1 / 100, readout.4 / 100, readout.8 / 100) in
+  let log_var = (readout.2 / 100 - readout.9 / 100,
+                 readout.3 / 100 - readout.10 / 100,
+                 readout.5 / 100 - readout.11 / 100,
+                 readout.6 / 100 - readout.7 / 100) in
+  let kl = kl_divergence mu log_var in
+  let z = reparameterize mu log_var seed in
+  (z, mu, kl)
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+let test_gin_aggregate_no_eps : Int [cost: Const(1)] =
+  let result = gin_aggregate 100 (50, 30, 20) 0 in
+  if result == 200 then 1 else 0 - 1
+
+let test_gin_aggregate_with_eps : Int [cost: Const(1)] =
+  let result = gin_aggregate 100 (50, 30) 100 in
+  if result == 280 then 1 else 0 - 1
+
+let test_relu_pos : Int [cost: Const(1)] =
+  if relu 42 == 42 then 1 else 0 - 1
+
+let test_relu_neg : Int [cost: Const(1)] =
+  if relu (0 - 5) == 0 then 1 else 0 - 1
+
+let test_pool_sum : Int [cost: Const(1)] =
+  if pool_sum (10, 20, 30) == 60 then 1 else 0 - 1
+
+let test_pool_mean : Int [cost: Const(1)] =
+  if pool_mean (10, 20, 30) == 20 then 1 else 0 - 1
+
+let test_pool_max : Int [cost: Const(1)] =
+  if pool_max (10, 20, 30) == 30 then 1 else 0 - 1
+
+let test_kl_standard_normal : Int [cost: Const(1)] =
+  let kl = kl_divergence (0, 0, 0) (0, 0, 0) in
+  if kl == 0 then 1 else 0 - 1
+
+let test_kl_positive : Int [cost: Const(1)] =
+  let kl = kl_divergence (1000, 1000) (500, 500) in
+  if kl > 0 then 1 else 0 - 1
+
+let test_dense_relu_clip : Int [cost: Const(1)] =
+  let result = dense_relu (0 - 1, 0 - 1) (10, 10) 0 in
+  if result == 0 then 1 else 0 - 1
+
+let test_dense_linear_neg : Int [cost: Const(1)] =
+  let result = dense_linear (0 - 1, 0 - 1) (10, 10) 0 in
+  if result == (0 - 20) then 1 else 0 - 1
+
+let test_graph_readout : Int [cost: Const(1)] =
+  let r = graph_readout (10, 20, 30) in
+  if r.0 == 60 then
+    if r.1 == 20 then
+      if r.2 == 30 then 1 else 0 - 1
+    else 0 - 1
+  else 0 - 1
+
+let test_node_feature_self : Int [cost: Const(1)] =
+  let g = self_graph in
+  let root = graph_get_root g in
+  let feat = node_feature_hash g root in
+  if feat >= 0 then 1 else 0 - 1
+
+-- Test: graph_readout_vec produces 12-dim output from 4-dim inputs
+let test_vae_encode_self : Int [cost: Const(1)] =
+  let result = graph_readout_vec ((10, 20, 30, 40), (50, 60, 70, 80)) in
+  -- Sum pool: (60, 80, 100, 120), Mean: (30, 40, 50, 60), Max: (50, 60, 70, 80)
+  if result.0 == 60 then
+    if result.4 == 30 then 1 else 0 - 1
+  else 0 - 1

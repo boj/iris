@@ -1,0 +1,95 @@
+-- HTTP Server standard library
+-- Built entirely on TCP primitives: tcp_listen, tcp_accept, tcp_read, tcp_write, tcp_close.
+-- No new opcodes required.
+
+-- External stub
+let int_to_str x : Int -> String [cost: Const(1)] = int_to_string x
+
+-- Build an HTTP response string.
+-- status_code: 200, 404, 500, etc.
+-- status_text: "OK", "Not Found", "Internal Server Error"
+-- content_type: "text/plain", "application/json", etc.
+-- body: response body
+let build_response status_code status_text content_type body : Int -> String -> String -> String -> String [cost: Unknown] =
+  let status_line = str_concat "HTTP/1.1 " (str_concat (int_to_str status_code) (str_concat " " (str_concat status_text "\n"))) in
+  let ct_header = str_concat "Content-Type: " (str_concat content_type "\n") in
+  let cl_header = str_concat "Content-Length: " (str_concat (int_to_str (str_len body)) "\n") in
+  let conn_header = "Connection: close\n" in
+  str_concat status_line (str_concat ct_header (str_concat cl_header (str_concat conn_header (str_concat "\n" body))))
+
+-- Build a 200 OK response with a text body.
+let ok_text body : String -> String [cost: Unknown] =
+  build_response 200 "OK" "text/plain" body
+
+-- Build a 200 OK response with a JSON body.
+let ok_json body : String -> String [cost: Unknown] =
+  build_response 200 "OK" "application/json" body
+
+-- Build a 404 Not Found response.
+let not_found : String [cost: Unknown] =
+  build_response 404 "Not Found" "text/plain" "404 Not Found"
+
+-- Build a 500 Internal Server Error response.
+let server_error msg : String -> String [cost: Unknown] =
+  build_response 500 "Internal Server Error" "text/plain" msg
+
+-- Parse an incoming HTTP request into (method, path, headers, body).
+-- Returns a Tuple of (String, String, String, String).
+let parse_request raw : String -> Tuple [cost: Unknown] =
+  let parts = str_split raw "\n\n" in
+  let header_block = list_nth parts 0 in
+  let body = if list_len parts > 1 then list_nth parts 1 else "" in
+  let header_lines = str_split header_block "\n" in
+  let request_line = list_nth header_lines 0 in
+  let req_parts = str_split request_line " " in
+  let method = list_nth req_parts 0 in
+  let path = if list_len req_parts > 1 then list_nth req_parts 1 else "/" in
+  (method, path, header_block, body)
+
+-- Start listening on a port and serve a single request.
+-- handler: a function (method, path, body) -> response_string
+-- This is a simple one-shot server for demonstration.
+let http_serve_once port : Int -> Tuple [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  let raw = tcp_read conn 65536 in
+  let request = parse_request raw in
+  (conn, request)
+
+-- Send a response on a connection and close it.
+let http_respond conn response : Int -> String -> Int [cost: Unknown] =
+  let unused = tcp_write conn response in
+  tcp_close conn
+
+-- Simple echo server: returns the request body as the response body.
+let rec http_echo_loop listener : Int -> Int [cost: Unknown] =
+  let conn = tcp_accept listener in
+  let raw = tcp_read conn 65536 in
+  let request = parse_request raw in
+  let method = list_nth request 0 in
+  let path = list_nth request 1 in
+  let body = list_nth request 3 in
+  let response = ok_text (str_concat method (str_concat " " (str_concat path (str_concat "\n" body)))) in
+  let unused = tcp_write conn response in
+  let unused = tcp_close conn in
+  http_echo_loop listener
+
+-- Start an echo server on the given port.
+let http_echo port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  http_echo_loop listener
+
+-- Route dispatch: match path against a list of (path, handler) pairs.
+-- Each handler is a String response. Returns the first matching response,
+-- or a 404 if no route matches.
+-- routes is a Tuple of (String, String) pairs.
+let dispatch path routes : String -> Tuple -> String [cost: Unknown] =
+  let result = fold (0, not_found) (\state route ->
+    if state.0 == 1 then state
+    else
+      let route_path = list_nth route 0 in
+      let route_response = list_nth route 1 in
+      if str_eq path route_path then (1, route_response)
+      else state)
+    routes in
+  result.1

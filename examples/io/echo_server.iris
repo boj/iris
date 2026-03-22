@@ -1,0 +1,13 @@
+-- Simple TCP echo server
+-- Reads data from a connection and writes it back until the client disconnects.
+let rec serve conn : Int -> Int [cost: Unknown] =
+  let data = tcp_read conn 1024 in
+  if data == 0 then tcp_close conn
+  else
+    let _ = tcp_write conn data in
+    serve conn
+
+let main port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  serve conn

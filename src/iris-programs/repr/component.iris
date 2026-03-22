@@ -1,0 +1,86 @@
+-- Component type definitions: mutation, seed, and fitness as IRIS types
+--
+-- Mirrors the Rust component module in iris-repr/src/component.rs.
+-- Expresses mutation operators, seed generators, and fitness functions
+-- as IRIS type signatures, enabling their eventual evolution.
+--
+-- Component kinds:
+--   Mutation: Arrow(Program, Program, cost_bound)
+--   Seed: Arrow(Int, Program, cost_bound)
+--   Fitness: Arrow(Tuple(Program, TestCases), Tuple(Float...), cost_bound)
+--
+-- This is the foundation for autopoietic closure: the things that
+-- PRODUCE programs become programs themselves.
+
+-- Component kind constants
+let kind_mutation : Int [cost: Const(1)] = 0
+let kind_seed : Int [cost: Const(1)] = 1
+let kind_fitness : Int [cost: Const(1)] = 2
+
+-- Classify a component by its kind
+let classify_component kind : Int -> Int [cost: Const(3)] =
+  if kind == 0 then 0
+  else if kind == 1 then 1
+  else if kind == 2 then 2
+  else -1
+
+-- Check if a component kind is valid
+let is_valid_component kind : Int -> Int [cost: Const(3)] =
+  if kind >= 0 && kind <= 2 then 1 else 0
+
+-- Create a mutation component descriptor
+-- name_hash: hash of the component name
+-- Returns (kind, name_hash, placeholder_flag)
+-- placeholder_flag: 1 = Rust-backed, 0 = IRIS-native
+let make_mutation name_hash : Int -> (Int, Int, Int) [cost: Const(1)] =
+  (kind_mutation, name_hash, 1)
+
+-- Create a seed component descriptor
+let make_seed name_hash : Int -> (Int, Int, Int) [cost: Const(1)] =
+  (kind_seed, name_hash, 1)
+
+-- Create a fitness component descriptor
+let make_fitness name_hash : Int -> (Int, Int, Int) [cost: Const(1)] =
+  (kind_fitness, name_hash, 1)
+
+-- Look up a component by name hash in a registry
+-- Registry is encoded as a running hash sum
+-- Returns 1 if found, 0 if not found
+let registry_contains registry_sum name_hash : Int -> Int -> Int [cost: Const(1)] =
+  if registry_sum == 0 then 0
+  else if name_hash == 0 then 0
+  else 1
+
+-- Count components of a specific kind in a registry
+-- kind: 0=mutation, 1=seed, 2=fitness
+-- total_mutations, total_seeds, total_fitness: counts
+let count_by_kind kind total_mutations total_seeds total_fitness : Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  if kind == 0 then total_mutations
+  else if kind == 1 then total_seeds
+  else if kind == 2 then total_fitness
+  else 0
+
+-- Create an empty component registry
+-- Returns (mutation_count, seed_count, fitness_count)
+let empty_registry : (Int, Int, Int) [cost: Const(1)] =
+  (0, 0, 0)
+
+-- Register a component and return updated counts
+-- kind: component kind
+-- current: current registry (mutation_count, seed_count, fitness_count)
+-- Returns updated registry
+let register_component kind mut_count seed_count fit_count : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  if kind == 0 then (mut_count + 1, seed_count, fit_count)
+  else if kind == 1 then (mut_count, seed_count + 1, fit_count)
+  else if kind == 2 then (mut_count, seed_count, fit_count + 1)
+  else (mut_count, seed_count, fit_count)
+
+-- Total number of components in a registry
+let registry_total mut_count seed_count fit_count : Int -> Int -> Int -> Int [cost: Const(1)] =
+  mut_count + seed_count + fit_count
+
+-- Check if a component is a placeholder (Rust-backed) or IRIS-native
+-- node_count: number of nodes in the component's program graph
+-- A placeholder has 0 nodes
+let is_placeholder node_count : Int -> Int [cost: Const(1)] =
+  if node_count == 0 then 1 else 0

@@ -1,0 +1,3 @@
+-- Annotate a node with a cost value
+let annotate_cost program node_id cost =
+  graph_set_cost program node_id cost

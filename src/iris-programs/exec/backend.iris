@@ -1,0 +1,71 @@
+-- Backend selection: choose the best execution backend
+--
+-- Mirrors the Rust backend module in iris-exec/src/backend.rs.
+-- Enumerates available backends based on hardware capabilities and
+-- selects the fastest one.
+--
+-- Backend IDs:
+--   0 = TreeWalker (always available, slowest)
+--   1 = BytecodeVM (always available, fast)
+--   2 = JIT        (x86-64 only, faster)
+--   3 = CLCU       (x86-64 + AVX-512, fastest)
+--
+-- Preference order: CLCU > JIT > BytecodeVM > TreeWalker
+
+-- Backend ID constants
+let backend_tree_walker : Int [cost: Const(1)] = 0
+let backend_bytecode_vm : Int [cost: Const(1)] = 1
+let backend_jit : Int [cost: Const(1)] = 2
+let backend_clcu : Int [cost: Const(1)] = 3
+
+-- Check which backends are available on current hardware
+-- has_jit: 1 if x86-64 JIT is available
+-- has_avx512: 1 if AVX-512 (CLCU) is available
+-- Returns a bitmask: bit 0=TreeWalker, bit 1=BytecodeVM, bit 2=JIT, bit 3=CLCU
+let available_backends has_jit has_avx512 : Int -> Int -> Int [cost: Const(3)] =
+  let mask = 3 in
+  let mask = if has_jit == 1 then mask + 4 else mask in
+  let mask = if has_avx512 == 1 then mask + 8 else mask in
+  mask
+
+-- Select the best available backend
+-- Returns the backend ID with highest priority
+let best_backend has_jit has_avx512 : Int -> Int -> Int [cost: Const(3)] =
+  if has_avx512 == 1 then backend_clcu
+  else if has_jit == 1 then backend_jit
+  else backend_bytecode_vm
+
+-- Count the number of available backends
+let count_backends has_jit has_avx512 : Int -> Int -> Int [cost: Const(2)] =
+  let base = 2 in
+  let count = if has_jit == 1 then base + 1 else base in
+  if has_avx512 == 1 then count + 1 else count
+
+-- Check if a specific backend is available
+-- backend: backend ID to check
+-- Returns 1 if available, 0 otherwise
+let is_backend_available backend has_jit has_avx512 : Int -> Int -> Int -> Int [cost: Const(4)] =
+  if backend == 0 then 1
+  else if backend == 1 then 1
+  else if backend == 2 then has_jit
+  else if backend == 3 then has_avx512
+  else 0
+
+-- Get the backend name hash for logging/display
+-- Returns a hash distinguishing each backend
+let backend_name_hash backend : Int -> Int [cost: Const(4)] =
+  if backend == 0 then 1167
+  else if backend == 1 then 1004
+  else if backend == 2 then 306
+  else if backend == 3 then 384
+  else 0
+
+-- Fallback selection: if preferred backend fails, pick the next best
+-- preferred: the originally selected backend
+-- Returns the next-best backend
+let fallback_backend preferred has_jit : Int -> Int -> Int [cost: Const(3)] =
+  if preferred == 3 then
+    if has_jit == 1 then backend_jit else backend_bytecode_vm
+  else if preferred == 2 then backend_bytecode_vm
+  else if preferred == 1 then backend_tree_walker
+  else backend_tree_walker

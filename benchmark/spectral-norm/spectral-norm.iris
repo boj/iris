@@ -1,0 +1,36 @@
+-- Spectral Norm (Benchmarks Game)
+-- Compute the spectral norm of an infinite matrix A where
+--   A[i][j] = 1.0 / ((i+j)*(i+j+1)/2 + i + 1)
+--
+-- NOTE: The full spectral norm algorithm requires nested higher-order
+-- operations (e.g., map inside fold where the inner lambda captures
+-- outer variables). IRIS Gen1 does not support this pattern — inner
+-- lambdas cannot access outer lambda parameters or values derived
+-- from them. This is documented as a known limitation.
+--
+-- This file implements the individual computation primitives that make
+-- up the algorithm. The Rust test harness orchestrates them directly.
+
+-- Matrix element A[i][j]
+let mat_a i j =
+  let ij = i + j in
+  1.0 / int_to_float (ij * (ij + 1) / 2 + i + 1)
+
+-- Compute one row of A*u: v[row] = sum_j A[row][j] * u[j]
+-- Works with 2 parameters (both at safe InputRef indices 0-1)
+let av_row row u =
+  fold 0.0 (\acc j ->
+    let ij = row + j in
+    acc + 1.0 / int_to_float (ij * (ij + 1) / 2 + row + 1) * list_nth u j
+  ) (list_range 0 3)
+
+-- Compute one row of A^T*v: w[col] = sum_j A[j][col] * v[j]
+let atv_row col v =
+  fold 0.0 (\acc j ->
+    let ji = j + col in
+    acc + 1.0 / int_to_float (ji * (ji + 1) / 2 + j + 1) * list_nth v j
+  ) (list_range 0 3)
+
+-- Dot product
+let dot a b =
+  fold 0.0 (\acc pair -> acc + pair.0 * pair.1) (zip a b)

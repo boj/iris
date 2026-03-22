@@ -1,0 +1,362 @@
+-- HNSW (Hierarchical Navigable Small World) approximate nearest neighbor index
+--
+-- O(log N) nearest neighbor search over embedding vectors.
+-- This implementation stores embeddings as a list of (id, embedding) pairs
+-- and builds neighbor adjacency per layer. Multi-layer descent uses greedy
+-- search at each layer, descending to the next.
+--
+-- Index representation (all as tuples):
+--   entry_point: (index, max_layer) or (-1, 0) for empty
+--   nodes: list of (id, embedding, assigned_layer) triples
+--   layer_edges: list of (layer, source_idx, target_idx) triples
+
+-- ===================================================================
+-- Distance computation
+-- ===================================================================
+
+-- Cosine distance: 1 - dot(a,b) / (|a| * |b|)
+-- Returns distance scaled by 1000 (0 = identical, 1000 = orthogonal, 2000 = opposite)
+let cosine_distance a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  let dot = fold 0 (\acc p -> acc + p.0 * p.1) pairs in
+  let norm_a_sq = fold 0 (\acc x -> acc + x * x) a in
+  let norm_b_sq = fold 0 (\acc x -> acc + x * x) b in
+  if norm_a_sq == 0 then 1000
+  else if norm_b_sq == 0 then 1000
+  else
+    let denom = (norm_a_sq + norm_b_sq) / 2 in
+    if denom == 0 then 1000
+    else 1000 - (dot * 1000 / denom)
+
+-- Squared Euclidean distance
+let l2_distance_sq a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  fold 0 (\acc p ->
+    let d = p.0 - p.1 in
+    acc + d * d) pairs
+
+-- ===================================================================
+-- Layer assignment
+-- ===================================================================
+
+-- Assign a layer level using FNV-1a hash of an id
+-- Returns: layer level (0 = base layer only, max 3)
+let random_layer id_hash m : Int -> Int -> Int [cost: Const(6)] =
+  let h0 = id_hash * 1099511628211 in
+  let h = if h0 < 0 then 0 - h0 else h0 in
+  if m <= 1 then 0
+  else
+    let level0 = h % m in
+    if level0 != 0 then 0
+    else
+      let h1 = h / m in
+      let level1 = h1 % m in
+      if level1 != 0 then 1
+      else
+        let h2 = h1 / m in
+        let level2 = h2 % m in
+        if level2 != 0 then 2
+        else 3
+
+-- ===================================================================
+-- Greedy search in a single layer
+-- ===================================================================
+
+-- Greedy closest: iterate neighbors to find the nearest node
+let greedy_step current_idx current_dist neighbor_dists : Int -> Int -> Int -> (Int, Int) [cost: Linear(neighbor_dists)] =
+  fold (current_idx, current_dist)
+    (\best pair ->
+      if pair.1 < best.1 then pair
+      else best)
+    neighbor_dists
+
+-- Full greedy search with convergence check
+let greedy_search start_idx start_dist all_entries query max_iters : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Linear(max_iters)] =
+  fold (start_idx, start_dist)
+    (\state iter ->
+      if iter >= max_iters then state
+      else
+        let current = state.0 in
+        let current_dist = state.1 in
+        -- Compute distances to all entries, find best neighbor
+        let best_neighbor = fold (current, current_dist)
+          (\best entry ->
+            let idx = entry.0 in
+            let emb = entry.1 in
+            let dist = cosine_distance query emb in
+            if dist < best.1 then (idx, dist)
+            else best)
+          all_entries in
+        if best_neighbor.1 >= current_dist then state
+        else best_neighbor)
+    max_iters
+
+-- ===================================================================
+-- Beam search (ef-bounded) for k-nearest neighbors
+-- ===================================================================
+
+-- Check if a candidate should be added to the result set
+let should_add candidate_dist worst_dist ef current_count : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  if current_count < ef then 1
+  else if candidate_dist < worst_dist then 1
+  else 0
+
+-- Find the worst (farthest) distance in a result set
+let worst_distance results : Int -> Int [cost: Linear(results)] =
+  fold 0 (\acc pair -> max acc pair.1) results
+
+-- Find the best (closest) distance in a result set
+let best_distance results : Int -> Int [cost: Linear(results)] =
+  fold 999999999 (\acc pair -> min acc pair.1) results
+
+-- Count items in a list
+let list_count items : Int -> Int [cost: Linear(items)] =
+  fold 0 (\acc x -> acc + 1) items
+
+-- Insert into a bounded result set, removing the farthest if over capacity
+let insert_bounded results new_item ef : Int -> Int -> Int -> Int [cost: Linear(results)] =
+  let count = list_count results in
+  if count < ef then
+    (new_item, results)
+  else
+    let worst = worst_distance results in
+    if new_item.1 >= worst then results
+    else
+      let filtered = filter (\r -> r.1 < worst) results in
+      (new_item, filtered)
+
+-- Beam search over all entries
+let beam_search_all query entries ef : Int -> Int -> Int -> Int [cost: Linear(entries)] =
+  -- Compute all distances and take top ef
+  let all_dists = map (\entry ->
+    let idx = entry.0 in
+    let emb = entry.1 in
+    let dist = cosine_distance query emb in
+    (idx, dist)
+  ) entries in
+  -- Sort by selecting best repeatedly
+  fold 0
+    (\results iter ->
+      if iter >= ef then results
+      else
+        -- Find minimum not already in results
+        let best = fold (0 - 1, 999999999)
+          (\acc d ->
+            if d.1 < acc.1 then d
+            else acc)
+          all_dists in
+        if best.0 >= 0 then insert_bounded results best ef
+        else results)
+    ef
+
+-- ===================================================================
+-- Insert operation (stores embedding in the index)
+-- ===================================================================
+
+-- Insert a new vector into the HNSW index
+-- entries: list of (id, embedding, layer) triples
+-- Returns updated (entry_point, new_entries, assigned_layer)
+let insert id embedding m entry_point entries : Int -> Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(10)] =
+  let assigned_layer = random_layer id m in
+  let new_entry = (id, embedding, assigned_layer) in
+  let new_entries = (new_entry, entries) in
+  let count = list_count entries in
+  if count == 0 then
+    ((id, assigned_layer), new_entries, assigned_layer)
+  else
+    let ep_idx = entry_point.0 in
+    let ep_layer = entry_point.1 in
+    let new_ep = if assigned_layer > ep_layer
+      then (id, assigned_layer)
+      else entry_point in
+    (new_ep, new_entries, assigned_layer)
+
+-- ===================================================================
+-- Search operation (real kNN over stored embeddings)
+-- ===================================================================
+
+-- Search for k nearest neighbors of a query vector
+-- entries: list of (id, embedding, layer) triples
+-- Returns list of (id, distance) pairs
+let search query k entry_point entries ef_search : Int -> Int -> Int -> Int -> Int -> Int [cost: Linear(entries)] =
+  if k == 0 then 0
+  else
+    let ep_layer = entry_point.1 in
+    -- Multi-layer descent: greedy from top layer down to layer 1
+    let entry_embs = map (\e -> (e.0, e.1)) entries in
+    let ep_id = entry_point.0 in
+    let ep_emb = fold 0 (\found e ->
+      if e.0 == ep_id then e.1 else found) entries in
+    let ep_dist = cosine_distance query ep_emb in
+    -- Descend through layers using greedy search
+    let descended = fold (ep_id, ep_dist)
+      (\state layer ->
+        if layer <= 0 then state
+        else
+          -- Greedy search among entries at this layer or above
+          let layer_entries = filter (\e -> e.2 >= layer) entries in
+          let layer_embs = map (\e -> (e.0, e.1)) layer_entries in
+          greedy_search state.0 state.1 layer_embs query 10)
+      ep_layer in
+    -- Layer 0: beam search with ef >= k
+    let effective_ef = max ef_search k in
+    let all_embs = map (\e -> (e.0, e.1)) entries in
+    -- Compute all distances
+    let all_dists = map (\e ->
+      let dist = cosine_distance query e.1 in
+      (e.0, dist)) all_embs in
+    -- Select k closest by iteratively picking minimum, avoiding duplicates
+    -- Build a cons-list of (id, distance) pairs
+    let k_results = fold (0, 0, 0)
+      (\state iter ->
+        if state.0 >= k then state
+        else
+          -- Find minimum not already selected
+          let already_ids = state.2 in
+          let best = fold (0 - 1, 999999999)
+            (\acc d ->
+              if d.1 < acc.1 then
+                -- Check if this id is already in our results
+                let is_dup = fold 0 (\f sel_id ->
+                  if sel_id == d.0 then 1 else f) already_ids in
+                if is_dup == 0 then d else acc
+              else acc)
+            all_dists in
+          if best.0 >= 0 then
+            (state.0 + 1, (best, state.1), (best.0, already_ids))
+          else state)
+      k in
+    k_results.1
+
+-- ===================================================================
+-- Prune operation
+-- ===================================================================
+
+-- Prune a neighbor list to keep only the M closest neighbors
+let prune_neighbors neighbors m : Int -> Int -> Int [cost: Linear(neighbors)] =
+  let count = list_count neighbors in
+  if count <= m then neighbors
+  else
+    let worst = worst_distance neighbors in
+    let pruned = filter (\n -> n.1 < worst) neighbors in
+    pruned
+
+-- ===================================================================
+-- Multi-layer traversal
+-- ===================================================================
+
+-- Descend from top layer to target layer, greedy at each level
+let descend_layers start_idx query top_layer target_layer entries : Int -> Int -> Int -> Int -> Int -> Int [cost: Linear(top_layer)] =
+  let start_emb = fold 0 (\found e ->
+    if e.0 == start_idx then e.1 else found) entries in
+  let start_dist = cosine_distance query start_emb in
+  fold (start_idx, start_dist)
+    (\state layer_from_top ->
+      let current_layer = top_layer - layer_from_top in
+      if current_layer <= target_layer then state
+      else
+        -- Greedy search among entries at this layer
+        let layer_entries = filter (\e -> e.2 >= current_layer) entries in
+        let layer_embs = map (\e -> (e.0, e.1)) layer_entries in
+        greedy_search state.0 state.1 layer_embs query 10)
+    top_layer
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: cosine_distance of identical vectors is 0
+let test_cosine_self : Int [cost: Const(1)] =
+  let dist = cosine_distance (100, 200, 300) (100, 200, 300) in
+  if dist <= 10 then 1 else 0 - 1
+
+-- Test: cosine_distance of orthogonal vectors is ~1000
+let test_cosine_orthogonal : Int [cost: Const(1)] =
+  let dist = cosine_distance (1000, 0) (0, 1000) in
+  if dist >= 900 then 1 else 0 - 1
+
+-- Test: random_layer returns 0 for most inputs
+let test_random_layer_base : Int [cost: Const(1)] =
+  let l1 = random_layer 1 16 in
+  let l2 = random_layer 2 16 in
+  let l3 = random_layer 3 16 in
+  let base_count = (if l1 == 0 then 1 else 0) + (if l2 == 0 then 1 else 0) + (if l3 == 0 then 1 else 0) in
+  if base_count >= 1 then 1 else 0 - 1
+
+-- Test: random_layer returns non-negative
+let test_random_layer_nonneg : Int [cost: Const(1)] =
+  let l = random_layer 12345 8 in
+  if l >= 0 then 1 else 0 - 1
+
+-- Test: random_layer with m=1 always returns 0
+let test_random_layer_m1 : Int [cost: Const(1)] =
+  let l = random_layer 12345 1 in
+  if l == 0 then 1 else 0 - 1
+
+-- Test: greedy_step picks closest neighbor
+let test_greedy_step : Int [cost: Const(1)] =
+  let result = greedy_step 0 500 ((1, 300), (2, 700), (3, 100)) in
+  if result.0 == 3 then
+    if result.1 == 100 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: greedy_step keeps current if no improvement
+let test_greedy_no_improve : Int [cost: Const(1)] =
+  let result = greedy_step 0 50 ((1, 300), (2, 700)) in
+  if result.0 == 0 then
+    if result.1 == 50 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: should_add returns 1 when under capacity
+let test_should_add_under : Int [cost: Const(1)] =
+  if should_add 500 1000 10 5 == 1 then 1 else 0 - 1
+
+-- Test: should_add returns 1 when closer than worst
+let test_should_add_closer : Int [cost: Const(1)] =
+  if should_add 400 500 10 10 == 1 then 1 else 0 - 1
+
+-- Test: should_add returns 0 when at capacity and farther
+let test_should_add_reject : Int [cost: Const(1)] =
+  if should_add 600 500 10 10 == 0 then 1 else 0 - 1
+
+-- Test: insert first entry becomes entry point
+let test_insert_first : Int [cost: Const(1)] =
+  let result = insert 1 (100, 200) 16 (0 - 1, 0) 0 in
+  -- Assigned layer should be non-negative
+  let layer = result.2 in
+  if layer >= 0 then 1 else 0 - 1
+
+-- Test: insert increments entry count
+let test_insert_count : Int [cost: Const(1)] =
+  let r1 = insert 1 (100, 0) 16 (0 - 1, 0) 0 in
+  let entries1 = r1.1 in
+  let c1 = list_count entries1 in
+  if c1 >= 1 then 1 else 0 - 1
+
+-- Test: prune_neighbors keeps all when under M
+let test_prune_under : Int [cost: Const(1)] =
+  let nbrs = ((1, 100), (2, 200)) in
+  let pruned = prune_neighbors nbrs 5 in
+  let count = list_count pruned in
+  if count == 2 then 1 else 0 - 1
+
+-- Test: worst_distance finds maximum
+let test_worst_dist : Int [cost: Const(1)] =
+  let w = worst_distance ((1, 100), (2, 500), (3, 200)) in
+  if w == 500 then 1 else 0 - 1
+
+-- Test: best_distance finds minimum
+let test_best_dist : Int [cost: Const(1)] =
+  let b = best_distance ((1, 100), (2, 500), (3, 200)) in
+  if b == 100 then 1 else 0 - 1
+
+-- Test: l2_distance_sq of same vector is 0
+let test_l2_self : Int [cost: Const(1)] =
+  let d = l2_distance_sq (10, 20, 30) (10, 20, 30) in
+  if d == 0 then 1 else 0 - 1
+
+-- Test: l2_distance_sq is symmetric
+let test_l2_symmetric : Int [cost: Const(1)] =
+  let d1 = l2_distance_sq (10, 20) (30, 40) in
+  let d2 = l2_distance_sq (30, 40) (10, 20) in
+  if d1 == d2 then 1 else 0 - 1

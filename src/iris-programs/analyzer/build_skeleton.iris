@@ -1,0 +1,222 @@
+-- Skeleton construction: build program graphs from detected patterns
+--
+-- Given a pattern code (from classify_problem.iris) and pattern parameters,
+-- construct a SemanticGraph skeleton that implements the detected computation.
+-- Evolution can then refine constants and handle edge cases rather than
+-- searching from random seeds.
+--
+-- Pattern codes:
+--   1 = identity, 2 = constant, 3 = linear (a*x+b),
+--   4 = sum (fold+add), 5 = max (fold+max), 6 = length (fold+count),
+--   7 = product (fold+mul), 8 = negation (0-x), 9 = absolute (max(x,-x))
+--  10 = binary_arithmetic, 11 = fold_reduction, 12 = map_transform,
+--  13 = conditional_dispatch, 14 = linear_transform (a*x+b)
+--
+-- Bootstrap compatibility:
+--   graph_add_node_rt behaves differently in bootstrap (arg = node kind)
+--   vs rust-scaffolding (arg = always Prim opcode).
+--   Portable pattern: graph_add_node_rt pg 0 (creates Prim node),
+--   then graph_set_prim_op pg node opcode (sets actual opcode).
+--   Lit nodes use kind 5 which is consistent in both modes.
+
+-- Helper: create a Prim node with a specific opcode (bootstrap-safe)
+-- Step 1: graph_add_node_rt with kind 0 = Prim
+-- Step 2: graph_set_prim_op to set the actual opcode
+-- Returns: (program, node_id)
+let make_prim_node program opcode : Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let node_id = step.1 in
+  if opcode == 0 then (prog, node_id)
+  else
+    let result = graph_set_prim_op prog node_id opcode in
+    (result.0, result.1)
+
+-- Build an identity skeleton: fold(0, add, input)
+-- The fold reads positional input 0 and computes 0 + x = x for scalar
+let build_identity_skeleton program : Int -> Int [cost: Const(8)] =
+  let step = make_prim_node program 0 in
+  let prog = step.0 in
+  let add_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root add_id 1
+
+-- Build a constant skeleton: Lit(value)
+-- Returns a program whose root is a literal node with the given value
+let build_constant_skeleton program value : Int -> Int -> Int [cost: Const(4)] =
+  let step = graph_add_node_rt program 5 in
+  let prog = step.0 in
+  let lit_id = step.1 in
+  let prog2 = graph_set_lit_value prog lit_id 0 value in
+  graph_set_root (prog2.0) (prog2.1)
+
+-- Build a sum skeleton: fold(0, add, input)
+-- Opcode: add = 0x00 = 0
+let build_sum_skeleton program : Int -> Int [cost: Const(6)] =
+  let step = make_prim_node program 0 in
+  let prog = step.0 in
+  let add_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root add_id 1
+
+-- Build a max skeleton: fold(MIN_INT, max, input)
+-- Opcode: max = 0x08 = 8
+let build_max_skeleton program : Int -> Int [cost: Const(8)] =
+  let step = make_prim_node program 8 in
+  let prog = step.0 in
+  let max_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root max_id 1
+
+-- Build a product skeleton: fold(1, mul, input)
+-- Opcode: mul = 0x02 = 2
+let build_product_skeleton program : Int -> Int [cost: Const(8)] =
+  let step = make_prim_node program 2 in
+  let prog = step.0 in
+  let mul_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root mul_id 1
+
+-- Build a negation skeleton: Prim(sub, Lit(0), InputRef(0))
+-- Opcode: sub = 0x01 = 1
+let build_negation_skeleton program : Int -> Int [cost: Const(10)] =
+  let step1 = graph_add_node_rt program 5 in
+  let prog1 = step1.0 in
+  let zero_id = step1.1 in
+  let prog2 = graph_set_lit_value prog1 zero_id 0 0 in
+  let step2 = make_prim_node (prog2.0) 1 in
+  let prog3 = step2.0 in
+  let sub_id = step2.1 in
+  let prog4 = graph_connect prog3 sub_id zero_id 0 in
+  graph_set_root prog4 sub_id
+
+-- Build a binary arithmetic skeleton: Prim(op, InputRef(left), InputRef(right))
+-- op: 0=add, 1=sub, 2=mul, 3=div, 4=mod, 7=min, 8=max
+let build_binary_skeleton program op : Int -> Int -> Int [cost: Const(8)] =
+  let step = make_prim_node program op in
+  let prog = step.0 in
+  let prim_id = step.1 in
+  graph_set_root prog prim_id
+
+-- Build a fold reduction skeleton: fold(base, op, input)
+-- op: 0=add, 2=mul, 7=min, 8=max
+let build_fold_skeleton program base op : Int -> Int -> Int -> Int [cost: Const(12)] =
+  let step1 = graph_add_node_rt program 5 in
+  let prog1 = step1.0 in
+  let base_id = step1.1 in
+  let prog2 = graph_set_lit_value prog1 base_id 0 base in
+  let step2 = make_prim_node (prog2.0) op in
+  let prog3 = step2.0 in
+  let op_id = step2.1 in
+  let root = graph_get_root prog3 in
+  let prog4 = graph_connect prog3 root base_id 0 in
+  graph_connect prog4 root op_id 1
+
+-- Build a map transform skeleton: map(input, op)
+-- op is applied as f(x, x), e.g. add(x,x) = 2*x
+-- Opcode: map = 0x30 = 48
+let build_map_skeleton program op : Int -> Int -> Int [cost: Const(12)] =
+  let step1 = make_prim_node program op in
+  let prog1 = step1.0 in
+  let op_id = step1.1 in
+  let step2 = make_prim_node prog1 48 in
+  let prog2 = step2.0 in
+  let map_id = step2.1 in
+  let prog3 = graph_connect prog2 map_id op_id 1 in
+  graph_set_root prog3 map_id
+
+-- Build a map-fold composition skeleton: fold(base, fold_op, map(input, map_op))
+let build_map_fold_skeleton program map_op fold_op fold_base : Int -> Int -> Int -> Int -> Int [cost: Const(20)] =
+  let step1 = make_prim_node program map_op in
+  let prog1 = step1.0 in
+  let mop_id = step1.1 in
+  let step2 = make_prim_node prog1 48 in
+  let prog2 = step2.0 in
+  let map_id = step2.1 in
+  let prog3 = graph_connect prog2 map_id mop_id 1 in
+  let step3 = graph_add_node_rt prog3 5 in
+  let prog4 = step3.0 in
+  let base_id = step3.1 in
+  let prog5 = graph_set_lit_value prog4 base_id 0 fold_base in
+  let step4 = make_prim_node (prog5.0) fold_op in
+  let prog6 = step4.0 in
+  let fop_id = step4.1 in
+  let root = graph_get_root prog6 in
+  let prog7 = graph_connect prog6 root base_id 0 in
+  let prog8 = graph_connect prog7 root fop_id 1 in
+  graph_connect prog8 root map_id 2
+
+-- Build a linear transform skeleton: a*x + b
+-- Constructs: Prim(add, Prim(mul, InputRef(0), Lit(a)), Lit(b))
+let build_linear_skeleton program a b : Int -> Int -> Int -> Int [cost: Const(20)] =
+  let step1 = graph_add_node_rt program 5 in
+  let prog1 = step1.0 in
+  let a_id = step1.1 in
+  let prog2 = graph_set_lit_value prog1 a_id 0 a in
+  let step2 = make_prim_node (prog2.0) 2 in
+  let prog3 = step2.0 in
+  let mul_id = step2.1 in
+  let prog4 = graph_connect prog3 mul_id a_id 1 in
+  let step3 = graph_add_node_rt prog4 5 in
+  let prog5 = step3.0 in
+  let b_id = step3.1 in
+  let prog6 = graph_set_lit_value prog5 b_id 0 b in
+  let step4 = make_prim_node (prog6.0) 0 in
+  let prog7 = step4.0 in
+  let add_id = step4.1 in
+  let prog8 = graph_connect prog7 add_id mul_id 0 in
+  let prog9 = graph_connect prog8 add_id b_id 1 in
+  graph_set_root prog9 add_id
+
+-- Build a conditional dispatch skeleton (2-branch if/else)
+-- Constructs: Guard(Prim(eq, InputRef(d), Lit(val)), body_a, body_b)
+-- branch_op_a, branch_op_b: opcodes for the two branch computations
+let build_conditional_skeleton program dispatch_val branch_op_a branch_op_b : Int -> Int -> Int -> Int -> Int [cost: Const(24)] =
+  let step1 = make_prim_node program branch_op_a in
+  let prog1 = step1.0 in
+  let body_a = step1.1 in
+  let step2 = make_prim_node prog1 branch_op_b in
+  let prog2 = step2.0 in
+  let body_b = step2.1 in
+  let step3 = graph_add_node_rt prog2 5 in
+  let prog3 = step3.0 in
+  let val_id = step3.1 in
+  let prog4 = graph_set_lit_value prog3 val_id 0 dispatch_val in
+  let step4 = make_prim_node (prog4.0) 32 in
+  let prog5 = step4.0 in
+  let eq_id = step4.1 in
+  let prog6 = graph_connect prog5 eq_id val_id 1 in
+  (prog6, eq_id, body_a, body_b)
+
+-- Master dispatch: build a skeleton from pattern code and parameters
+-- pattern_code: which pattern was detected
+-- param_a, param_b: pattern-specific parameters (e.g., opcode, base value)
+-- Returns: the constructed program skeleton
+let build_skeleton_for_pattern program pattern_code param_a param_b : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  if pattern_code == 1 then build_identity_skeleton program
+  else if pattern_code == 2 then build_constant_skeleton program param_a
+  else if pattern_code == 3 then build_linear_skeleton program param_a param_b
+  else if pattern_code == 4 then build_sum_skeleton program
+  else if pattern_code == 5 then build_max_skeleton program
+  else if pattern_code == 6 then build_fold_skeleton program 0 0
+  else if pattern_code == 7 then build_product_skeleton program
+  else if pattern_code == 8 then build_negation_skeleton program
+  else if pattern_code == 10 then build_binary_skeleton program param_a
+  else if pattern_code == 11 then build_fold_skeleton program param_a param_b
+  else if pattern_code == 12 then build_map_skeleton program param_a
+  else program
+
+-- Evaluate a skeleton against test cases to verify correctness
+-- Returns: number of test cases passed
+let verify_skeleton skeleton test_cases : Int -> Int -> Int [cost: Linear(test_cases)] =
+  fold 0
+    (\correct tc ->
+      let result = graph_eval skeleton tc.0 in
+      if result == tc.1 then correct + 1 else correct)
+    test_cases
+
+-- Build and verify: construct skeleton, check it works, return (skeleton, pass_count)
+let build_and_verify program pattern_code param_a param_b test_cases : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let skeleton = build_skeleton_for_pattern program pattern_code param_a param_b in
+  let passes = verify_skeleton skeleton test_cases in
+  (skeleton, passes)

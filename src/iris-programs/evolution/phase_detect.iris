@@ -1,0 +1,170 @@
+-- Phase detection: classify evolution phase from fitness trajectory
+--
+-- Phases:
+--   0 = Exploration (high improvement rate, broad search)
+--   1 = SteadyState (moderate improvement, balanced search)
+--   2 = Exploitation (low improvement, focused refinement)
+--
+-- Uses a rolling fitness window to compute improvement rate and diversity.
+-- Phase transitions trigger changes in mutation rate, selection pressure,
+-- and population management strategy.
+
+-- =========================================================================
+-- Rolling fitness window
+-- =========================================================================
+
+-- Window size for fitness tracking
+let window_size : Int [cost: Const(1)] = 20
+
+-- Add a new fitness value to the rolling window
+-- window: list of recent fitness values
+-- new_fitness: the latest fitness measurement
+-- Returns: updated window (drop oldest if full)
+-- Since IRIS doesn't have mutable arrays, we track window state as
+-- (sum, count, min_seen, max_seen, last_n_values)
+let window_add state new_fitness : Int -> Int -> (Int, Int, Int, Int) [cost: Const(4)] =
+  let sum = state.0 + new_fitness in
+  let count = state.1 + 1 in
+  let min_seen = min state.2 new_fitness in
+  let max_seen = max state.3 new_fitness in
+  (sum, count, min_seen, max_seen)
+
+-- Initialize an empty window state
+let window_init : (Int, Int, Int, Int) [cost: Const(1)] =
+  (0, 0, 999999999, 0)
+
+-- Compute mean fitness from window state
+let window_mean state : Int -> Int [cost: Const(1)] =
+  if state.1 == 0 then 0
+  else state.0 / state.1
+
+-- Compute fitness range (max - min) from window state
+let window_range state : Int -> Int [cost: Const(1)] =
+  state.3 - state.2
+
+-- =========================================================================
+-- Improvement rate computation
+-- =========================================================================
+
+-- Compute improvement rate from last two fitness values
+-- Uses scaled integer arithmetic (rate * 100)
+let improvement_rate current_fitness previous_fitness : Int -> Int -> Int [cost: Const(2)] =
+  if previous_fitness == 0 then
+    if current_fitness > 0 then 100 else 0
+  else
+    ((current_fitness - previous_fitness) * 100) / previous_fitness
+
+-- Compute smoothed improvement rate (exponential moving average)
+-- alpha: smoothing factor (0-100, higher = more weight on current)
+let smoothed_improvement alpha current_rate prev_smoothed : Int -> Int -> Int -> Int [cost: Const(2)] =
+  (alpha * current_rate + (100 - alpha) * prev_smoothed) / 100
+
+-- =========================================================================
+-- Diversity measurement
+-- =========================================================================
+
+-- Compute diversity from fitness distribution
+-- Uses coefficient of variation: std_dev / mean (scaled by 100)
+-- Approximated as: range / mean * 50 (cheaper than true std_dev)
+let fitness_diversity window_state : Int -> Int [cost: Const(3)] =
+  let mean_val = window_mean window_state in
+  let range_val = window_range window_state in
+  if mean_val == 0 then 100
+  else (range_val * 50) / mean_val
+
+-- =========================================================================
+-- Phase classification
+-- =========================================================================
+
+-- Classify evolution phase from improvement rate and diversity
+--   0 = Exploration: improvement > 5% or diversity > 70%
+--   1 = SteadyState: moderate improvement and diversity
+--   2 = Exploitation: improvement < 1% and diversity < 30%
+let classify_phase improvement diversity : Int -> Int -> Int [cost: Const(3)] =
+  if improvement > 5 then 0
+  else if improvement < 1 then
+    if diversity < 30 then 2
+    else 1
+  else 1
+
+-- =========================================================================
+-- Phase-dependent parameters
+-- =========================================================================
+
+-- Mutation rate based on phase (scaled by 100)
+-- Exploration: 80%, SteadyState: 50%, Exploitation: 20%
+let phase_mutation_rate phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 80
+  else if phase == 1 then 50
+  else 20
+
+-- Crossover rate based on phase (scaled by 100)
+-- Exploration: 30%, SteadyState: 50%, Exploitation: 70%
+let phase_crossover_rate phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 30
+  else if phase == 1 then 50
+  else 70
+
+-- Tournament size based on phase
+-- Exploration: 2 (less selective), SteadyState: 3, Exploitation: 5 (more selective)
+let phase_tournament_size phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 2
+  else if phase == 1 then 3
+  else 5
+
+-- Selection survival fraction based on phase (percent)
+-- Exploration: 75%, SteadyState: 50%, Exploitation: 25%
+let phase_survival_fraction phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 75
+  else if phase == 1 then 50
+  else 25
+
+-- =========================================================================
+-- Phase transition detection
+-- =========================================================================
+
+-- Detect phase transitions: returns new phase and whether it changed
+-- old_phase: previous phase
+-- improvement: current improvement rate (scaled by 100)
+-- diversity: current diversity (scaled by 100)
+-- Returns: (new_phase, changed_flag)
+let detect_transition old_phase improvement diversity : Int -> Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let new_phase = classify_phase improvement diversity in
+  let changed = if new_phase == old_phase then 0 else 1 in
+  (new_phase, changed)
+
+-- Stagnation detection: check if improvement has been zero for N generations
+-- stagnation_count: consecutive generations with no improvement
+-- stagnation_window: threshold for declaring stagnation
+-- Returns: 1 if stagnating, 0 otherwise
+let is_stagnating stagnation_count stagnation_window : Int -> Int -> Int [cost: Const(1)] =
+  if stagnation_count >= stagnation_window then 1 else 0
+
+-- =========================================================================
+-- Full phase detection step
+-- =========================================================================
+
+-- Full phase detection: update window, compute metrics, classify
+-- state: (window_state, prev_fitness, phase, stag_count, smoothed_rate)
+-- new_fitness: latest fitness measurement
+-- Returns: (new_window_state, phase, stag_count, smoothed_rate, phase_changed)
+let phase_step state new_fitness : Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(10)] =
+  let window_state = state.0 in
+  let prev_fitness = state.1 in
+  let old_phase = state.2 in
+  let stag_count = state.3 in
+  let prev_smoothed = state.4 in
+  -- Update window
+  let new_window = window_add window_state new_fitness in
+  -- Compute improvement rate
+  let raw_rate = improvement_rate new_fitness prev_fitness in
+  let smooth_rate = smoothed_improvement 30 raw_rate prev_smoothed in
+  -- Compute diversity
+  let div_score = fitness_diversity new_window in
+  -- Classify phase
+  let transition = detect_transition old_phase smooth_rate div_score in
+  let new_phase = transition.0 in
+  let changed = transition.1 in
+  -- Update stagnation
+  let new_stag = if raw_rate > 0 then 0 else stag_count + 1 in
+  (new_window, new_phase, new_stag, smooth_rate, changed)

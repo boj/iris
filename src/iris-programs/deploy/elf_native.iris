@@ -1,0 +1,537 @@
+-- ELF64 binary generation for AOT-compiled IRIS programs
+--
+-- Mirrors the Rust elf.rs (525 LOC) in iris-deploy.
+--
+-- Produces the actual byte VALUES of an ELF64 header as integer tuples.
+-- These can be assembled into a contiguous buffer by the host runtime.
+--
+-- ELF64 structure:
+--   ELF Header (64 bytes):
+--     e_ident: magic(4) + class(1) + data(1) + version(1) + osabi(1) + pad(8) = 16
+--     e_type(2) + e_machine(2) + e_version(4) + e_entry(8) + e_phoff(8)
+--     + e_shoff(8) + e_flags(4) + e_ehsize(2) + e_phentsize(2) + e_phnum(2)
+--     + e_shentsize(2) + e_shnum(2) + e_shstrndx(2) = 48
+--   Program Header (56 bytes):
+--     p_type(4) + p_flags(4) + p_offset(8) + p_vaddr(8) + p_paddr(8)
+--     + p_filesz(8) + p_memsz(8) + p_align(8) = 56
+--   Code section: startup stub + computation code
+
+-- ============================================================
+-- ELF constants
+-- ============================================================
+
+-- Convert Bool to Int (IRIS doesn't have implicit coercion)
+let bool_to_int b : Int -> Int [cost: Const(1)] =
+  if b then 1 else 0
+
+let elf_magic_0 : Int [cost: Const(1)] = 127
+let elf_magic_1 : Int [cost: Const(1)] = 69
+let elf_magic_2 : Int [cost: Const(1)] = 76
+let elf_magic_3 : Int [cost: Const(1)] = 70
+
+let elf_class_64 : Int [cost: Const(1)] = 2
+let elf_data_lsb : Int [cost: Const(1)] = 1
+let elf_version : Int [cost: Const(1)] = 1
+let elf_osabi_none : Int [cost: Const(1)] = 0
+let elf_type_exec : Int [cost: Const(1)] = 2
+let elf_machine_x86_64 : Int [cost: Const(1)] = 62
+let vaddr_base : Int [cost: Const(1)] = 4194304
+let elf_header_size : Int [cost: Const(1)] = 64
+let phdr_size : Int [cost: Const(1)] = 56
+let header_total : Int [cost: Const(1)] = 120
+let page_alignment : Int [cost: Const(1)] = 4096
+let max_elf_code_bytes : Int [cost: Const(1)] = 33554432
+let pt_load : Int [cost: Const(1)] = 1
+let pf_rx : Int [cost: Const(1)] = 5
+
+-- ============================================================
+-- Byte-level encoding helpers
+-- ============================================================
+
+-- Encode a u16 as two LE bytes.
+let encode_u16_le v : Int -> (Int, Int) [cost: Const(2)] =
+  let low = v % 256 in
+  let high = (v / 256) % 256 in
+  (low, high)
+
+-- Encode a u32 as four LE bytes.
+let encode_u32_le v : Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  let b0 = v % 256 in
+  let b1 = (v / 256) % 256 in
+  let b2 = (v / 65536) % 256 in
+  let b3 = (v / 16777216) % 256 in
+  (b0, b1, b2, b3)
+
+-- Encode a u64 as eight LE bytes.
+let encode_u64_le v : Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  let b0 = v % 256 in
+  let b1 = (v / 256) % 256 in
+  let b2 = (v / 65536) % 256 in
+  let b3 = (v / 16777216) % 256 in
+  let b4 = (v / 4294967296) % 256 in
+  let b5 = (v / 1099511627776) % 256 in
+  let b6 = (v / 281474976710656) % 256 in
+  let b7 = (v / 72057594037927936) % 256 in
+  (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ============================================================
+-- ELF e_ident: 16 bytes
+-- ============================================================
+
+-- Build the e_ident as a tuple of 16 byte values.
+-- (magic0, magic1, magic2, magic3, class, data, version, osabi, pad x8)
+let build_ident : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (127, 69, 76, 70, 2, 1, 1, 0)
+
+-- Validate an ELF e_ident.
+let validate_ident magic0 magic1 magic2 magic3 class data version : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  let m0 = if magic0 == 127 then 1 else 0 in
+  let m1 = if magic1 == 69 then 1 else 0 in
+  let m2 = if magic2 == 76 then 1 else 0 in
+  let m3 = if magic3 == 70 then 1 else 0 in
+  let c = if class == 2 then 1 else 0 in
+  let d = if data == 1 then 1 else 0 in
+  let v = if version == 1 then 1 else 0 in
+  m0 * m1 * m2 * m3 * c * d * v
+
+-- ============================================================
+-- Compute addresses
+-- ============================================================
+
+let compute_entry_point : Int [cost: Const(1)] =
+  vaddr_base + header_total
+
+let compute_file_size stub_size code_size : Int -> Int -> Int [cost: Const(1)] =
+  header_total + stub_size + code_size
+
+let compute_mem_size file_size : Int -> Int [cost: Const(2)] =
+  let aligned = file_size + 4095 in
+  aligned - (aligned % 4096)
+
+-- ============================================================
+-- Build ELF header bytes (bytes 0-63)
+-- ============================================================
+
+-- Produce the first 16 bytes of the ELF header (e_ident) as individual byte values.
+-- Returns a list of 16 integers, each 0-255.
+let build_elf_ident_bytes : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  -- bytes 0-3: magic
+  -- byte 4: class (64-bit = 2)
+  -- byte 5: data (little-endian = 1)
+  -- byte 6: version (1)
+  -- byte 7: OS/ABI (System V = 0)
+  -- bytes 8-15: padding (all 0)
+  (127, 69, 76, 70, 2, 1, 1, 0)
+
+-- Build e_type + e_machine (bytes 16-19) as byte values.
+-- e_type = ET_EXEC (2), e_machine = EM_X86_64 (62)
+let build_elf_type_machine_bytes : (Int, Int, Int, Int) [cost: Const(2)] =
+  let etype = encode_u16_le elf_type_exec in
+  let emach = encode_u16_le elf_machine_x86_64 in
+  (etype.0, etype.1, emach.0, emach.1)
+
+-- Build the e_entry field (bytes 24-31) as 8 byte values.
+let build_elf_entry_bytes : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  let entry = compute_entry_point in
+  encode_u64_le entry
+
+-- Build the e_phoff field (bytes 32-39) as 8 byte values.
+-- Program header starts right after ELF header at offset 64.
+let build_elf_phoff_bytes : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  encode_u64_le elf_header_size
+
+-- Build e_ehsize (2 bytes), e_phentsize (2 bytes), e_phnum (2 bytes)
+-- at bytes 52-57.
+let build_elf_sizes_bytes : (Int, Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let ehsize = encode_u16_le elf_header_size in
+  let phentsize = encode_u16_le phdr_size in
+  let phnum = encode_u16_le 1 in
+  (ehsize.0, ehsize.1, phentsize.0, phentsize.1, phnum.0, phnum.1)
+
+-- ============================================================
+-- Build Program Header bytes (bytes 64-119)
+-- ============================================================
+
+-- Build p_type (4 bytes): PT_LOAD = 1
+let build_phdr_type_bytes : (Int, Int, Int, Int) [cost: Const(2)] =
+  encode_u32_le pt_load
+
+-- Build p_flags (4 bytes): PF_R | PF_X = 5
+let build_phdr_flags_bytes : (Int, Int, Int, Int) [cost: Const(2)] =
+  encode_u32_le pf_rx
+
+-- Build p_vaddr (8 bytes): the virtual address base
+let build_phdr_vaddr_bytes : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  encode_u64_le vaddr_base
+
+-- Build p_filesz (8 bytes) given stub_size and code_size.
+let build_phdr_filesz_bytes stub_size code_size : Int -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  let fsize = compute_file_size stub_size code_size in
+  encode_u64_le fsize
+
+-- Build p_memsz (8 bytes) given file_size.
+let build_phdr_memsz_bytes stub_size code_size : Int -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  let fsize = compute_file_size stub_size code_size in
+  let msize = compute_mem_size fsize in
+  encode_u64_le msize
+
+-- Build p_align (8 bytes): page alignment = 4096
+let build_phdr_align_bytes : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  encode_u64_le page_alignment
+
+-- ============================================================
+-- Startup stub metrics
+-- ============================================================
+
+let estimate_stub_size arg_count : Int -> Int [cost: Const(3)] =
+  let setup = 20 in
+  let per_arg = 80 in
+  let reg_load = arg_count * 5 in
+  let call_overhead = 25 in
+  let output_routine = 120 in
+  let exit_code = 12 in
+  setup + arg_count * per_arg + reg_load + call_overhead + output_routine + exit_code
+
+-- Syscall numbers
+let sys_write : Int [cost: Const(1)] = 1
+let sys_exit_group : Int [cost: Const(1)] = 231
+
+-- ============================================================
+-- Register assignment for System V AMD64 ABI
+-- ============================================================
+
+let arg_register_index arg_idx : Int -> Int [cost: Const(1)] =
+  arg_idx
+
+let max_register_args : Int [cost: Const(1)] = 6
+
+-- ============================================================
+-- Validation
+-- ============================================================
+
+let validate_code_size code_size : Int -> Int [cost: Const(2)] =
+  if code_size > 0 then
+    if code_size <= max_elf_code_bytes then 1 else 0
+  else 0
+
+let elf_binary_size code_size arg_count : Int -> Int -> Int [cost: Const(3)] =
+  let stub = estimate_stub_size arg_count in
+  compute_file_size stub code_size
+
+let validate_elf code_size arg_count : Int -> Int -> Int [cost: Const(4)] =
+  let code_ok = validate_code_size code_size in
+  let args_ok = if arg_count >= 0 then
+      if arg_count <= 6 then 1 else 0
+    else 0 in
+  let size = elf_binary_size code_size arg_count in
+  let size_ok = if size < 4096 * 1024 then 1 else 0 in
+  code_ok * args_ok * size_ok
+
+-- ============================================================
+-- ELF header verification
+-- ============================================================
+
+let verify_elf_header e_type e_machine e_entry : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let type_ok = bool_to_int (e_type == 2) in
+  let machine_ok = bool_to_int (e_machine == 62) in
+  let entry_ok = bool_to_int (e_entry == compute_entry_point) in
+  type_ok * machine_ok * entry_ok
+
+let verify_program_header p_type p_flags p_vaddr p_align : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  let type_ok = bool_to_int (p_type == 1) in
+  let flags_ok = bool_to_int (p_flags == 5) in
+  let vaddr_ok = bool_to_int (p_vaddr == vaddr_base) in
+  let align_ok = bool_to_int (p_align == 4096) in
+  type_ok * flags_ok * vaddr_ok * align_ok
+
+-- ============================================================
+-- i64-to-decimal conversion
+-- ============================================================
+
+let digit_count value : Int -> Int [cost: Const(5)] =
+  let abs_val = if value < 0 then 0 - value else value in
+  let sign_byte = if value < 0 then 1 else 0 in
+  let digits = if abs_val == 0 then 1
+    else if abs_val < 10 then 1
+    else if abs_val < 100 then 2
+    else if abs_val < 1000 then 3
+    else if abs_val < 10000 then 4
+    else if abs_val < 100000 then 5
+    else if abs_val < 1000000 then 6
+    else if abs_val < 10000000 then 7
+    else if abs_val < 100000000 then 8
+    else if abs_val < 1000000000 then 9
+    else 10
+  in
+  digits + sign_byte + 1
+
+-- Compute the argv offset for argument index i.
+let argv_offset i : Int -> Int [cost: Const(1)] =
+  8 + (i + 1) * 8
+
+-- ============================================================
+-- Byte-buffer cons-list helpers
+-- ============================================================
+
+-- Prepend a single byte to a cons-list.
+let elf_cons b tail : Int -> Int -> Int [cost: Const(1)] =
+  (b, tail)
+
+-- Prepend 2 LE bytes of a u16.
+let elf_prepend_u16 v tail : Int -> Int -> Int [cost: Const(2)] =
+  let b = encode_u16_le v in
+  (b.0, (b.1, tail))
+
+-- Prepend 4 LE bytes of a u32.
+let elf_prepend_u32 v tail : Int -> Int -> Int [cost: Const(2)] =
+  let b = encode_u32_le v in
+  (b.0, (b.1, (b.2, (b.3, tail))))
+
+-- Prepend 8 LE bytes of a u64.
+let elf_prepend_u64 v tail : Int -> Int -> Int [cost: Const(4)] =
+  let b = encode_u64_le v in
+  (b.0, (b.1, (b.2, (b.3, (b.4, (b.5, (b.6, (b.7, tail))))))))
+
+-- Prepend n zero bytes.
+let elf_prepend_zeros n tail : Int -> Int -> Int [cost: Const(5)] =
+  if n <= 0 then tail
+  else if n == 1 then (0, tail)
+  else if n == 2 then (0, (0, tail))
+  else if n == 3 then (0, (0, (0, tail)))
+  else if n == 4 then (0, (0, (0, (0, tail))))
+  else if n == 5 then (0, (0, (0, (0, (0, tail)))))
+  else if n == 6 then (0, (0, (0, (0, (0, (0, tail))))))
+  else if n == 7 then (0, (0, (0, (0, (0, (0, (0, tail)))))))
+  else (0, (0, (0, (0, (0, (0, (0, (0, tail))))))))
+
+-- ============================================================
+-- x86-64 startup stub (machine code bytes)
+-- ============================================================
+
+-- Build the startup stub as a byte cons-list.
+-- The stub: allocates stack buffer, calls compiled code at code_offset,
+-- converts i64 result to decimal ASCII, writes to stdout, then exits.
+--
+-- x86-64 machine code (96 bytes for 0-arg case):
+--   sub rsp, 40       ; allocate buffer
+--   call <code>        ; call compiled function
+--   mov rcx, rsp       ; buffer pointer
+--   add rcx, 31        ; point to end
+--   mov byte [rcx], 10 ; newline
+--   mov r8, rcx        ; save end
+--   test rax, rax      ; check zero
+--   jnz digits         ; skip if nonzero
+--   dec rcx / mov '0'  ; handle zero
+--   jmp write
+-- digits:
+--   mov r9, 10         ; divisor
+-- loop:
+--   xor edx / div / add '0' / store / test / jnz loop
+-- write:
+--   compute length, sys_write(1, buf, len), sys_exit_group(0)
+let build_startup_stub code_offset tail : Int -> Int -> Int [cost: Const(5)] =
+  -- Build right-to-left: last bytes first
+  let buf = tail in
+  -- sys_exit_group(0): mov eax,231; xor edi,edi; syscall
+  let buf = (15, (5, buf)) in
+  let buf = (49, (255, buf)) in
+  let buf = (184, (231, (0, (0, (0, buf))))) in
+  -- syscall for sys_write
+  let buf = (15, (5, buf)) in
+  -- mov edi, 1 (stdout)
+  let buf = (191, (1, (0, (0, (0, buf))))) in
+  -- mov eax, 1 (sys_write)
+  let buf = (184, (1, (0, (0, (0, buf))))) in
+  -- mov rsi, rcx (buffer start)
+  let buf = (72, (137, (206, buf))) in
+  -- inc rdx (add 1 for newline)
+  let buf = (72, (255, (194, buf))) in
+  -- sub rdx, rcx (compute length)
+  let buf = (72, (41, (202, buf))) in
+  -- mov rdx, r8 (end ptr)
+  let buf = (76, (137, (194, buf))) in
+  -- write label (offset 63) ---
+  -- jnz loop (offset 45): 75 EE
+  let buf = (117, (238, buf)) in
+  -- test rax, rax
+  let buf = (72, (133, (192, buf))) in
+  -- mov [rcx], dl
+  let buf = (136, (17, buf)) in
+  -- dec rcx
+  let buf = (72, (255, (201, buf))) in
+  -- add dl, 0x30
+  let buf = (128, (194, (48, buf))) in
+  -- div r9
+  let buf = (73, (247, (241, buf))) in
+  -- xor edx, edx
+  let buf = (49, (210, buf)) in
+  -- loop label (offset 45) ---
+  -- mov r9, 10
+  let buf = (73, (199, (193, (10, (0, (0, (0, buf))))))) in
+  -- digits label (offset 38) ---
+  -- jmp write: EB 1C (jump +28 to offset 63)
+  let buf = (235, (28, buf)) in
+  -- mov byte [rcx], '0'
+  let buf = (198, (1, (48, buf))) in
+  -- dec rcx
+  let buf = (72, (255, (201, buf))) in
+  -- jnz digits: 75 0B (jump +11 to offset 38)
+  let buf = (117, (11, buf)) in
+  -- test rax, rax
+  let buf = (72, (133, (192, buf))) in
+  -- mov r8, rcx
+  let buf = (73, (137, (200, buf))) in
+  -- mov byte [rcx], 10 (newline)
+  let buf = (198, (1, (10, buf))) in
+  -- add rcx, 31
+  let buf = (72, (131, (193, (31, buf)))) in
+  -- mov rcx, rsp
+  let buf = (72, (137, (225, buf))) in
+  -- call <code_offset>: E8 + 4-byte LE relative offset
+  let off = encode_u32_le code_offset in
+  let buf = (232, (off.0, (off.1, (off.2, (off.3, buf))))) in
+  -- sub rsp, 40
+  let buf = (72, (131, (236, (40, buf)))) in
+  buf
+
+-- Startup stub size (fixed for 0-arg version).
+let stub_byte_count : Int [cost: Const(1)] = 96
+
+-- ============================================================
+-- Stub metrics: aggregate startup stub parameters
+-- ============================================================
+
+let compute_stub_metrics arg_count : Int -> (Int, Int, Int, Int, Int) [cost: Const(5)] =
+  let stub = estimate_stub_size arg_count in
+  let output_len = digit_count 0 in
+  let first_argv = argv_offset 0 in
+  let first_reg = arg_register_index 0 in
+  let max_args = max_register_args in
+  (stub, output_len, first_argv, first_reg, max_args)
+
+-- ============================================================
+-- ELF structure verification
+-- ============================================================
+
+-- Cross-check all ELF field builders and verify the structure is valid.
+let verify_elf_structure stub_size code_size : Int -> Int -> Int [cost: Const(5)] =
+  let ident = build_elf_ident_bytes in
+  let ident_ref = build_ident in
+  let ident_ok = validate_ident ident.0 ident.1 ident.2 ident.3 ident.4 ident.5 ident.6 in
+  let ident_match = bool_to_int (ident.0 == ident_ref.0) in
+  let type_machine = build_elf_type_machine_bytes in
+  let entry_bytes = build_elf_entry_bytes in
+  let phoff_bytes = build_elf_phoff_bytes in
+  let sizes = build_elf_sizes_bytes in
+  let phdr_type = build_phdr_type_bytes in
+  let phdr_flags = build_phdr_flags_bytes in
+  let phdr_vaddr = build_phdr_vaddr_bytes in
+  let phdr_filesz = build_phdr_filesz_bytes stub_size code_size in
+  let phdr_memsz = build_phdr_memsz_bytes stub_size code_size in
+  let phdr_align = build_phdr_align_bytes in
+  let fields_ok = bool_to_int (type_machine.0 + phdr_type.0 + phdr_flags.0 > 0) in
+  let sizes_ok = bool_to_int (sizes.0 + sizes.2 + sizes.4 > 0) in
+  let memsz_ok = bool_to_int (phdr_memsz.0 + phdr_filesz.0 + phdr_align.0 + phdr_vaddr.0 + phoff_bytes.0 + entry_bytes.0 >= 0) in
+  let hdr_ok = verify_elf_header elf_type_exec elf_machine_x86_64 compute_entry_point in
+  let phdr_ok = verify_program_header pt_load pf_rx vaddr_base page_alignment in
+  let write_ok = bool_to_int (sys_write == 1) in
+  let exit_ok = bool_to_int (sys_exit_group == 231) in
+  let test_byte = elf_cons ident_ref.0 0 in
+  let cons_ok = bool_to_int (test_byte != ()) in
+  ident_ok * ident_match * fields_ok * sizes_ok * memsz_ok * hdr_ok * phdr_ok * write_ok * exit_ok * cons_ok
+
+-- ============================================================
+-- ELF header assembly (64 bytes)
+-- ============================================================
+
+-- Build the complete ELF64 header as a byte cons-list.
+let build_elf_header_bytes stub_size code_size tail : Int -> Int -> Int -> Int [cost: Const(5)] =
+  let entry = compute_entry_point in
+  let file_size = compute_file_size stub_size code_size in
+  let mem_size = compute_mem_size file_size in
+  -- Build header right-to-left (bytes 63..0 prepended onto tail)
+  -- Bytes 62-63: e_shstrndx = 0 (u16)
+  let buf = elf_prepend_u16 0 tail in
+  -- Bytes 60-61: e_shnum = 0
+  let buf = elf_prepend_u16 0 buf in
+  -- Bytes 58-59: e_shentsize = 0
+  let buf = elf_prepend_u16 0 buf in
+  -- Bytes 56-57: e_phnum = 1
+  let buf = elf_prepend_u16 1 buf in
+  -- Bytes 54-55: e_phentsize = 56
+  let buf = elf_prepend_u16 56 buf in
+  -- Bytes 52-53: e_ehsize = 64
+  let buf = elf_prepend_u16 64 buf in
+  -- Bytes 48-51: e_flags = 0
+  let buf = elf_prepend_u32 0 buf in
+  -- Bytes 40-47: e_shoff = 0 (no section headers)
+  let buf = elf_prepend_u64 0 buf in
+  -- Bytes 32-39: e_phoff = 64 (program header offset)
+  let buf = elf_prepend_u64 64 buf in
+  -- Bytes 24-31: e_entry = vaddr_base + 120
+  let buf = elf_prepend_u64 entry buf in
+  -- Bytes 20-23: e_version = 1
+  let buf = elf_prepend_u32 1 buf in
+  -- Bytes 18-19: e_machine = 62 (x86-64)
+  let buf = elf_prepend_u16 62 buf in
+  -- Bytes 16-17: e_type = 2 (ET_EXEC)
+  let buf = elf_prepend_u16 2 buf in
+  -- Bytes 8-15: padding (8 zero bytes)
+  let buf = elf_prepend_zeros 8 buf in
+  -- Bytes 0-7: e_ident[0..7] = magic + class + data + version + osabi
+  let buf = (127, (69, (76, (70, (2, (1, (1, (0, buf)))))))) in
+  buf
+
+-- ============================================================
+-- Program header assembly (56 bytes)
+-- ============================================================
+
+-- Build the complete program header as a byte cons-list.
+let build_program_header_bytes stub_size code_size tail : Int -> Int -> Int -> Int [cost: Const(5)] =
+  let file_size = compute_file_size stub_size code_size in
+  let mem_size = compute_mem_size file_size in
+  -- Build right-to-left (bytes 55..0)
+  -- Bytes 48-55: p_align = 4096
+  let buf = elf_prepend_u64 4096 tail in
+  -- Bytes 40-47: p_memsz
+  let buf = elf_prepend_u64 mem_size buf in
+  -- Bytes 32-39: p_filesz
+  let buf = elf_prepend_u64 file_size buf in
+  -- Bytes 24-31: p_paddr = vaddr_base
+  let buf = elf_prepend_u64 vaddr_base buf in
+  -- Bytes 16-23: p_vaddr = vaddr_base
+  let buf = elf_prepend_u64 vaddr_base buf in
+  -- Bytes 8-15: p_offset = 0
+  let buf = elf_prepend_u64 0 buf in
+  -- Bytes 4-7: p_flags = 5 (PF_R | PF_X)
+  let buf = elf_prepend_u32 5 buf in
+  -- Bytes 0-3: p_type = 1 (PT_LOAD)
+  let buf = elf_prepend_u32 1 buf in
+  buf
+
+-- ============================================================
+-- Complete ELF binary generation
+-- ============================================================
+
+-- Generate a complete ELF64 binary as a byte cons-list.
+-- code_bytes: compiled machine code as a byte cons-list (or 0 for empty)
+-- code_size: number of bytes in code_bytes
+-- arg_count: number of function arguments (0-6)
+-- Returns: (byte, (byte, ... 0)) — the complete ELF binary.
+--
+-- Layout: ELF header (64) + Program header (56) + Startup stub + Code
+let generate_elf code_bytes code_size arg_count : Int -> Int -> Int -> Int [cost: Const(5)] =
+  let valid = validate_elf code_size arg_count in
+  if valid == 0 then 0
+  else
+    let metrics = compute_stub_metrics arg_count in
+    let stub_size = stub_byte_count in
+    let call_offset = stub_size - 9 in
+    -- Build startup stub with code_bytes as tail
+    let stub = build_startup_stub call_offset code_bytes in
+    -- Assemble program header + ELF header in front
+    let buf = build_program_header_bytes stub_size code_size stub in
+    let elf = build_elf_header_bytes stub_size code_size buf in
+    -- Verify ELF structure integrity
+    let structure_ok = verify_elf_structure stub_size code_size in
+    if structure_ok == 0 then 0 else elf

@@ -1,0 +1,111 @@
+-- List operations built on the list_* primitives.
+--
+-- Lists are Value::Tuple under the hood. These functions provide
+-- a higher-level API for common list manipulations.
+
+-- Concatenate two lists
+let append xs ys = list_append xs ys
+
+-- Get element at index (0-based), returns Unit if out of bounds
+let nth xs i = list_nth xs i
+
+-- First N elements
+let take xs n = list_take xs n
+
+-- Drop first N elements
+let drop xs n = list_drop xs n
+
+-- Sort a list of integers ascending
+let sort xs = list_sort xs
+
+-- Remove consecutive duplicates
+let dedup xs = list_dedup xs
+
+-- Generate a range [start, end)
+let range start end = list_range start end
+
+-- Length of a list via fold
+let length xs = fold 0 (\acc x -> acc + 1) xs
+
+-- Reverse a list
+let reverse xs =
+  let n = fold 0 (\acc x -> acc + 1) xs in
+  fold () (\acc x -> list_append (list_take (list_drop xs (n - fold 0 (\a y -> a + 1) acc - 1)) 1) acc) xs
+
+-- Head: first element (Unit if empty)
+let head xs = list_nth xs 0
+
+-- Tail: all but first element
+let tail xs = list_drop xs 1
+
+-- Last: last element (Unit if empty)
+let last xs =
+  let n = fold 0 (\acc x -> acc + 1) xs in
+  list_nth xs (n - 1)
+
+-- Init: all but last element
+let init xs =
+  let n = fold 0 (\acc x -> acc + 1) xs in
+  list_take xs (n - 1)
+
+-- Flatten: concatenate a list of lists
+let flatten xss = fold () (\acc xs -> list_append acc xs) xss
+
+-- Sum of a list
+let list_sum xs = fold 0 (+) xs
+
+-- Product of a list
+let list_product xs = fold 1 (*) xs
+
+-- Monadic bind for lists (flatmap): apply f to each element, concat results.
+-- Enables nondeterministic / list-comprehension style computation.
+let list_bind xs f = fold () (\acc x -> list_concat acc (f x)) xs
+
+-- Wrap a value in a singleton list (monadic return).
+let list_return val = (val,)
+
+-- Replace element at index i with val. Returns new list.
+-- Out-of-bounds index returns the list unchanged.
+let list_set xs i val =
+  let n = list_len xs in
+  if i < 0 then xs
+  else if i >= n then xs
+  else
+    let prefix = list_take xs i in
+    let suffix = list_drop xs (i + 1) in
+    list_concat (list_append prefix val) suffix
+
+-- Fold collecting all intermediate accumulator values.
+-- scan_left init f (e0, e1, ...) = (init, f(init,e0), f(f(init,e0),e1), ...)
+let scan_left init f xs =
+  let result = fold (init, (init,)) (\state elem ->
+    match state with
+    | (acc, results) ->
+      let new_acc = f acc elem in
+      (new_acc, list_append results new_acc)
+  ) xs in
+  match result with
+  | (acc, results) -> results
+
+-- Fold with early termination.
+--   fold_while init step_fn collection
+-- step_fn is called as: step_fn acc elem -> (continue?, new_acc)
+-- When continue? is false (or 0), stops calling step_fn and returns new_acc.
+--
+-- Example: find first negative in a list
+--   fold_while 0 (\acc elem ->
+--     if elem < 0 then (false, elem) else (true, acc)
+--   ) (5, 3, -2, 7)
+--   -- Returns: -2
+--
+-- NOTE: still traverses all elements (skipping step_fn after break).
+-- True early exit would require a new Fold node variant.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    match state with
+    | (cont, acc) ->
+      if cont then step_fn acc elem
+      else state
+  ) xs in
+  match result with
+  | (cont, acc) -> acc

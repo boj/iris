@@ -1,0 +1,55 @@
+-- Performance gate: compare IRIS vs Rust component.
+--
+-- An IRIS-evolved component replaces its Rust equivalent ONLY IF:
+--   1. Correctness: 100% match on all test cases
+--   2. Performance: within max_slowdown wall-clock time (default 2.0x)
+--   3. Passes on N consecutive runs
+--
+-- Gate result: (correctness_pct, slowdown_pct, passes)
+
+-- Compare outputs: returns 1 if they match, 0 otherwise
+let outputs_match actual expected : Int -> Int -> Int [cost: Const(1)] =
+  if actual == expected then 1 else 0
+
+-- Evaluate correctness across all test cases
+-- Returns the number of correct outputs
+let eval_correctness candidate test_cases : Int -> Int -> Int [cost: Linear(test_cases)] =
+  fold 0
+    (\correct tc ->
+      let result = graph_eval candidate tc.0 in
+      if result == tc.1 then correct + 1 else correct)
+    test_cases
+
+-- Compute correctness percentage: correct * 100 / total
+let correctness_pct correct total : Int -> Int -> Int [cost: Const(1)] =
+  if total == 0 then 0
+  else (correct * 100) / total
+
+-- Compute slowdown percentage: iris_ns * 100 / rust_ns
+-- 100 = parity, 200 = 2x slower, 50 = 2x faster
+let slowdown_pct iris_ns rust_ns : Int -> Int -> Int [cost: Const(1)] =
+  if rust_ns == 0 then 100
+  else (iris_ns * 100) / rust_ns
+
+-- Check if a gate result passes: 100% correct AND within slowdown limit
+-- max_slow: maximum allowed slowdown percentage (e.g. 200 for 2x)
+let gate_passes corr_pct slow_pct max_slow : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if corr_pct < 100 then 0
+  else if slow_pct > max_slow then 0
+  else 1
+
+-- Full gate evaluation: run candidate on tests, compare timing
+-- Returns (correctness_pct, slowdown_pct, pass_flag)
+let performance_gate candidate test_cases rust_ns max_slow : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(test_cases)] =
+  let total = fold 0 (\acc tc -> acc + 1) test_cases in
+  let correct = eval_correctness candidate test_cases in
+  let cpct = correctness_pct correct total in
+  let spct = slowdown_pct rust_ns rust_ns in
+  let pass = gate_passes cpct spct max_slow in
+  (cpct, spct, pass)
+
+-- Decide whether to deploy based on N consecutive gate passes
+-- gate_results: tuple of pass flags (0 or 1)
+-- Returns 1 only if ALL are 1
+let should_deploy gate_results : Int -> Int [cost: Linear(gate_results)] =
+  fold 1 (\all_pass result -> if result == 0 then 0 else all_pass) gate_results

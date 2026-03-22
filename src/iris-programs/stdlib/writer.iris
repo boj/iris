@@ -1,0 +1,50 @@
+-- Writer monad: computation that accumulates a log.
+--
+-- Encoding: (result, log_tuple)
+-- The log is a Tuple that grows via list_append/list_concat.
+--
+-- Useful for tracing, auditing, or collecting diagnostic info
+-- alongside a computation without threading an explicit log parameter.
+
+-- Wrap a value with an empty log.
+let writer_return val = (val, ())
+
+-- Chain two writer computations, concatenating their logs.
+-- f receives the result of wa and returns a new (result, log) pair.
+let writer_bind wa f =
+  match wa with
+  | (v, log) ->
+    let result = f v in
+    match result with
+    | (rv, rlog) -> (rv, list_concat log rlog)
+
+-- Append a message to the log, producing a dummy result (0).
+let writer_tell msg = (0, (msg,))
+
+-- Append multiple messages to the log.
+let writer_tell_all msgs = (0, msgs)
+
+-- Map a function over the result, keeping the log unchanged.
+let writer_map wa f =
+  match wa with
+  | (v, log) -> (f v, log)
+
+-- Extract just the result, discarding the log.
+let writer_value wa =
+  match wa with
+  | (v, log) -> v
+
+-- Extract just the log, discarding the result.
+let writer_log wa =
+  match wa with
+  | (v, log) -> log
+
+-- Run: identity (a writer value is already (result, log)).
+let writer_run wa = wa
+
+-- Combine two writers, merging results with a function and concatenating logs.
+let writer_zip_with wa wb f =
+  match wa with
+  | (va, loga) ->
+    match wb with
+    | (vb, logb) -> (f va vb, list_concat loga logb)

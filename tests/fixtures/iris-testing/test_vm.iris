@@ -1,0 +1,303 @@
+-- Tests for VM subsystem: vm_step, vm_run, node_to_opcode, compile_to_bytecode
+-- depends: programs/vm/vm_step.iris, programs/vm/vm_run.iris
+-- depends: programs/vm/node_to_opcode.iris, programs/vm/compile_to_bytecode.iris
+
+-- =========================================================================
+-- vm_step: legacy ops (negative instruction encoding)
+-- =========================================================================
+
+-- Test: vm_step add (instruction -1)
+let test_vm_step_add : Int [cost: Const(5)] =
+  assert_eq (vm_step (3, 5) (0 - 1)) 8 0
+
+-- Test: vm_step sub (instruction -2)
+let test_vm_step_sub : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 3) (0 - 2)) 7 0
+
+-- Test: vm_step mul (instruction -3)
+let test_vm_step_mul : Int [cost: Const(5)] =
+  assert_eq (vm_step (4, 7) (0 - 3)) 28 0
+
+-- Test: vm_step div-by-zero (instruction -4)
+let test_vm_step_div_zero : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 0) (0 - 4)) 0 0
+
+-- =========================================================================
+-- vm_step: new opcode encoding (opcode * 65536 + operand)
+-- =========================================================================
+
+-- Test: new encoding Add (opcode 3)
+let test_vm_step_new_add : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 20) (3 * 65536)) 30 0
+
+-- Test: new encoding Sub (opcode 4)
+let test_vm_step_new_sub : Int [cost: Const(5)] =
+  assert_eq (vm_step (50, 20) (4 * 65536)) 30 0
+
+-- Test: new encoding Mul (opcode 5)
+let test_vm_step_new_mul : Int [cost: Const(5)] =
+  assert_eq (vm_step (6, 7) (5 * 65536)) 42 0
+
+-- Test: new encoding Div (opcode 6) with zero
+let test_vm_step_new_div_zero : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 0) (6 * 65536)) 0 0
+
+-- Test: new encoding Div (opcode 6)
+let test_vm_step_new_div : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 3) (6 * 65536)) 3 0
+
+-- Test: new encoding Mod (opcode 7)
+let test_vm_step_new_mod : Int [cost: Const(5)] =
+  assert_eq (vm_step (17, 5) (7 * 65536)) 2 0
+
+-- Test: new encoding Max (opcode 8)
+let test_vm_step_new_max : Int [cost: Const(5)] =
+  assert_eq (vm_step (3, 7) (8 * 65536)) 7 0
+
+-- Test: new encoding Min (opcode 9)
+let test_vm_step_new_min : Int [cost: Const(5)] =
+  assert_eq (vm_step (3, 7) (9 * 65536)) 3 0
+
+-- Test: new encoding Eq true (opcode 10)
+let test_vm_step_new_eq_true : Int [cost: Const(5)] =
+  assert_eq (vm_step (5, 5) (10 * 65536)) 1 0
+
+-- Test: new encoding Eq false (opcode 10)
+let test_vm_step_new_eq_false : Int [cost: Const(5)] =
+  assert_eq (vm_step (5, 3) (10 * 65536)) 0 0
+
+-- Test: new encoding Lt (opcode 11)
+let test_vm_step_new_lt : Int [cost: Const(5)] =
+  assert_eq (vm_step (3, 5) (11 * 65536)) 1 0
+
+-- Test: new encoding Le equal (opcode 12)
+let test_vm_step_new_le_equal : Int [cost: Const(5)] =
+  assert_eq (vm_step (5, 5) (12 * 65536)) 1 0
+
+-- Test: new encoding Gt (opcode 13)
+let test_vm_step_new_gt : Int [cost: Const(5)] =
+  assert_eq (vm_step (10, 3) (13 * 65536)) 1 0
+
+-- Test: new encoding Ge (opcode 14)
+let test_vm_step_new_ge : Int [cost: Const(5)] =
+  assert_eq (vm_step (5, 5) (14 * 65536)) 1 0
+
+-- Test: new encoding Ne (opcode 15)
+let test_vm_step_new_ne : Int [cost: Const(5)] =
+  assert_eq (vm_step (3, 5) (15 * 65536)) 1 0
+
+-- Test: new encoding Not (opcode 18)
+let test_vm_step_new_not_zero : Int [cost: Const(5)] =
+  assert_eq (vm_step (0, 0) (18 * 65536)) 1 0
+
+-- Test: new encoding Not nonzero (opcode 18)
+let test_vm_step_new_not_nonzero : Int [cost: Const(5)] =
+  assert_eq (vm_step (5, 0) (18 * 65536)) 0 0
+
+-- Test: new encoding Neg (opcode 19)
+let test_vm_step_new_neg : Int [cost: Const(5)] =
+  assert_eq (vm_step (42, 0) (19 * 65536)) (0 - 42) 0
+
+-- Test: new encoding Abs (opcode 20)
+let test_vm_step_new_abs : Int [cost: Const(5)] =
+  assert_eq (vm_step (0 - 42, 0) (20 * 65536)) 42 0
+
+-- Test: LoadConst (opcode 1)
+let test_vm_step_load_const : Int [cost: Const(5)] =
+  assert_eq (vm_step (0, 0) (1 * 65536 + 42)) 42 0
+
+-- =========================================================================
+-- vm_run: 3-instruction programs [a, b, op]
+-- =========================================================================
+
+-- Test: vm_run add
+let test_vm_run_add : Int [cost: Const(5)] =
+  assert_eq (vm_run (10, 20, 0 - 1) 0) 30 0
+
+-- Test: vm_run sub
+let test_vm_run_sub : Int [cost: Const(5)] =
+  assert_eq (vm_run (50, 30, 0 - 2) 0) 20 0
+
+-- Test: vm_run mul
+let test_vm_run_mul : Int [cost: Const(5)] =
+  assert_eq (vm_run (6, 7, 0 - 3) 0) 42 0
+
+-- Test: vm_run div-by-zero
+let test_vm_run_div_zero : Int [cost: Const(5)] =
+  assert_eq (vm_run (10, 0, 0 - 4) 0) 0 0
+
+-- Test: vm_run mod
+let test_vm_run_mod : Int [cost: Const(5)] =
+  assert_eq (vm_run (17, 5, 0 - 5) 0) 2 0
+
+-- Test: vm_run neg
+let test_vm_run_neg : Int [cost: Const(5)] =
+  assert_eq (vm_run (42, 0, 0 - 6) 0) (0 - 42) 0
+
+-- Test: vm_run abs
+let test_vm_run_abs : Int [cost: Const(5)] =
+  assert_eq (vm_run (0 - 42, 0, 0 - 7) 0) 42 0
+
+-- Test: vm_run max
+let test_vm_run_max : Int [cost: Const(5)] =
+  assert_eq (vm_run (3, 7, 0 - 8) 0) 7 0
+
+-- Test: vm_run min
+let test_vm_run_min : Int [cost: Const(5)] =
+  assert_eq (vm_run (3, 7, 0 - 9) 0) 3 0
+
+-- =========================================================================
+-- vm_execute: stack machine bytecode execution
+-- =========================================================================
+
+-- Test: vm_execute LoadConst(10), LoadConst(20), Add, Halt
+let test_vm_execute_add : Int [cost: Unknown] =
+  let prog = (1 * 65536 + 10, 1 * 65536 + 20, 3 * 65536, 0) in
+  assert_eq (vm_execute prog 0) 30 0
+
+-- Test: vm_execute LoadConst(6), LoadConst(7), Mul, Halt
+let test_vm_execute_mul : Int [cost: Unknown] =
+  let prog = (1 * 65536 + 6, 1 * 65536 + 7, 5 * 65536, 0) in
+  assert_eq (vm_execute prog 0) 42 0
+
+-- =========================================================================
+-- vm_fold_prim: fold over collection
+-- =========================================================================
+
+-- Test: fold_prim sum
+let test_vm_fold_prim_sum : Int [cost: Unknown] =
+  assert_eq (vm_fold_prim 0 0 (1, 2, 3, 4, 5)) 15 0
+
+-- Test: fold_prim product
+let test_vm_fold_prim_product : Int [cost: Unknown] =
+  assert_eq (vm_fold_prim 1 2 (2, 3, 4)) 24 0
+
+-- Test: fold_prim max
+let test_vm_fold_prim_max : Int [cost: Unknown] =
+  assert_eq (vm_fold_prim 0 8 (3, 7, 2, 9, 1)) 9 0
+
+-- =========================================================================
+-- vm_step_full: returns (result_value, ip_delta, stack_effect)
+-- =========================================================================
+
+-- Test: vm_step_full Add
+let test_vm_step_full_add : Int [cost: Const(5)] =
+  let r = vm_step_full 10 20 (3 * 65536) 0 in
+  let ok_val = assert_eq (r.0) 30 0 in
+  let ok_ip = assert_eq (r.1) 1 1 in
+  let ok_se = assert_eq (r.2) (0 - 1) 2 in
+  if ok_val > 0 then (if ok_ip > 0 then (if ok_se > 0 then 1 else 0 - 1) else 0 - 1) else 0 - 1
+
+-- Test: vm_step_full LoadConst
+let test_vm_step_full_load_const : Int [cost: Const(5)] =
+  let r = vm_step_full 0 0 (1 * 65536 + 42) 0 in
+  let ok_val = assert_eq (r.0) 42 0 in
+  let ok_se = assert_eq (r.2) 1 1 in
+  if ok_val > 0 then (if ok_se > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: vm_step_full Halt
+let test_vm_step_full_halt : Int [cost: Const(5)] =
+  let r = vm_step_full 99 0 0 0 in
+  let ok_val = assert_eq (r.0) 99 0 in
+  let ok_ip = assert_eq (r.1) (0 - 1) 1 in
+  if ok_val > 0 then (if ok_ip > 0 then 1 else 0 - 1) else 0 - 1
+
+-- =========================================================================
+-- node_to_opcode: opcode classification
+-- =========================================================================
+
+-- Test: is_binary_op for add
+let test_is_binary_op_add : Int [cost: Const(3)] =
+  assert_eq (is_binary_op (0 - 1)) 1 0
+
+-- Test: is_binary_op for div
+let test_is_binary_op_div : Int [cost: Const(3)] =
+  assert_eq (is_binary_op (0 - 4)) 1 0
+
+-- Test: is_binary_op for mod
+let test_is_binary_op_mod : Int [cost: Const(3)] =
+  assert_eq (is_binary_op (0 - 5)) 1 0
+
+-- Test: is_binary_op for neg (should be false)
+let test_is_binary_op_neg : Int [cost: Const(3)] =
+  assert_eq (is_binary_op (0 - 6)) 0 0
+
+-- Test: is_binary_op for eq comparison
+let test_is_binary_op_eq : Int [cost: Const(3)] =
+  assert_eq (is_binary_op (0 - 33)) 1 0
+
+-- Test: is_unary_op for neg
+let test_is_unary_op_neg : Int [cost: Const(3)] =
+  assert_eq (is_unary_op (0 - 6)) 1 0
+
+-- Test: is_unary_op for abs
+let test_is_unary_op_abs : Int [cost: Const(3)] =
+  assert_eq (is_unary_op (0 - 7)) 1 0
+
+-- Test: is_unary_op for add (should be false)
+let test_is_unary_op_add : Int [cost: Const(3)] =
+  assert_eq (is_unary_op (0 - 1)) 0 0
+
+-- Test: opcode_arity for add
+let test_opcode_arity_add : Int [cost: Const(3)] =
+  assert_eq (opcode_arity (0 - 1)) 2 0
+
+-- Test: opcode_arity for neg
+let test_opcode_arity_neg : Int [cost: Const(3)] =
+  assert_eq (opcode_arity (0 - 6)) 1 0
+
+-- =========================================================================
+-- compile_to_bytecode: instruction encoding
+-- =========================================================================
+
+-- Test: opcode_to_bytecode add
+let test_opcode_to_bytecode_add : Int [cost: Const(3)] =
+  assert_eq (opcode_to_bytecode 0) 3 0
+
+-- Test: opcode_to_bytecode sub
+let test_opcode_to_bytecode_sub : Int [cost: Const(3)] =
+  assert_eq (opcode_to_bytecode 1) 4 0
+
+-- Test: opcode_to_bytecode eq
+let test_opcode_to_bytecode_eq : Int [cost: Const(3)] =
+  assert_eq (opcode_to_bytecode 32) 10 0
+
+-- Test: opcode_to_bytecode lt
+let test_opcode_to_bytecode_lt : Int [cost: Const(3)] =
+  assert_eq (opcode_to_bytecode 34) 11 0
+
+-- Test: emit_load_const
+let test_emit_load_const : Int [cost: Const(3)] =
+  assert_eq (emit_load_const 42) (1 * 65536 + 42) 0
+
+-- Test: emit_jump
+let test_emit_jump : Int [cost: Const(3)] =
+  assert_eq (emit_jump 5) (31 * 65536 + 5) 0
+
+-- Test: emit_jump_if_false
+let test_emit_jump_if_false : Int [cost: Const(3)] =
+  assert_eq (emit_jump_if_false 3) (32 * 65536 + 3) 0
+
+-- Test: is_compilable for Prim (kind 0)
+let test_is_compilable_prim : Int [cost: Const(3)] =
+  assert_eq (is_compilable 0) 1 0
+
+-- Test: is_compilable for Lit (kind 5)
+let test_is_compilable_lit : Int [cost: Const(3)] =
+  assert_eq (is_compilable 5) 1 0
+
+-- Test: is_compilable for Guard (kind 3)
+let test_is_compilable_guard : Int [cost: Const(3)] =
+  assert_eq (is_compilable 3) 1 0
+
+-- Test: is_compilable for Fold (kind 12)
+let test_is_compilable_fold : Int [cost: Const(3)] =
+  assert_eq (is_compilable 12) 1 0
+
+-- Test: is_compilable for Neural (kind 9) should be false
+let test_is_compilable_neural : Int [cost: Const(3)] =
+  assert_eq (is_compilable 9) 0 0
+
+-- Test: is_compilable for Effect (kind 10) should be false
+let test_is_compilable_effect : Int [cost: Const(3)] =
+  assert_eq (is_compilable 10) 0 0

@@ -1,0 +1,63 @@
+-- Seed generation: create initial population from seed programs
+--
+-- Seeds are minimal programs that serve as starting points for evolution.
+-- Each seed encodes a fundamental computation pattern that can be
+-- evolved into more complex programs.
+--
+-- Seed categories:
+--   arithmetic: add, sub, mul, div, mod
+--   comparison: eq, lt, le, min, max
+--   fold: fold_add, fold_mul, fold_max
+--   identity: pass-through, projection
+--   composition: map-fold, filter-fold
+
+-- Seed kind tags
+let seed_arithmetic : Int [cost: Const(1)] = 0
+let seed_comparison : Int [cost: Const(1)] = 1
+let seed_fold : Int [cost: Const(1)] = 2
+let seed_identity : Int [cost: Const(1)] = 3
+let seed_composition : Int [cost: Const(1)] = 4
+
+-- Number of seed programs per category
+let seeds_per_category : Int [cost: Const(1)] = 5
+
+-- Total seed count for a population
+-- Each category provides seeds_per_category programs
+-- 5 categories * 5 seeds = 25 seeds
+let total_seeds : Int [cost: Const(1)] = 25
+
+-- Classify which category a seed index belongs to
+let seed_category index : Int -> Int [cost: Const(2)] =
+  index / seeds_per_category
+
+-- Compute the sub-index within a category
+let seed_sub_index index : Int -> Int [cost: Const(2)] =
+  index - (index / seeds_per_category) * seeds_per_category
+
+-- Determine the Prim opcode for an arithmetic seed
+-- sub_index: 0=add, 1=sub, 2=mul, 3=div, 4=mod
+let arithmetic_opcode sub_index : Int -> Int [cost: Const(1)] =
+  sub_index
+
+-- Determine the Prim opcode for a comparison seed
+-- sub_index: 0=eq, 1=lt, 2=le, 3=min, 4=max
+let comparison_opcode sub_index : Int -> Int [cost: Const(2)] =
+  sub_index + 9  -- comparison opcodes start at 0x09
+
+-- Estimate graph size for a seed (nodes)
+-- Arithmetic/comparison: 3 nodes (prim + 2 args)
+-- Fold: 5 nodes (fold + body + init + list + step)
+-- Identity: 1 node
+-- Composition: 7 nodes (fold + map + body + args)
+let seed_node_count category : Int -> Int [cost: Const(2)] =
+  if category == 0 then 3
+  else if category == 1 then 3
+  else if category == 2 then 5
+  else if category == 3 then 1
+  else 7
+
+-- Generate seed plan: how many of each category
+-- Returns (arithmetic, comparison, fold, identity, composition)
+let seed_plan : (Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (seeds_per_category, seeds_per_category, seeds_per_category,
+   seeds_per_category, seeds_per_category)

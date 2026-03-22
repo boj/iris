@@ -1,0 +1,83 @@
+-- JSON standard library
+-- Implements JSON operations using string primitives.
+-- All JSON handling is done in pure IRIS — no substrate JSON opcodes.
+
+-- === Parsing helpers ===
+
+-- Parse a flat JSON object {"key":value, ...} with integer values.
+-- Returns a Tuple of (key, value, rest) triples as association list.
+let parse_flat_object s : String -> Tuple [cost: Unknown] =
+  let inner = str_slice s 1 (str_len s - 1) in
+  let segments = str_split inner "," in
+  let n = list_len segments in
+  fold () (\acc i ->
+    let seg = str_trim (list_nth segments i) in
+    let kv = str_split seg ":" in
+    let raw_key = str_trim (list_nth kv 0) in
+    let key = str_slice raw_key 1 (str_len raw_key - 1) in
+    let v = str_to_int (str_trim (list_nth kv 1)) in
+    (key, v, acc)
+  ) (list_range 0 n)
+
+-- Parse a simple JSON array of integers, e.g. "[1, 2, 3]"
+let parse_int_array s : String -> Tuple [cost: Unknown] =
+  let inner = str_slice s 1 (str_len s - 1) in
+  let parts = str_split inner "," in
+  let n = list_len parts in
+  fold () (\acc i ->
+    let v = str_to_int (str_trim (list_nth parts i)) in
+    (v, acc)
+  ) (list_range 0 n)
+
+-- === Public API ===
+
+-- Parse a JSON string into a Value.
+-- Handles flat objects with integer values and integer arrays.
+let parse s : String -> Value [cost: Unknown] =
+  let trimmed = str_trim s in
+  let len = str_len trimmed in
+  if len == 0 then ()
+  else
+    let c = char_at trimmed 0 in
+    if c == 123 then parse_flat_object trimmed
+    else if c == 91 then parse_int_array trimmed
+    else if c == 34 then str_slice trimmed 1 (len - 1)
+    else str_to_int trimmed
+
+-- Serialize a value to a string.
+let stringify v : Value -> String [cost: Unknown] =
+  int_to_string v
+
+-- Get a field from a parsed object by string key or int index.
+let get obj key : Value -> String -> Value [cost: Const(1)] =
+  tuple_get obj key
+
+-- Get the length of an array (Tuple).
+let array_len arr : Value -> Int [cost: Const(1)] =
+  list_len arr
+
+-- Get element at index from an array.
+let array_get arr idx : Value -> Int -> Value [cost: Const(1)] =
+  list_nth arr idx
+
+-- Check if a parsed object has a given key.
+let has_key obj key : Value -> String -> Int [cost: Const(1)] =
+  if tuple_get obj key == () then 0 else 1
+
+-- Parse and extract a specific field from a JSON string.
+let parse_field json_str key : String -> String -> Value [cost: Unknown] =
+  let parsed = parse json_str in
+  tuple_get parsed key
+
+-- Convert a list of key-value pairs into a JSON object string.
+let object_from_pairs pairs : Tuple -> String [cost: Unknown] =
+  let n = list_len pairs in
+  let body = fold "" (\acc i ->
+    let pair = list_nth pairs i in
+    let key = list_nth pair 0 in
+    let v = list_nth pair 1 in
+    let quoted_key = str_concat "\"" (str_concat key "\"") in
+    let entry = str_concat quoted_key (str_concat ":" (int_to_string v)) in
+    if i == 0 then entry else str_concat acc (str_concat "," entry)
+  ) (list_range 0 n) in
+  str_concat "{" (str_concat body "}")

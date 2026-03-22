@@ -1,0 +1,24 @@
+-- Insertion Sort
+-- Build a sorted list by inserting each element into its correct position.
+-- O(n^2) time, stable sort, good for small or nearly-sorted data.
+
+-- Insert a value into a sorted list at the correct position.
+let rec insert sorted val : Tuple -> Int -> Tuple [cost: Linear(sorted)] =
+  let n = list_len sorted in
+  if n == 0 then (val,)
+  else
+    let head = list_nth sorted 0 in
+    if val <= head then
+      list_concat (val,) sorted
+    else
+      let rest = list_drop sorted 1 in
+      list_concat (head,) (insert rest val)
+
+-- Sort by folding insert over the input.
+let insertion_sort xs : Tuple -> Tuple [cost: Unknown] =
+  fold () (\sorted x -> insert sorted x) xs
+
+-- Test
+let test_insertion_sort x : Int -> Tuple =
+  let xs = (5, 3, 8, 1, 9, 2, 7, 4, 6) in
+  insertion_sort xs

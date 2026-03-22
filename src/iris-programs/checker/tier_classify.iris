@@ -1,0 +1,20 @@
+-- Classify a node's verification tier.
+--
+-- Inputs:
+--   program : SemanticGraph
+--   node_id : Int
+--
+-- Output: Int (tier number)
+--   Tier 0: Lit, Prim, Tuple, Project, Guard, Lambda, Ref, etc.
+--   Tier 1: Fold (kind 8), Unfold (kind 9), LetRec (kind 16)
+--   Tier 3: Neural (kind 7)
+--
+-- Dispatch on node kind using if/else chain.
+
+let tier_classify program node_id : Int -> Int -> Int [cost: Const(4)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 7 then 3
+  else if kind == 8 then 1
+  else if kind == 9 then 1
+  else if kind == 16 then 1
+  else 0

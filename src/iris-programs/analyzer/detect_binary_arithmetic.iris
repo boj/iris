@@ -1,0 +1,67 @@
+-- Detect binary arithmetic pattern: output = input[i] op input[j]
+--
+-- Takes a list of (inputs_tuple, expected_output) pairs and count n.
+-- Tests all binary operations (add, sub, mul, div, mod, min, max)
+-- on all pairs of scalar inputs from the inputs tuple.
+-- Returns (confidence, opcode, left_input_index, right_input_index).
+
+-- Apply a binary operation by opcode
+-- op: 0=add, 1=sub, 2=mul, 3=div, 4=mod, 7=min, 8=max
+let apply_op op a b : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if op == 0 then a + b
+  else if op == 1 then a - b
+  else if op == 2 then a * b
+  else if op == 3 then
+    if b == 0 then 0 else a / b
+  else if op == 4 then
+    if b == 0 then 0 else a % b
+  else if op == 7 then min a b
+  else if op == 8 then max a b
+  else 0
+
+-- Check if all pairs match: output == apply_op(op, input[left], input[right])
+-- pairs: list of (inputs_tuple, expected_output)
+-- op: operation opcode
+-- Returns: number of matches
+let count_op_matches pairs op left right : Int -> Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0
+    (\acc pair ->
+      let inputs = pair.0 in
+      let expected = pair.1 in
+      let a = if left == 0 then inputs.0
+              else if left == 1 then inputs.1
+              else inputs.2 in
+      let b = if right == 0 then inputs.0
+              else if right == 1 then inputs.1
+              else inputs.2 in
+      let result = apply_op op a b in
+      if result == expected then acc + 1 else acc)
+    pairs
+
+-- Try a specific (op, left, right) combination
+-- Returns: confidence score 0-100
+let try_combination pairs n op left right : Int -> Int -> Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_op_matches pairs op left right in
+    (matches * 100) / n
+
+-- Detect binary arithmetic across all test case pairs
+-- Tries all 7 ops on input pairs (0,1), (1,0), and if 3+ inputs also (0,2), (2,0), (1,2), (2,1)
+-- Returns: (best_confidence, best_op, best_left, best_right)
+let detect_binary_arithmetic pairs n num_inputs : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Unknown] =
+  if n == 0 then (0, 0, 0, 0)
+  else if num_inputs < 2 then (0, 0, 0, 0)
+  else
+    -- Try all ops on (0, 1) and (1, 0)
+    let ops = (0, 1, 2, 3, 4, 7, 8) in
+    fold (0, 0, 0, 0)
+      (\best op ->
+        -- Try (0, 1)
+        let c01 = try_combination pairs n op 0 1 in
+        let b1 = if c01 > best.0 then (c01, op, 0, 1) else best in
+        -- Try (1, 0)
+        let c10 = try_combination pairs n op 1 0 in
+        let b2 = if c10 > b1.0 then (c10, op, 1, 0) else b1 in
+        b2)
+      ops

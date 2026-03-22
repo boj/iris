@@ -1,0 +1,124 @@
+-- Performance counters: hardware counter integration for execution profiling
+--
+-- Mirrors the Rust perf module in iris-exec/src/perf.rs.
+--
+-- Reads 7 hardware counters via Linux perf_event_open:
+--   instructions_retired, cycles, IPC,
+--   L1D miss rate, LLC miss rate, DTLB miss rate, branch miss rate
+--
+-- Gracefully degrades when counters unavailable (returns zero counters).
+-- Used by the fitness function to reward cache-friendly, branch-predictable code.
+--
+-- HOST PRIMITIVE REQUIREMENT:
+-- The perf_event_open syscall (Linux syscall 298) requires host support.
+-- IRIS programs cannot directly invoke syscalls. The Rust perf.rs module
+-- uses raw syscalls via inline assembly. In IRIS, we would need:
+--   1. An effect handler that wraps perf_event_open (not yet implemented)
+--   2. Or a host intrinsic that reads hardware counters
+-- Until host support is available, this module provides:
+--   - Correct metric computation from raw counter values
+--   - Software-based profiling via step/instruction counting
+--   - Graceful degradation (zero counters when hardware unavailable)
+
+-- Compute IPC (instructions per cycle) from raw counters
+-- Returns IPC * 1000 (fixed-point, 3 decimal places)
+let compute_ipc instructions cycles : Int -> Int -> Int [cost: Const(2)] =
+  if cycles == 0 then 0
+  else (instructions * 1000) / cycles
+
+-- Compute miss rate from misses and total accesses
+-- Returns miss_rate * 10000 (fixed-point, 4 decimal places)
+let compute_miss_rate misses accesses : Int -> Int -> Int [cost: Const(2)] =
+  if accesses == 0 then 0
+  else (misses * 10000) / accesses
+
+-- Compute L1D cache miss rate
+let l1d_miss_rate l1d_misses l1d_accesses : Int -> Int -> Int [cost: Const(2)] =
+  compute_miss_rate l1d_misses l1d_accesses
+
+-- Compute LLC (last-level cache) miss rate
+-- LLC misses are a subset of L1D misses (cache hierarchy)
+let llc_miss_rate llc_misses l1d_misses : Int -> Int -> Int [cost: Const(2)] =
+  compute_miss_rate llc_misses l1d_misses
+
+-- Compute branch miss rate
+let branch_miss_rate branch_misses branch_total : Int -> Int -> Int [cost: Const(2)] =
+  compute_miss_rate branch_misses branch_total
+
+-- Compute DTLB miss rate
+let dtlb_miss_rate dtlb_misses l1d_accesses : Int -> Int -> Int [cost: Const(2)] =
+  compute_miss_rate dtlb_misses l1d_accesses
+
+-- Aggregate all hardware counters into a performance score.
+-- Higher score = better performance (lower miss rates, higher IPC).
+-- Returns score in [0, 10000].
+--
+-- Scoring formula:
+--   IPC contribution: IPC of 2.0 (= 2000 fixed-point) gives 5000 points
+--   Each 1% miss rate (= 100 fixed-point) deducts ~33 points
+--   Weighted average of L1D, LLC, and branch miss penalties
+let perf_score instructions cycles l1d_misses l1d_accesses llc_misses branch_misses branch_total : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let ipc = compute_ipc instructions cycles in
+  let l1d_rate = l1d_miss_rate l1d_misses l1d_accesses in
+  let llc_rate = llc_miss_rate llc_misses l1d_misses in
+  let br_rate = branch_miss_rate branch_misses branch_total in
+  -- IPC bonus: scale to [0, 5000] range (IPC of 2.0 = 5000)
+  let ipc_score = if ipc > 5000 then 5000 else (ipc * 5000) / 2000 in
+  -- Miss penalty: weighted average (L1D=40%, LLC=30%, branch=30%)
+  let weighted_miss = (l1d_rate * 40 + llc_rate * 30 + br_rate * 30) / 100 in
+  -- Convert miss penalty: 10000 miss rate = 5000 penalty
+  let miss_penalty = weighted_miss / 2 in
+  let score = ipc_score - miss_penalty in
+  if score < 0 then 0
+  else if score > 10000 then 10000
+  else score
+
+-- Check if performance counters are available.
+-- Returns 1 if available (Linux with perf_event_open), 0 otherwise.
+--
+-- LIMITATION: In the IRIS surface language, we cannot directly check
+-- for perf_event_open availability. This requires host support via
+-- an effect handler or intrinsic. Returns 0 (unavailable) by default.
+-- When the host provides a perf counter effect, this should be updated
+-- to probe for availability.
+let counters_available : Int [cost: Const(1)] = 0
+
+-- Software-based instruction counting (when hardware counters unavailable).
+-- Counts the number of nodes in a SemanticGraph as a proxy for instructions.
+let software_instruction_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n -> acc + 1) nodes
+
+-- Estimate cycle count from instruction count.
+-- Assumes average CPI (cycles per instruction) of 1.5 for tree-walker,
+-- 0.8 for VM bytecode, 0.3 for JIT-compiled code.
+let estimate_cycles instruction_count tier : Int -> Int -> Int [cost: Const(2)] =
+  if tier == 0 then instruction_count * 15 / 10      -- tree-walker: CPI ~1.5
+  else if tier == 1 then instruction_count * 8 / 10   -- VM: CPI ~0.8
+  else if tier == 2 then instruction_count * 3 / 10   -- JIT: CPI ~0.3
+  else instruction_count
+
+-- Compute a software-only performance score.
+-- Uses instruction count and execution time (steps) as proxies.
+let software_perf_score instruction_count steps_taken timeout_steps : Int -> Int -> Int -> Int [cost: Const(3)] =
+  -- Efficiency = instructions / steps (higher is better, means less overhead)
+  let efficiency = if steps_taken == 0 then 0
+    else (instruction_count * 1000) / steps_taken in
+  -- Utilization = steps_taken / timeout_steps (lower is better)
+  let utilization = if timeout_steps == 0 then 10000
+    else 10000 - (steps_taken * 10000) / timeout_steps in
+  -- Combined score: 60% efficiency + 40% utilization
+  let score = (efficiency * 60 + utilization * 40) / 100 in
+  if score < 0 then 0
+  else if score > 10000 then 10000
+  else score
+
+-- Format a performance report as a tuple.
+-- Returns (ipc_x1000, l1d_miss_pct_x100, llc_miss_pct_x100, branch_miss_pct_x100, score)
+let perf_report instructions cycles l1d_misses l1d_accesses llc_misses branch_misses branch_total : Int -> Int -> Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(6)] =
+  let ipc = compute_ipc instructions cycles in
+  let l1d_pct = l1d_miss_rate l1d_misses l1d_accesses in
+  let llc_pct = llc_miss_rate llc_misses l1d_misses in
+  let br_pct = branch_miss_rate branch_misses branch_total in
+  let score = perf_score instructions cycles l1d_misses l1d_accesses llc_misses branch_misses branch_total in
+  (ipc, l1d_pct, llc_pct, br_pct, score)

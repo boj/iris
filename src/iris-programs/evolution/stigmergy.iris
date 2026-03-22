@@ -1,0 +1,171 @@
+-- Stigmergic field: environment-mediated coordination via pheromone-like
+-- signals in embedding space.
+--
+-- Programs deposit fitness/failure signals at their embedding locations.
+-- Signals decay each generation, creating a shared landscape that guides
+-- evolutionary search toward high-fitness regions and away from failures.
+--
+-- Resolution controls voxel granularity. Decay rate (e.g. 0.95) gives
+-- exponential decay with half-life ~ ln(2)/ln(1/decay) generations.
+--
+-- Grid data structure: flat list of voxel entries, each entry is
+-- (coord_hash, fitness_sum, fitness_count, failure_count)
+-- Lookup is linear scan by coord_hash.
+
+-- =========================================================================
+-- Voxel coordinate computation
+-- =========================================================================
+
+-- Quantize a single embedding dimension to a voxel coordinate
+-- voxel_coord = round(value / resolution)
+let quantize_dim value resolution : Int -> Int -> Int [cost: Const(1)] =
+  if resolution == 0 then 0
+  else value / resolution
+
+-- Hash embedding coordinates into a single voxel key
+-- Uses FNV-1a style combining for up to 8 dimensions
+let hash_coords coords resolution : Int -> Int -> Int [cost: Linear(coords)] =
+  fold 7919
+    (\hash dim_val ->
+      let q = quantize_dim dim_val resolution in
+      (hash * 31 + q))
+    coords
+
+-- =========================================================================
+-- Grid data structure (linear scan)
+-- =========================================================================
+
+-- Look up a voxel by coord_hash in the grid
+-- grid: list of (coord_hash, fitness_sum, fitness_count, failure_count)
+-- Returns: (fitness_sum, fitness_count, failure_count) or (0, 0, 0) if not found
+let grid_lookup grid coord_hash : Int -> Int -> (Int, Int, Int) [cost: Linear(grid)] =
+  fold (0, 0, 0)
+    (\found entry ->
+      if entry.0 == coord_hash then (entry.1, entry.2, entry.3)
+      else found)
+    grid
+
+-- Check if a coord_hash exists in the grid
+let grid_contains grid coord_hash : Int -> Int -> Int [cost: Linear(grid)] =
+  fold 0
+    (\found entry -> if entry.0 == coord_hash then 1 else found)
+    grid
+
+-- Deposit a fitness signal at a voxel
+-- If the voxel exists, update it; otherwise, add a new entry
+-- Returns the updated grid (as a description of the operation)
+-- grid_entry: (coord_hash, fitness_sum, fitness_count, failure_count)
+let deposit_fitness entry fitness is_failure : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Const(3)] =
+  let new_sum = entry.1 + fitness in
+  let new_count = entry.2 + 1 in
+  let new_failures = if is_failure == 1 then entry.3 + 1 else entry.3 in
+  (entry.0, new_sum, new_count, new_failures)
+
+-- =========================================================================
+-- Signal computation
+-- =========================================================================
+
+-- Compute average fitness from accumulated sum and count
+-- Returns 0 if count is zero (no deposits)
+let avg_fitness fitness_sum fitness_count : Int -> Int -> Int [cost: Const(1)] =
+  if fitness_count == 0 then 0
+  else fitness_sum / fitness_count
+
+-- Compute failure rate as percentage: failures / total * 100
+let failure_rate failure_count total_count : Int -> Int -> Int [cost: Const(1)] =
+  if total_count == 0 then 0
+  else (failure_count * 100) / total_count
+
+-- Apply exponential decay to a signal value
+-- Approximates value * decay_rate using integer arithmetic:
+-- decayed = value * decay_pct / 100  (where decay_pct = e.g. 95 for 0.95)
+let decay_signal value decay_pct : Int -> Int -> Int [cost: Const(1)] =
+  (value * decay_pct) / 100
+
+-- Decay all signals in a grid entry
+let decay_entry entry decay_pct : Int -> Int -> (Int, Int, Int, Int) [cost: Const(3)] =
+  let new_sum = decay_signal entry.1 decay_pct in
+  let new_count = decay_signal entry.2 decay_pct in
+  let new_failures = decay_signal entry.3 decay_pct in
+  (entry.0, new_sum, new_count, new_failures)
+
+-- Decay all entries in the grid
+let decay_grid grid decay_pct : Int -> Int -> Int [cost: Linear(grid)] =
+  map (\entry -> decay_entry entry decay_pct) grid
+
+-- Check if a voxel signal is negligible (below threshold and no failures)
+-- Returns 1 if negligible (should be pruned), 0 otherwise
+let is_negligible fitness_sum failure_count threshold : Int -> Int -> Int [cost: Const(2)] =
+  let abs_fitness = max fitness_sum (0 - fitness_sum) in
+  if abs_fitness < threshold then
+    if failure_count == 0 then 1 else 0
+  else 0
+
+-- Prune negligible entries from the grid
+let prune_grid grid threshold : Int -> Int -> Int [cost: Linear(grid)] =
+  filter (\entry ->
+    let neg = is_negligible entry.1 entry.3 threshold in
+    if neg == 1 then 0 else 1)
+  grid
+
+-- =========================================================================
+-- Gradient computation for search guidance
+-- =========================================================================
+
+-- Compute the net signal quality at a voxel: avg_fitness - failure_rate
+-- Used for gradient computation; higher = more attractive
+let net_signal fitness_sum fitness_count failure_count : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let total = fitness_count + failure_count in
+  let avg = avg_fitness fitness_sum fitness_count in
+  let frate = failure_rate failure_count total in
+  avg - frate
+
+-- Estimate gradient along one dimension via finite differences
+-- gradient_dim = signal_at(pos+1) - signal_at(pos-1)
+let gradient_dim signal_plus signal_minus : Int -> Int -> Int [cost: Const(1)] =
+  signal_plus - signal_minus
+
+-- Blend a random perturbation with the stigmergic gradient
+-- biased = perturbation * (100 - weight) / 100 + gradient * weight / 100
+-- weight is in 0..100 (percentage)
+let bias_perturbation perturbation gradient weight : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let p_part = (perturbation * (100 - weight)) / 100 in
+  let g_part = (gradient * weight) / 100 in
+  p_part + g_part
+
+-- Compute full gradient vector for an embedding location
+-- grid: the stigmergic field
+-- embedding: list of coordinate values
+-- resolution: voxel resolution
+-- Returns: list of gradient values (one per dimension)
+let compute_gradient grid embedding resolution : Int -> Int -> Int -> Int [cost: Unknown] =
+  map (\dim_val ->
+    let hash_plus = hash_coords (map (\d -> if d == dim_val then d + resolution else d) embedding) resolution in
+    let hash_minus = hash_coords (map (\d -> if d == dim_val then d - resolution else d) embedding) resolution in
+    let entry_plus = grid_lookup grid hash_plus in
+    let entry_minus = grid_lookup grid hash_minus in
+    let sig_plus = net_signal entry_plus.0 entry_plus.1 entry_plus.2 in
+    let sig_minus = net_signal entry_minus.0 entry_minus.1 entry_minus.2 in
+    gradient_dim sig_plus sig_minus)
+  embedding
+
+-- =========================================================================
+-- Field statistics
+-- =========================================================================
+
+-- Count total voxels in the grid
+let grid_size grid : Int -> Int [cost: Linear(grid)] =
+  fold 0 (\acc x -> acc + 1) grid
+
+-- Compute total deposits in the grid
+let total_deposits grid : Int -> Int [cost: Linear(grid)] =
+  fold 0 (\acc entry -> acc + entry.2) grid
+
+-- Find the best voxel (highest net signal)
+let best_voxel grid : Int -> (Int, Int) [cost: Linear(grid)] =
+  fold (0, 0 - 999999999)
+    (\best entry ->
+      let sig = net_signal entry.1 entry.2 entry.3 in
+      if sig > best.1 then (entry.0, sig)
+      else best)
+    grid

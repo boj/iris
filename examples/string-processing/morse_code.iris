@@ -1,0 +1,56 @@
+-- Morse Code Encoder
+-- Convert letters (A-Z, 0-9) to Morse code dot/dash sequences.
+-- Each letter maps to a tuple of 0s (dots) and 1s (dashes).
+
+-- Morse table: index by (char_code - 48) for digits, (char_code - 65) for letters.
+-- Dots = 0, Dashes = 1.
+
+-- Morse for A-Z (indices 0-25).
+let morse_letter idx : Int -> Tuple [cost: Const(1)] =
+  if idx == 0 then (0, 1)           -- A: .-
+  else if idx == 1 then (1, 0, 0, 0) -- B: -...
+  else if idx == 2 then (1, 0, 1, 0) -- C: -.-.
+  else if idx == 3 then (1, 0, 0)    -- D: -..
+  else if idx == 4 then (0,)          -- E: .
+  else if idx == 5 then (0, 0, 1, 0) -- F: ..-.
+  else if idx == 6 then (1, 1, 0)    -- G: --.
+  else if idx == 7 then (0, 0, 0, 0) -- H: ....
+  else if idx == 8 then (0, 0)        -- I: ..
+  else if idx == 9 then (0, 1, 1, 1) -- J: .---
+  else if idx == 10 then (1, 0, 1)   -- K: -.-
+  else if idx == 11 then (0, 1, 0, 0) -- L: .-..
+  else if idx == 12 then (1, 1)       -- M: --
+  else if idx == 13 then (1, 0)       -- N: -.
+  else if idx == 14 then (1, 1, 1)   -- O: ---
+  else if idx == 15 then (0, 1, 1, 0) -- P: .--.
+  else if idx == 16 then (1, 1, 0, 1) -- Q: --.-
+  else if idx == 17 then (0, 1, 0)   -- R: .-.
+  else if idx == 18 then (0, 0, 0)   -- S: ...
+  else if idx == 19 then (1,)         -- T: -
+  else if idx == 20 then (0, 0, 1)   -- U: ..-
+  else if idx == 21 then (0, 0, 0, 1) -- V: ...-
+  else if idx == 22 then (0, 1, 1)   -- W: .--
+  else if idx == 23 then (1, 0, 0, 1) -- X: -..-
+  else if idx == 24 then (1, 0, 1, 1) -- Y: -.--
+  else if idx == 25 then (1, 1, 0, 0) -- Z: --..
+  else ()
+
+-- Encode a single uppercase character code to Morse.
+let char_to_morse code : Int -> Tuple [cost: Const(2)] =
+  if code >= 65 then
+    if code <= 90 then morse_letter (code - 65)
+    else ()
+  else ()
+
+-- Encode a string to a list of Morse sequences.
+-- FIXME: Returns tuple-of-tuples. Ideally we'd produce a flat string like ".- -... -.-."
+-- but IRIS lacks a convenient way to map integer tuples back to string characters.
+let encode_morse s : String -> Tuple [cost: Linear(s)] =
+  let chars = str_chars (str_upper s) in
+  map char_to_morse chars
+
+-- Test
+let test_morse x : Int -> Tuple =
+  let sos = encode_morse "SOS" in
+  let hi = encode_morse "HI" in
+  (sos, hi)

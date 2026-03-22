@@ -1,0 +1,92 @@
+-- Monomorphization: remove type parameters (Compiler Pass 1)
+--
+-- Replaces ForAll/TypeAbst/TypeApp with ground types by instantiating
+-- polymorphic functions at each call site. The result is a monomorphic
+-- graph with no polymorphism remaining.
+--
+-- TypeAbst (kind 14) and TypeApp (kind 15) nodes are erased:
+--   For each TypeAbst/TypeApp, find its body edge (port 0 target)
+--   Redirect all incoming edges to point to the body instead
+--   Remove the TypeAbst/TypeApp node
+--
+-- Strategy:
+--   1. Build erase map: TypeAbst/TypeApp node -> body target
+--   2. For each non-erased node, copy to new graph
+--   3. For each edge, resolve source/target through erase map
+--   4. Set root to resolved root
+
+-- Check if a node is a type-abstraction or type-application node
+-- TypeAbst = kind 14 (0x0E), TypeApp = kind 15 (0x0F)
+let is_polymorphic program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 14 then 1
+  else if kind == 15 then 1
+  else 0
+
+-- Resolve a node through the erasure chain (iterative version)
+-- If the node is TypeAbst/TypeApp, follow its first outgoing edge to its body
+-- Iterate until we reach a non-erased node (up to 100 deep for safety)
+let resolve_through program node_id depth : Int -> Int -> Int -> Int [cost: Const(100)] =
+  let result = fold node_id
+    (\current_id step ->
+      let kind = graph_get_kind program current_id in
+      if kind == 14 then
+        let children = graph_outgoing program current_id in
+        if list_len children > 0 then list_nth children 0 else current_id
+      else if kind == 15 then
+        let children = graph_outgoing program current_id in
+        if list_len children > 0 then list_nth children 0 else current_id
+      else current_id)
+    (list_range 0 100) in
+  result
+
+-- Monomorphize a program: erase TypeAbst/TypeApp nodes and redirect edges
+-- Returns the transformed program with all polymorphic nodes removed
+let monomorphize program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let total = fold 0 (\acc x -> acc + 1) nodes in
+  -- Count polymorphic nodes; if none, return unchanged
+  let poly = fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 14 then acc + 1
+      else if kind == 15 then acc + 1
+      else acc)
+    nodes in
+  if poly == 0 then program
+  else
+    -- Build a new graph containing only non-polymorphic nodes
+    let result = graph_new () in
+    -- Phase 1: add all non-polymorphic nodes to the new graph
+    let with_nodes = fold result
+      (\g nid ->
+        let kind = graph_get_kind program nid in
+        if kind == 14 then g
+        else if kind == 15 then g
+        else
+          let added = graph_add_node_rt g kind in
+          added.0)
+      nodes in
+    -- Phase 2: copy edges, resolving endpoints through erase map
+    -- For each node, get its outgoing edges and resolve both endpoints
+    let with_edges = fold with_nodes
+      (\g nid ->
+        let kind = graph_get_kind program nid in
+        if kind == 14 then g
+        else if kind == 15 then g
+        else
+          let children = graph_outgoing program nid in
+          fold g
+            (\g2 child_port ->
+              let child = list_nth children child_port in
+              let resolved = resolve_through program child 0 in
+              let resolved_kind = graph_get_kind program resolved in
+              if resolved_kind == 14 then g2
+              else if resolved_kind == 15 then g2
+              else graph_connect g2 nid resolved child_port)
+            (list_range 0 (list_len children)))
+      nodes in
+    -- Phase 3: set root to resolved root
+    let old_root = graph_get_root program in
+    let new_root = resolve_through program old_root 0 in
+    graph_set_root with_edges new_root

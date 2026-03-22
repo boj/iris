@@ -1,0 +1,29 @@
+-- Reader monad: computation that reads from a shared environment.
+--
+-- A reader computation is a function: env -> result.
+-- The environment is implicitly threaded through the computation.
+--
+-- Useful for dependency injection, configuration, or any computation
+-- that needs access to a shared context without explicit parameter passing.
+
+-- Wrap a value, ignoring the environment.
+let reader_return val env = val
+
+-- Read the environment itself.
+let reader_ask env = env
+
+-- Modify the environment for a sub-computation.
+-- f transforms the env before passing it to comp.
+let reader_local f comp env = comp (f env)
+
+-- Chain: run the first reader, then pass its result to f
+-- which returns a new reader. Both see the same environment.
+let reader_bind ra f env =
+  let a = ra env in
+  f a env
+
+-- Map a function over the reader's result.
+let reader_map ra f env = f (ra env)
+
+-- Read a specific field from the environment (if env is a State map).
+let reader_asks key env = map_get env key

@@ -1,0 +1,85 @@
+-- Simple Hash Functions
+-- Demonstrates hash function construction in IRIS.
+-- NOT cryptographically secure -- for educational purposes only.
+
+-- DJB2 hash (Daniel J. Bernstein): hash = hash * 33 + c
+let djb2 data : Tuple -> Int [cost: Linear(data)] =
+  fold 5381 (\hash byte ->
+    hash * 33 + byte
+  ) data
+
+-- FNV-1a hash (Fowler-Noll-Vo): hash = (hash XOR byte) * FNV_prime
+-- Using 32-bit constants (truncated to fit i64 safely).
+let fnv1a data : Tuple -> Int [cost: Linear(data)] =
+  let fnv_offset = 2166136261 in
+  let fnv_prime = 16777619 in
+  fold fnv_offset (\hash byte ->
+    let mixed = bitxor hash byte in
+    mixed * fnv_prime
+  ) data
+
+-- Jenkins one-at-a-time hash.
+let jenkins data : Tuple -> Int [cost: Linear(data)] =
+  let h = fold 0 (\hash byte ->
+    let h1 = hash + byte in
+    let h2 = h1 + shl h1 10 in
+    bitxor h2 (shr h2 6)
+  ) data in
+  let h2 = h + shl h 3 in
+  let h3 = bitxor h2 (shr h2 11) in
+  h3 + shl h3 15
+
+-- Polynomial rolling hash (for Rabin-Karp string matching).
+-- hash = sum(data[i] * base^(n-1-i)) mod modulus
+let poly_hash data base modulus : Tuple -> Int -> Int -> Int [cost: Linear(data)] =
+  fold 0 (\hash byte ->
+    (hash * base + byte) % modulus
+  ) data
+
+-- Rabin-Karp substring search using rolling hash.
+-- Returns tuple of starting indices where pattern occurs in text.
+let rabin_karp text pattern : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let n = list_len text in
+  let m = list_len pattern in
+  if m > n then ()
+  else
+    let base = 256 in
+    let modulus = 1000000007 in
+    -- Compute pattern hash
+    let pat_hash = poly_hash pattern base modulus in
+    -- Compute base^(m-1) mod modulus for rolling
+    let base_pow = fold 1 (\acc i -> (acc * base) % modulus) (list_range 0 (m - 1)) in
+    -- Initial window hash
+    let init_hash = poly_hash (list_take text m) base modulus in
+    -- Slide window
+    let init = ((), init_hash) in
+    let result = fold init (\state i ->
+      let matches = state.0 in
+      let hash = state.1 in
+      -- Check if hash matches (then verify)
+      let new_matches = if hash == pat_hash then
+        -- Verify character by character
+        let verified = fold true (\ok j ->
+          ok && list_nth text (i + j) == list_nth pattern j
+        ) (list_range 0 m) in
+        if verified then list_append matches i else matches
+      else matches in
+      -- Roll hash forward
+      let next_hash = if i + m < n then
+        let old_char = list_nth text i in
+        let new_char = list_nth text (i + m) in
+        ((hash - old_char * base_pow) * base + new_char) % modulus
+      else hash in
+      (new_matches, next_hash)
+    ) (list_range 0 (n - m + 1)) in
+    result.0
+
+-- Test
+let test_hash x : Int -> Tuple =
+  let data = (72, 101, 108, 108, 111) in  -- "Hello"
+  let h1 = djb2 data in
+  let h2 = fnv1a data in
+  let h3 = jenkins data in
+  -- Rabin-Karp: find "ll" in "Hello"
+  let found = rabin_karp (72, 101, 108, 108, 111) (108, 108) in
+  (h1, h2, h3, found)

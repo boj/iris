@@ -1,0 +1,52 @@
+-- Base Converter
+-- Convert integers between different number bases (2-36).
+
+-- Convert a decimal integer to a given base.
+-- Returns a tuple of digit values (0-35), most significant first.
+let rec to_base_aux n base : Int -> Int -> Tuple [cost: Unknown] =
+  if n == 0 then ()
+  else
+    let rest = to_base_aux (n / base) base in
+    list_append rest (n % base)
+
+let to_base n base : Int -> Int -> Tuple [cost: Unknown] =
+  if n == 0 then (0,)
+  else if n < 0 then to_base (0 - n) base  -- handle negative by converting abs
+  else to_base_aux n base
+
+-- Convert from a given base to decimal.
+-- digits is a tuple of digit values, most significant first.
+let from_base digits base : Tuple -> Int -> Int [cost: Linear(digits)] =
+  fold 0 (\acc d -> acc * base + d) digits
+
+-- Decimal to binary.
+let to_binary n : Int -> Tuple [cost: Unknown] = to_base n 2
+
+-- Decimal to octal.
+let to_octal n : Int -> Tuple [cost: Unknown] = to_base n 8
+
+-- Decimal to hexadecimal.
+let to_hex n : Int -> Tuple [cost: Unknown] = to_base n 16
+
+-- Binary to decimal.
+let from_binary digits : Tuple -> Int [cost: Linear(digits)] = from_base digits 2
+
+-- Count bits needed to represent n.
+let bit_count n : Int -> Int [cost: Unknown] =
+  list_len (to_binary n)
+
+-- Check if n is a power of 2.
+let is_power_of_2 n : Int -> Bool [cost: Unknown] =
+  if n <= 0 then false
+  else
+    let bits = to_binary n in
+    fold 0 (\acc b -> acc + b) bits == 1
+
+-- Test
+let test_base x : Int -> Tuple =
+  let bin42 = to_binary 42 in       -- (1, 0, 1, 0, 1, 0)
+  let oct42 = to_octal 42 in        -- (5, 2)
+  let hex255 = to_hex 255 in        -- (15, 15) = FF
+  let back = from_binary (1, 0, 1, 0, 1, 0) in  -- 42
+  let pow = is_power_of_2 64 in     -- true
+  (bin42, oct42, hex255, back, pow)

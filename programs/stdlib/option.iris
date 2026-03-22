@@ -1,0 +1,53 @@
+-- Option type: safe nullable values (parametric)
+type Option<T> = Some(T) | None
+
+-- Unwrap an Option with a default value
+let unwrap_or opt default =
+  match opt with
+  | Some(v) -> v
+  | None -> default
+
+-- Map a function over an Option
+let option_map opt f =
+  match opt with
+  | Some(v) -> Some(f v)
+  | None -> None
+
+-- Chain computations that may fail
+let and_then opt f =
+  match opt with
+  | Some(v) -> f v
+  | None -> None
+
+-- Check if an Option contains a value
+let is_some opt =
+  match opt with
+  | Some(v) -> true
+  | None -> false
+
+-- Check if an Option is empty
+let is_none opt =
+  match opt with
+  | Some(v) -> false
+  | None -> true
+
+-- Get value or compute from a function
+let unwrap_or_else opt f =
+  match opt with
+  | Some(v) -> v
+  | None -> f 0
+
+-- Filter: keep Some only if predicate holds
+let option_filter opt pred =
+  match opt with
+  | Some(v) -> if pred v then Some(v) else None
+  | None -> None
+
+-- Zip two Options with a combining function
+let zip_with a b f =
+  match a with
+  | Some(x) ->
+    match b with
+    | Some(y) -> Some(f x y)
+    | None -> None
+  | None -> None

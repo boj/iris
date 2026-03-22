@@ -1,0 +1,40 @@
+-- 0/1 Knapsack Problem
+-- Given items with weights and values, and a capacity W,
+-- find the maximum total value that fits in the knapsack.
+-- Each item can be included at most once.
+
+-- Items encoded as parallel tuples: weights = (w0, w1, ...), values = (v0, v1, ...).
+
+-- DP approach: dp[i][w] = max value using items 0..i with capacity w.
+-- We use a 1D row updated per item to save space.
+
+let knapsack weights values capacity : Tuple -> Tuple -> Int -> Int [cost: Unknown] =
+  let n = list_len weights in
+  -- Start with all zeros for capacity 0..W
+  let init_row = map (\w -> 0) (list_range 0 (capacity + 1)) in
+  let final_row = fold init_row (\row i ->
+    let wi = list_nth weights i in
+    let vi = list_nth values i in
+    -- Process capacities from high to low to avoid using same item twice.
+    -- Since we can't iterate backwards with fold easily, we build the new row
+    -- by checking if including item i improves on excluding it.
+    map (\w ->
+      let exclude = list_nth row w in
+      if wi > w then exclude
+      else
+        let include = list_nth row (w - wi) + vi in
+        if include > exclude then include else exclude
+    ) (list_range 0 (capacity + 1))
+  ) (list_range 0 n) in
+  list_nth final_row capacity
+
+-- Test: classic example
+-- Items: (weight=1, val=1), (weight=3, val=4), (weight=4, val=5), (weight=5, val=7)
+-- Capacity: 7
+-- Optimal: items 1+3 (weight=3+5=8 too heavy), items 1+2 (weight=3+4=7, val=4+5=9)
+let test_knapsack x : Int -> Tuple =
+  let w = (1, 3, 4, 5) in
+  let v = (1, 4, 5, 7) in
+  let max7 = knapsack w v 7 in
+  let max5 = knapsack w v 5 in
+  (max7, max5)

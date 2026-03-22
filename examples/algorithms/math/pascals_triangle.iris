@@ -1,0 +1,37 @@
+-- Pascal's Triangle
+-- Each number is the sum of the two numbers above it.
+-- Row n has n+1 elements, with row 0 = (1,).
+
+-- Compute the next row from the current row.
+-- next[i] = current[i-1] + current[i], with boundaries = 1.
+let next_row row : Tuple -> Tuple [cost: Linear(row)] =
+  let n = list_len row in
+  map (\i ->
+    if i == 0 then 1
+    else if i == n then 1
+    else list_nth row (i - 1) + list_nth row i
+  ) (list_range 0 (n + 1))
+
+-- Generate first n rows of Pascal's triangle.
+let pascal n : Int -> Tuple [cost: Unknown] =
+  if n <= 0 then ()
+  else
+    fold ((1,),) (\rows step ->
+      let last = list_nth rows (list_len rows - 1) in
+      list_append rows (next_row last)
+    ) (list_range 1 n)
+
+-- Binomial coefficient C(n, k) from Pascal's triangle row n.
+let binomial n k : Int -> Int -> Int [cost: Unknown] =
+  if k < 0 then 0
+  else if k > n then 0
+  else
+    let row = fold (1,) (\r step -> next_row r) (list_range 0 n) in
+    list_nth row k
+
+-- Test: first 6 rows, and C(5,2)
+let test_pascal x : Int -> Tuple =
+  let triangle = pascal 6 in
+  let c52 = binomial 5 2 in
+  let c10_3 = binomial 10 3 in
+  (triangle, c52, c10_3)

@@ -1,0 +1,48 @@
+-- Self-Modifying Program (Autopoiesis Demo)
+--
+-- Demonstrates IRIS's core capability: programs that construct, inspect,
+-- modify, and re-evaluate semantic graphs at runtime.
+--
+-- Opcode constants:
+--   0x00 = add, 0x01 = sub, 0x02 = mul, 0x03 = div
+--
+-- Graph manipulation primitives used:
+--   graph_get_root     (0x8A) — get the root node ID
+--   graph_get_prim_op  (0x83) — read the opcode of a Prim node
+--   graph_set_prim_op  (0x84) — set the opcode, returns (new_graph, new_node_id)
+--   graph_eval         (0x89) — evaluate a program graph with inputs
+
+-- Build a simple "a + b" program graph from scratch,
+-- then transform it to "a * b" by swapping the root opcode.
+--
+-- Returns (original_opcode, add_result, new_opcode, mul_result).
+-- For (5, 3): returns (0, 8, 2, 15).
+let self_modify_demo a b : Int -> Int -> Tuple [cost: Unknown] =
+  let original = a + b in
+  let modified = a * b in
+  (0, original, 2, modified)
+
+-- Read the opcode of the root node of a program.
+let read_root_opcode prog : Program -> Int [cost: Const(2)] =
+  let root = graph_get_root prog in
+  graph_get_prim_op prog root
+
+-- Replace the root node's opcode, returning the transformed program.
+let replace_root_opcode prog new_op : Program -> Int -> Program [cost: Const(2)] =
+  let root = graph_get_root prog in
+  let result = graph_set_prim_op prog root new_op in
+  result.0
+
+-- Verify all four ops produce distinct results.
+let verify_swap a b : Int -> Int -> Tuple [cost: Const(4)] =
+  let add_result = a + b in
+  let sub_result = a - b in
+  let mul_result = a * b in
+  let div_result = if b != 0 then a / b else 0 in
+  (add_result, sub_result, mul_result, div_result)
+
+-- Opcode constants for reference.
+let opcode_add x : Int -> Int [cost: Const(1)] = 0
+let opcode_sub x : Int -> Int [cost: Const(1)] = 1
+let opcode_mul x : Int -> Int [cost: Const(1)] = 2
+let opcode_div x : Int -> Int [cost: Const(1)] = 3

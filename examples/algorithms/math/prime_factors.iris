@@ -1,0 +1,38 @@
+-- Prime Factorization
+-- Decompose a positive integer into its prime factors.
+-- Trial division algorithm.
+
+-- Divide n by d as many times as possible, collecting factors.
+let rec extract_factor n d factors : Int -> Int -> Tuple -> Tuple [cost: Unknown] =
+  if n % d == 0 then
+    extract_factor (n / d) d (list_append factors d)
+  else
+    (n, factors)
+
+-- Trial division: try dividing by 2, then odd numbers from 3 up to sqrt(n).
+let rec factorize_aux n d factors : Int -> Int -> Tuple -> Tuple [cost: Unknown] =
+  if d * d > n then
+    if n > 1 then list_append factors n
+    else factors
+  else
+    let result = extract_factor n d factors in
+    let remaining = result.0 in
+    let new_factors = result.1 in
+    let next_d = if d == 2 then 3 else d + 2 in
+    factorize_aux remaining next_d new_factors
+
+let prime_factors n : Int -> Tuple [cost: Unknown] =
+  if n <= 1 then ()
+  else factorize_aux n 2 ()
+
+-- Count distinct prime factors.
+let num_distinct_factors n : Int -> Int [cost: Unknown] =
+  let fs = prime_factors n in
+  list_len (list_dedup (list_sort fs))
+
+-- Test
+let test_prime_factors x : Int -> Tuple =
+  let f60 = prime_factors 60 in
+  let f97 = prime_factors 97 in
+  let f360 = prime_factors 360 in
+  (f60, f97, f360)

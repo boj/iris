@@ -1,0 +1,80 @@
+-- Cost algebra checker: partial order on CostBound values
+--
+-- Implements the cost lattice used by the proof kernel to verify
+-- that composed programs respect cost budgets.
+--
+-- Partial order:
+--   Zero <= Constant(k) <= Linear(n) <= NLogN(n) <= Polynomial(n, d)
+--
+-- Composite forms:
+--   Sum(a, b) <= Sum(a', b')  when a <= a' and b <= b'
+--   Mul(a, b) <= Mul(a', b')  when a <= a' and b <= b'
+--   Sup(vs) <= x              when ALL v in vs satisfy v <= x
+--
+-- Cost kind tags:
+--   0 = Zero, 1 = Constant, 2 = Linear, 3 = NLogN, 4 = Polynomial, 5 = Unknown
+
+-- Get the cost kind tag for a cost bound
+-- Returns: cost kind (0-5)
+let cost_kind cost : Int -> Int [cost: Const(1)] =
+  if cost == 0 then 0        -- Zero
+  else if cost < 100 then 1  -- Constant (small values)
+  else if cost < 10000 then 2 -- Linear range
+  else if cost < 100000 then 3 -- NLogN range
+  else if cost < 1000000 then 4 -- Polynomial range
+  else 5                      -- Unknown
+
+-- Check if cost kind is at least Linear
+-- Returns 1 if kind >= Linear (2), 0 otherwise
+let is_at_least_linear kind : Int -> Int [cost: Const(1)] =
+  if kind >= 2 then 1 else 0
+
+-- Check if cost a <= cost b in the base lattice
+-- Uses cost kind ordering: Zero(0) <= Const(1) <= Linear(2) <= NLogN(3) <= Poly(4) <= Unknown(5)
+let cost_leq_base kind_a kind_b : Int -> Int -> Int [cost: Const(2)] =
+  if kind_a == kind_b then 1
+  else if kind_a < kind_b then 1
+  else 0
+
+-- Compare two polynomial costs: (var1, degree1) <= (var2, degree2)
+-- Same variable required, then compare degrees
+let poly_leq var1 deg1 var2 deg2 : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  if var1 == var2 then
+    if deg1 <= deg2 then 1 else 0
+  else 0
+
+-- Check NLogN <= Polynomial: requires same variable and degree >= 2
+let nlogn_leq_poly var1 var2 degree : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if var1 == var2 then
+    if degree >= 2 then 1 else 0
+  else 0
+
+-- Compose two costs with Sum (additive composition)
+-- Returns the higher cost kind (conservative upper bound)
+let cost_sum kind_a kind_b : Int -> Int -> Int [cost: Const(1)] =
+  if kind_a > kind_b then kind_a else kind_b
+
+-- Compose two costs with Mul (multiplicative composition).
+-- Mirrors Rust CostBound::Mul algebra:
+--   Zero * X = Zero                  (absorbing element)
+--   Unknown * X = Unknown            (absorbing element)
+--   Const * X = X                    (identity for asymptotic class)
+--   Linear * Linear = Polynomial     (O(n) * O(n) = O(n²))
+--   Any pair of non-const costs >= Linear → Polynomial
+let cost_mul kind_a kind_b : Int -> Int -> Int [cost: Const(2)] =
+  if kind_a == 0 then 0
+  else if kind_b == 0 then 0
+  else if kind_a == 5 then 5
+  else if kind_b == 5 then 5
+  else if kind_a == 1 then kind_b
+  else if kind_b == 1 then kind_a
+  else
+    let sum = kind_a + kind_b in
+    if sum > 5 then 5 else sum
+
+-- Verify a program's cost bound against a budget
+-- Returns 1 if program_cost <= budget, 0 otherwise
+let verify_cost program_cost budget : Int -> Int -> Int [cost: Const(2)] =
+  let pk = cost_kind program_cost in
+  let bk = cost_kind budget in
+  cost_leq_base pk bk

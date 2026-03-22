@@ -1,0 +1,33 @@
+baseURL: "https://iris-lang.org/"
+languageCode: "en-us"
+title: "IRIS Programming Language"
+theme: "iris"
+
+params:
+  description: "A self-improving programming language where programs evolve, verify, and optimize themselves."
+  version: "0.1.0"
+  license: "AGPL-3.0-or-later"
+  repo: "https://github.com/boj/iris"
+
+menu:
+  main:
+    - name: "Install"
+      url: "/learn/get-started/"
+      weight: 1
+    - name: "Learn"
+      url: "/learn/"
+      weight: 2
+    - name: "Tools"
+      url: "/tools/"
+      weight: 3
+    - name: "Community"
+      url: "/community/"
+      weight: 4
+
+markup:
+  highlight:
+    noClasses: false
+    style: "monokai"
+  goldmark:
+    renderer:
+      unsafe: true

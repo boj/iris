@@ -1,0 +1,57 @@
+-- Matrix Multiplication
+-- Matrices represented as flat tuples with (rows, cols, data) encoding.
+-- Element at (i, j) in an RxC matrix is at index i*C + j.
+
+-- Create a matrix from dimensions and data tuple.
+let mat_new rows cols data : Int -> Int -> Tuple -> Tuple =
+  (rows, cols, data)
+
+-- Get element at (row, col).
+let mat_get m row col : Tuple -> Int -> Int -> Int [cost: Const(2)] =
+  let cols = m.1 in
+  list_nth m.2 (row * cols + col)
+
+-- Matrix multiply: A (r1 x c1) * B (r2 x c2) = C (r1 x c2)
+-- Requires c1 == r2.
+let mat_mul a b : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let r1 = a.0 in
+  let c1 = a.1 in
+  let c2 = b.1 in
+  let indices = list_range 0 (r1 * c2) in
+  let data = map (\idx ->
+    let i = idx / c2 in
+    let j = idx % c2 in
+    -- dot product of row i of A and column j of B
+    fold 0 (\acc k ->
+      acc + mat_get a i k * mat_get b k j
+    ) (list_range 0 c1)
+  ) indices in
+  mat_new r1 c2 data
+
+-- Transpose a matrix.
+let mat_transpose m : Tuple -> Tuple [cost: Unknown] =
+  let rows = m.0 in
+  let cols = m.1 in
+  let indices = list_range 0 (rows * cols) in
+  let data = map (\idx ->
+    let i = idx / rows in
+    let j = idx % rows in
+    mat_get m j i
+  ) indices in
+  mat_new cols rows data
+
+-- Identity matrix of size n.
+let mat_identity n : Int -> Tuple [cost: Unknown] =
+  let data = map (\idx ->
+    let i = idx / n in
+    let j = idx % n in
+    if i == j then 1 else 0
+  ) (list_range 0 (n * n)) in
+  mat_new n n data
+
+-- Test: multiply 2x2 matrices
+let test_mat_mul x : Int -> Tuple =
+  let a = mat_new 2 2 (1, 2, 3, 4) in
+  let b = mat_new 2 2 (5, 6, 7, 8) in
+  let c = mat_mul a b in
+  c.2

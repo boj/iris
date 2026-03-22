@@ -1,0 +1,17 @@
+-- Wrap a node in a guard: Guard(predicate=Lit(true), body=node, fallback=Lit(0))
+-- Returns the modified program with guard replacing the body node
+let wrap_in_guard program body_id =
+  -- Create a Lit(true) node as predicate
+  let s1 = graph_add_node_rt program 5 in
+  let p1 = s1.0 in
+  let pred_id = s1.1 in
+  let p2_t = graph_set_lit_value p1 pred_id 4 1 in
+  let p2 = p2_t.0 in
+  -- Create a Lit(0) node as fallback
+  let s2 = graph_add_node_rt p2 5 in
+  let p3 = s2.0 in
+  let fallback_id = s2.1 in
+  let p4_t = graph_set_lit_value p3 fallback_id 0 0 in
+  let p4 = p4_t.0 in
+  -- Create guard node wrapping body
+  graph_add_guard_rt p4 pred_id body_id fallback_id

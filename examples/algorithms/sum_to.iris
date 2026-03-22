@@ -1,0 +1,8 @@
+-- Sum integers from 1 to n using fold
+let sum_to n : Int -> Int [cost: Linear(n)] =
+  fold 0 (+) n
+
+-- Recursive version for comparison
+let rec sum_to_rec n : Int -> Int [cost: Linear(n)] =
+  if n <= 0 then 0
+  else n + sum_to_rec (n - 1)

@@ -1,0 +1,12 @@
+-- Self-improvement worker pattern:
+-- 1. atomic_read the current component
+-- 2. evolve/transform it
+-- 3. gate on a quality check
+-- 4. atomic_swap the improved version in
+--
+-- This demonstrates the core self-improvement loop that IRIS needs.
+let read_component key : Int -> Int [cost: Const(1)] =
+  atomic_read key
+
+let swap_component key new_val : Int -> Int -> Int [cost: Const(1)] =
+  atomic_swap key new_val

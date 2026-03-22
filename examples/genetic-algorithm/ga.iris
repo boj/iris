@@ -1,0 +1,46 @@
+-- Genetic Algorithm in Pure IRIS
+-- Evolves a sequence of numbers that sums to a target value.
+-- All GA operations (mutation, crossover, selection, fitness) implemented
+-- purely in IRIS using fold, map, filter, and random primitives.
+--
+-- NOT using iris-evolve. This is a GA written from scratch in .iris.
+
+-- Compute fitness: absolute difference from target (lower = better).
+let fitness individual target : Tuple -> Int -> Int [cost: Linear(individual)] =
+  let actual_sum = fold 0 (+) individual in
+  let diff = actual_sum - target in
+  if diff < 0 then 0 - diff else diff
+
+-- Single-point crossover: take first half from parent1, second half from parent2.
+let crossover parent1 parent2 : Tuple -> Tuple -> Tuple [cost: Linear(parent1)] =
+  let len = fold 0 (\acc x -> acc + 1) parent1 in
+  let mid = len / 2 in
+  let first_half = list_take parent1 mid in
+  let second_half = list_drop parent2 mid in
+  list_concat first_half second_half
+
+-- Find the best individual in a population (lowest fitness).
+let find_best pop target : Tuple -> Int -> Tuple [cost: Unknown] =
+  let first = list_nth pop 0 in
+  fold first (\best ind ->
+    if fitness ind target < fitness best target then ind else best
+  ) pop
+
+-- Check if any individual has perfect fitness (== 0).
+let has_perfect pop target : Tuple -> Int -> Int [cost: Unknown] =
+  fold 0 (\acc ind ->
+    if fitness ind target == 0 then 1 else acc
+  ) pop
+
+-- Run one generation: evaluate fitness and return best fitness.
+let generation_best_fitness pop target : Tuple -> Int -> Int [cost: Unknown] =
+  let best = find_best pop target in
+  fitness best target
+
+-- Sum a tuple of ints.
+let tuple_sum xs : Tuple -> Int [cost: Linear(xs)] =
+  fold 0 (+) xs
+
+-- Count elements in a tuple.
+let tuple_len xs : Tuple -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + 1) xs

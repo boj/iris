@@ -1,0 +1,61 @@
+-- Dead code elimination: remove nodes not reachable from root
+--
+-- IRIS-native BFS to identify reachable nodes, then disconnects all
+-- outgoing edges from unreachable (dead) nodes, making them inert.
+--
+-- Strategy:
+--   1. Mark root as reachable
+--   2. BFS via fold: for each reachable node, mark its children reachable
+--   3. 10 propagation passes (handles graph depth up to 10)
+--   4. Disconnect outgoing edges from every unreachable node
+--
+-- Uses sorted + deduped tuples as a set of reachable node IDs.
+-- Works with arbitrary (hash-based) node IDs.
+
+-- Dead code elimination entry point.
+-- BFS marks reachable nodes; edges from unreachable nodes are severed.
+let dead_code_elim program : Int -> Int [cost: Linear(program)] =
+  let root = graph_get_root program in
+  let all_nodes = graph_nodes program in
+  let total = list_len all_nodes in
+  if total <= 1 then program
+  else
+    -- BFS from root: iteratively expand reachable frontier.
+    -- Each pass: reachable' = dedup(sort(reachable ++ children_of(reachable)))
+    -- list_range root (root+1) creates a 1-element tuple (root).
+    let r0 = list_range root (root + 1) in
+    let r1 = list_dedup (list_sort (fold r0 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r0)) in
+    let r2 = list_dedup (list_sort (fold r1 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r1)) in
+    let r3 = list_dedup (list_sort (fold r2 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r2)) in
+    let r4 = list_dedup (list_sort (fold r3 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r3)) in
+    let r5 = list_dedup (list_sort (fold r4 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r4)) in
+    let r6 = list_dedup (list_sort (fold r5 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r5)) in
+    let r7 = list_dedup (list_sort (fold r6 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r6)) in
+    let r8 = list_dedup (list_sort (fold r7 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r7)) in
+    let r9 = list_dedup (list_sort (fold r8 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r8)) in
+    let reachable = list_dedup (list_sort (fold r9 (\acc nid ->
+      list_append acc (graph_outgoing program nid)) r9)) in
+    let reachable_count = list_len reachable in
+    -- If all nodes reachable, no dead code to eliminate
+    if reachable_count >= total then program
+    else
+      -- Disconnect all outgoing edges from unreachable (dead) nodes.
+      -- After this, dead nodes are isolated and will never be evaluated.
+      fold program (\g nid ->
+        let is_live = fold 0 (\found r_nid ->
+          if found == 1 then 1
+          else if r_nid == nid then 1 else 0) reachable in
+        if is_live == 1 then g
+        else
+          let children = graph_outgoing g nid in
+          fold g (\g2 child -> graph_disconnect g2 nid child) children
+      ) all_nodes

@@ -1,0 +1,45 @@
+-- Run-Length Encoding (RLE)
+-- Compress consecutive repeated values into (count, value) pairs.
+-- Works on tuples of integers (character codes or any values).
+
+-- Encode: compress runs of identical values.
+-- Returns a flat tuple: (count1, val1, count2, val2, ...)
+let rle_encode xs : Tuple -> Tuple [cost: Linear(xs)] =
+  let n = list_len xs in
+  if n == 0 then ()
+  else
+    -- Walk through the list, tracking current run
+    let init = ((), list_nth xs 0, 1) in  -- (result, current_val, count)
+    let state = fold init (\state i ->
+      if i == 0 then state  -- skip first, already initialized
+      else
+        let result = state.0 in
+        let cur = state.1 in
+        let count = state.2 in
+        let val = list_nth xs i in
+        if val == cur then
+          (result, cur, count + 1)
+        else
+          -- Flush current run, start new one
+          (list_concat result (count, cur), val, 1)
+    ) (list_range 0 n) in
+    -- Flush final run
+    list_concat state.0 (state.2, state.1)
+
+-- Decode: expand (count, value) pairs back to a flat tuple.
+let rle_decode encoded : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len encoded in
+  let pairs = list_range 0 (n / 2) in
+  fold () (\result i ->
+    let count = list_nth encoded (i * 2) in
+    let val = list_nth encoded (i * 2 + 1) in
+    -- Append `val` count times
+    fold result (\r step -> list_append r val) (list_range 0 count)
+  ) pairs
+
+-- Test: encode and decode
+let test_rle x : Int -> Tuple =
+  let input = (1, 1, 1, 2, 2, 3, 3, 3, 3, 1) in
+  let encoded = rle_encode input in
+  let decoded = rle_decode encoded in
+  (encoded, decoded)

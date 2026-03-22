@@ -1,0 +1,14 @@
+-- Mutate a program N times and return the best-scoring variant
+-- Uses fold to iterate through N mutation attempts
+let mutate_and_test program test_cases n : Int -> Int -> Int -> Int [cost: Linear(n)] =
+  let base_score = graph_eval program test_cases in
+  fold (program, base_score)
+    (\state i ->
+      let cur_prog = state.0 in
+      let cur_score = state.1 in
+      let rnd = random 0 10 in
+      let mutant = graph_set_prim_op cur_prog () rnd in
+      let new_score = graph_eval mutant test_cases in
+      if new_score > cur_score then (mutant, new_score)
+      else (cur_prog, cur_score))
+    n

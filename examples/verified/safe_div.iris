@@ -1,0 +1,4 @@
+-- Safe division with divisor != 0 precondition
+let safe_div x y : Int -> Int -> Int
+  requires y != 0
+  = x / y

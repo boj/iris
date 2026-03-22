@@ -1,0 +1,58 @@
+-- Resource competition between programs in an evolutionary population
+--
+-- Programs compete for a shared computational budget. Better performers
+-- (lower Pareto rank) get more evaluation time; poor performers get starved.
+-- This creates selection pressure beyond pure fitness scoring.
+--
+-- Phase Transition 2: Individual -> Ecology
+--
+-- Allocation tiers:
+--   Top 25% (by Pareto rank): 2x base budget
+--   Middle 50%:               1x base budget
+--   Bottom 25%:               0.5x base budget
+
+-- Compute base budget per individual
+-- total_budget: total milliseconds across all individuals
+-- pop_size: population size
+let base_budget total_budget pop_size : Int -> Int -> Int [cost: Const(1)] =
+  if pop_size == 0 then total_budget
+  else total_budget / pop_size
+
+-- Compute the rank fraction (position / pop_size) scaled by 100
+-- position: 0-indexed rank position (0 = best)
+-- pop_size: total population
+let rank_fraction position pop_size : Int -> Int -> Int [cost: Const(1)] =
+  if pop_size == 0 then 50
+  else (position * 100) / pop_size
+
+-- Determine the budget multiplier (scaled by 100) based on rank fraction
+-- Top 25% (fraction < 25): 200 (2.0x)
+-- Bottom 25% (fraction > 75): 50 (0.5x)
+-- Middle 50%: 100 (1.0x)
+let budget_multiplier rank_frac : Int -> Int [cost: Const(2)] =
+  if rank_frac < 25 then 200
+  else if rank_frac > 75 then 50
+  else 100
+
+-- Compute allocated budget for an individual
+-- total_budget: total ms across population
+-- position: rank position (0 = best)
+-- pop_size: population size
+-- Returns: milliseconds allocated to this individual
+let allocate_individual total_budget position pop_size : Int -> Int -> Int -> Int [cost: Const(4)] =
+  let base = base_budget total_budget pop_size in
+  let frac = rank_fraction position pop_size in
+  let mult = budget_multiplier frac in
+  (base * mult) / 100
+
+-- Compute total allocated budget for a population of given size
+-- Uses the tier-based allocation: top 25% get 2x, bottom 25% get 0.5x
+-- total_budget: total ms budget
+-- pop_size: number of individuals
+-- Returns: approximate total allocation (may differ from total_budget due to rounding)
+let total_allocated total_budget pop_size : Int -> Int -> Int [cost: Const(5)] =
+  let base = base_budget total_budget pop_size in
+  let top_count = pop_size / 4 in
+  let bottom_count = pop_size / 4 in
+  let middle_count = pop_size - top_count - bottom_count in
+  top_count * (base * 2) + middle_count * base + bottom_count * (base / 2)

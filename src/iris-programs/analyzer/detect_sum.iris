@@ -1,0 +1,27 @@
+-- Detect sum pattern: output = sum of input list elements
+--
+-- Takes a list of (list_input, expected_output) pairs and count n.
+-- Each list_input is a tuple of integers; expected_output is the sum.
+-- We fold each inner list to compute its sum and compare to expected output.
+-- Returns confidence score 0-100.
+
+-- Sum all elements in a list
+let sum_list xs : Int -> Int [cost: Linear(xs)] =
+  fold 0 (\acc x -> acc + x) xs
+
+-- Check if a single test case's output matches the sum of its input list
+-- pair.0 = input list, pair.1 = expected output
+let is_sum_match pair : (Int, Int) -> Int [cost: Linear(pair)] =
+  if sum_list pair.0 == pair.1 then 1 else 0
+
+-- Count how many test cases match the sum pattern
+let count_sum_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_sum_match pair) pairs
+
+-- Detect sum pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_sum pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_sum_matches pairs in
+    (matches * 100) / n

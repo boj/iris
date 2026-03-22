@@ -1,0 +1,64 @@
+-- MapReduce
+-- Simplified MapReduce framework: map a function over data chunks,
+-- then reduce (aggregate) the results.
+-- In a real system, map and reduce would run on separate workers (par_map).
+
+-- Map phase: apply mapper to each input element.
+-- Mapper produces (key, value) pairs encoded as key * 1000 + value.
+let mr_map mapper data : (Int -> Tuple) -> Tuple -> Tuple [cost: Unknown] =
+  fold () (\acc item ->
+    list_concat acc (mapper item)
+  ) data
+
+-- Shuffle/Group: group by key.
+-- Returns a tuple of (key, values_tuple) pairs.
+-- FIXME: This is O(n^2) without a proper hash map for grouping.
+let mr_group pairs : Tuple -> Tuple [cost: Unknown] =
+  let keys = list_dedup (list_sort (map (\p -> p / 1000) pairs)) in
+  map (\k ->
+    let values = map (\p -> p % 1000) (filter (\p -> p / 1000 == k) pairs) in
+    (k, values)
+  ) keys
+
+-- Reduce phase: apply reducer to each group.
+let mr_reduce reducer groups : (Int -> Tuple -> Int) -> Tuple -> Tuple [cost: Unknown] =
+  map (\group ->
+    let key = group.0 in
+    let values = group.1 in
+    (key, reducer key values)
+  ) groups
+
+-- Full MapReduce pipeline.
+let map_reduce mapper reducer data : (Int -> Tuple) -> (Int -> Tuple -> Int) -> Tuple -> Tuple [cost: Unknown] =
+  let mapped = mr_map mapper data in
+  let grouped = mr_group mapped in
+  mr_reduce reducer grouped
+
+-- Example: Word frequency count (using integer "words").
+-- Each "document" is a tuple of word-IDs.
+-- Mapper emits (word, 1) for each word.
+let word_count_mapper doc : Tuple -> Tuple [cost: Linear(doc)] =
+  map (\word -> word * 1000 + 1) doc
+
+-- Reducer sums the counts for each word.
+let word_count_reducer key values : Int -> Tuple -> Int [cost: Linear(values)] =
+  fold 0 (+) values
+
+-- Example: compute sum and count per category.
+-- Data items are (category * 1000 + value).
+let sum_mapper item : Int -> Tuple [cost: Const(1)] =
+  (item,)  -- pass through, key is category
+
+let sum_reducer key values : Int -> Tuple -> Int [cost: Linear(values)] =
+  fold 0 (+) values
+
+-- Test: word frequency
+let test_map_reduce x : Int -> Tuple =
+  -- Three "documents" with word IDs 1-5
+  let data = ((1, 2, 3, 1, 2), (2, 3, 4, 4), (1, 5, 5, 5)) in
+  -- Flatten documents and count words
+  let all_words = fold () (\acc doc -> list_concat acc doc) data in
+  let mapped = map (\w -> w * 1000 + 1) all_words in
+  let grouped = mr_group mapped in
+  let counted = mr_reduce word_count_reducer grouped in
+  counted

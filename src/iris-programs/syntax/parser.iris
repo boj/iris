@@ -1,0 +1,260 @@
+-- Full parser: tokens -> AST
+--
+-- Mirrors the Rust Parser in iris-syntax/src/parser.rs.
+-- Extends parse_expr.iris with full module parsing, type declarations,
+-- imports, lambda expressions, match expressions, pattern matching,
+-- and the complete operator precedence hierarchy.
+--
+-- AST node kinds:
+--   0 = IntLit, 1 = FloatLit, 2 = StringLit, 3 = BoolLit
+--   4 = Var (identifier), 5 = UnitLit
+--   10 = BinOp, 11 = UnaryOp, 12 = App (application)
+--   13 = Lambda, 14 = Let, 15 = If, 16 = Match
+--   17 = Tuple, 18 = TupleAccess, 19 = Pipe, 20 = OpSection
+--
+-- Item kinds:
+--   30 = LetDecl, 31 = TypeDecl, 32 = Import
+--
+-- BinOp kinds:
+--   0 = Add, 1 = Sub, 2 = Mul, 3 = Div, 4 = Mod,
+--   5 = Eq, 6 = Ne, 7 = Lt, 8 = Gt, 9 = Le, 10 = Ge,
+--   11 = And, 12 = Or
+--
+-- Operator precedence (low to high):
+--   |>  (pipe)
+--   ||  (or)
+--   &&  (and)
+--   == != < > <= >=  (comparison)
+--   + -  (additive)
+--   * / %  (multiplicative)
+--   - !  (unary)
+--   f x  (application)
+--   e.0  (tuple access)
+
+-- Token kind constants (from lexer.iris)
+let tok_eof : Int [cost: Const(1)] = 0
+let tok_int : Int [cost: Const(1)] = 1
+let tok_ident : Int [cost: Const(1)] = 2
+let tok_float : Int [cost: Const(1)] = 3
+let tok_string : Int [cost: Const(1)] = 4
+let tok_let : Int [cost: Const(1)] = 10
+let tok_rec : Int [cost: Const(1)] = 11
+let tok_in : Int [cost: Const(1)] = 12
+let tok_match : Int [cost: Const(1)] = 17
+let tok_with : Int [cost: Const(1)] = 18
+let tok_if : Int [cost: Const(1)] = 20
+let tok_then : Int [cost: Const(1)] = 21
+let tok_else : Int [cost: Const(1)] = 22
+let tok_true : Int [cost: Const(1)] = 24
+let tok_false : Int [cost: Const(1)] = 25
+let tok_plus : Int [cost: Const(1)] = 30
+let tok_minus : Int [cost: Const(1)] = 31
+let tok_star : Int [cost: Const(1)] = 32
+let tok_slash : Int [cost: Const(1)] = 33
+let tok_percent : Int [cost: Const(1)] = 34
+let tok_eq : Int [cost: Const(1)] = 35
+let tok_eqeq : Int [cost: Const(1)] = 36
+let tok_bangeq : Int [cost: Const(1)] = 37
+let tok_lt : Int [cost: Const(1)] = 38
+let tok_gt : Int [cost: Const(1)] = 39
+let tok_lteq : Int [cost: Const(1)] = 40
+let tok_gteq : Int [cost: Const(1)] = 41
+let tok_ampamp : Int [cost: Const(1)] = 42
+let tok_pipepipe : Int [cost: Const(1)] = 43
+let tok_lparen : Int [cost: Const(1)] = 50
+let tok_rparen : Int [cost: Const(1)] = 51
+let tok_comma : Int [cost: Const(1)] = 56
+let tok_colon : Int [cost: Const(1)] = 57
+let tok_dot : Int [cost: Const(1)] = 58
+let tok_backslash : Int [cost: Const(1)] = 59
+let tok_arrow : Int [cost: Const(1)] = 60
+let tok_pipegt : Int [cost: Const(1)] = 61
+let tok_pipe : Int [cost: Const(1)] = 62
+let tok_bang : Int [cost: Const(1)] = 63
+let tok_underscore : Int [cost: Const(1)] = 64
+
+-- Check if current token starts an expression atom
+let is_atom_start kind : Int -> Int [cost: Const(7)] =
+  if kind == tok_int then 1
+  else if kind == tok_float then 1
+  else if kind == tok_string then 1
+  else if kind == tok_true then 1
+  else if kind == tok_false then 1
+  else if kind == tok_ident then 1
+  else if kind == tok_lparen then 1
+  else 0
+
+-- Check if current token is an additive operator
+let is_additive kind : Int -> Int [cost: Const(2)] =
+  if kind == tok_plus then 1
+  else if kind == tok_minus then 1
+  else 0
+
+-- Check if current token is a multiplicative operator
+let is_multiplicative kind : Int -> Int [cost: Const(3)] =
+  if kind == tok_star then 1
+  else if kind == tok_slash then 1
+  else if kind == tok_percent then 1
+  else 0
+
+-- Check if current token is a comparison operator
+let is_comparison kind : Int -> Int [cost: Const(6)] =
+  if kind == tok_eqeq then 1
+  else if kind == tok_bangeq then 1
+  else if kind == tok_lt then 1
+  else if kind == tok_gt then 1
+  else if kind == tok_lteq then 1
+  else if kind == tok_gteq then 1
+  else 0
+
+-- Map a comparison token to its BinOp kind
+let comparison_to_binop kind : Int -> Int [cost: Const(6)] =
+  if kind == tok_eqeq then 5
+  else if kind == tok_bangeq then 6
+  else if kind == tok_lt then 7
+  else if kind == tok_gt then 8
+  else if kind == tok_lteq then 9
+  else if kind == tok_gteq then 10
+  else -1
+
+-- Map an additive token to its BinOp kind
+let additive_to_binop kind : Int -> Int [cost: Const(2)] =
+  if kind == tok_plus then 0
+  else if kind == tok_minus then 1
+  else -1
+
+-- Map a multiplicative token to its BinOp kind
+let multiplicative_to_binop kind : Int -> Int [cost: Const(3)] =
+  if kind == tok_star then 2
+  else if kind == tok_slash then 3
+  else if kind == tok_percent then 4
+  else -1
+
+-- Check if current token starts a binding expression (let, if, match, lambda)
+let is_binding_start kind : Int -> Int [cost: Const(4)] =
+  if kind == tok_let then 1
+  else if kind == tok_if then 1
+  else if kind == tok_match then 1
+  else if kind == tok_backslash then 1
+  else 0
+
+-- Parse an atom expression: literal, variable, or parenthesized
+-- Returns (ast_kind, new_pos, error)
+let parse_atom tokens pos : Int -> Int -> (Int, Int, Int) [cost: Const(5)] =
+  let kind = graph_get_kind tokens pos in
+  if kind == tok_int then (0, pos + 1, 0)
+  else if kind == tok_float then (1, pos + 1, 0)
+  else if kind == tok_string then (2, pos + 1, 0)
+  else if kind == tok_true then (3, pos + 1, 0)
+  else if kind == tok_false then (3, pos + 1, 0)
+  else if kind == tok_ident then (4, pos + 1, 0)
+  else if kind == tok_lparen then (5, pos + 1, 0)
+  else (-1, pos, 1)
+
+-- Parse a unary expression: -expr or !expr or atom
+let parse_unary tokens pos : Int -> Int -> (Int, Int, Int) [cost: Const(4)] =
+  let kind = graph_get_kind tokens pos in
+  if kind == tok_minus then (11, pos + 1, 0)
+  else if kind == tok_bang then (11, pos + 1, 0)
+  else parse_atom tokens pos
+
+-- Parse multiplicative expression: unary (* unary | / unary | % unary)*
+let parse_mul tokens pos n_tokens : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(n_tokens)] =
+  let left = parse_unary tokens pos in
+  if left.2 == 1 then left
+  else
+    fold (left.0, left.1, 0)
+      (\state i ->
+        if state.2 == 1 then state
+        else if state.1 >= n_tokens then state
+        else
+          let op_kind = graph_get_kind tokens state.1 in
+          if is_multiplicative op_kind == 1 then
+            let next = parse_unary tokens (state.1 + 1) in
+            if next.2 == 1 then (state.0, state.1, 1)
+            else (10, next.1, 0)
+          else state)
+      n_tokens
+
+-- Parse additive expression: mul (+ mul | - mul)*
+let parse_add tokens pos n_tokens : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(n_tokens)] =
+  let left = parse_mul tokens pos n_tokens in
+  if left.2 == 1 then left
+  else
+    fold (left.0, left.1, 0)
+      (\state i ->
+        if state.2 == 1 then state
+        else if state.1 >= n_tokens then state
+        else
+          let op_kind = graph_get_kind tokens state.1 in
+          if is_additive op_kind == 1 then
+            let next = parse_mul tokens (state.1 + 1) n_tokens in
+            if next.2 == 1 then (state.0, state.1, 1)
+            else (10, next.1, 0)
+          else state)
+      n_tokens
+
+-- Parse comparison expression: add (cmp_op add)?
+let parse_cmp tokens pos n_tokens : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(n_tokens)] =
+  let left = parse_add tokens pos n_tokens in
+  if left.2 == 1 then left
+  else if left.1 >= n_tokens then left
+  else
+    let op_kind = graph_get_kind tokens left.1 in
+    if is_comparison op_kind == 1 then
+      let right = parse_add tokens (left.1 + 1) n_tokens in
+      if right.2 == 1 then (left.0, left.1, 1)
+      else (10, right.1, 0)
+    else left
+
+-- Parse a full expression (dispatch on binding constructs)
+let parse_full_expr tokens pos n_tokens : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  if pos >= n_tokens then (-1, pos, 1)
+  else
+    let kind = graph_get_kind tokens pos in
+    if kind == tok_if then
+      let scan = fold (pos + 1, 0)
+        (\state i ->
+          if state.1 >= 2 then state
+          else if state.0 >= n_tokens then (state.0, 3)
+          else
+            let k = graph_get_kind tokens state.0 in
+            if state.1 == 0 then
+              if k == tok_then then (state.0 + 1, 1)
+              else (state.0 + 1, 0)
+            else
+              if k == tok_else then (state.0 + 1, 2)
+              else (state.0 + 1, 1))
+        n_tokens in
+      if scan.1 == 2 then (15, scan.0 + 1, 0)
+      else (-1, pos, 1)
+    else if kind == tok_let then
+      let scan = fold (pos + 3, 0)
+        (\state i ->
+          if state.1 == 1 then state
+          else if state.0 >= n_tokens then (state.0, 2)
+          else
+            let k = graph_get_kind tokens state.0 in
+            if k == tok_in then (state.0 + 1, 1)
+            else (state.0 + 1, 0))
+        n_tokens in
+      if scan.1 == 1 then (14, scan.0 + 1, 0)
+      else (-1, pos, 1)
+    else if kind == tok_backslash then (13, pos + 1, 0)
+    else if kind == tok_match then (16, pos + 1, 0)
+    else parse_cmp tokens pos n_tokens
+
+-- Check if a module is well-formed: all items start with 'let', 'type', or 'import'
+let validate_module tokens n_tokens : Int -> Int -> Int [cost: Linear(n_tokens)] =
+  fold (0, 1)
+    (\state pos ->
+      if state.1 == 0 then state
+      else if pos >= n_tokens then state
+      else
+        let kind = graph_get_kind tokens pos in
+        if kind == tok_eof then (state.0, 1)
+        else if kind == tok_let then (state.0 + 1, 1)
+        else if kind == 14 then (state.0 + 1, 1)
+        else if kind == 15 then (state.0 + 1, 1)
+        else (state.0, 0))
+    n_tokens

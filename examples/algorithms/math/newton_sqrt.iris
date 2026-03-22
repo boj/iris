@@ -1,0 +1,33 @@
+-- Newton's Method for Square Root
+-- Iteratively approximate sqrt(x) using the Newton-Raphson method:
+--   guess' = (guess + x / guess) / 2
+
+-- One Newton step.
+let newton_step x guess : Float -> Float -> Float [cost: Const(3)] =
+  (guess + x / guess) / 2.0
+
+-- Iterate N times from an initial guess.
+let newton_sqrt_n x n : Float -> Int -> Float [cost: Linear(n)] =
+  let initial = x / 2.0 in
+  fold initial (\guess step -> newton_step x guess) (list_range 0 n)
+
+-- Good default: 20 iterations gives excellent precision for most inputs.
+let newton_sqrt x : Float -> Float [cost: Const(60)] =
+  if x < 0.0 then 0.-1.0  -- error: negative input
+  else if x == 0.0 then 0.0
+  else newton_sqrt_n x 20
+
+-- Cube root via Newton's method: guess' = (2*guess + x / guess^2) / 3
+let newton_cbrt x : Float -> Float [cost: Const(60)] =
+  let initial = x / 3.0 in
+  fold initial (\guess step ->
+    (2.0 * guess + x / (guess * guess)) / 3.0
+  ) (list_range 0 20)
+
+-- Test: compare with math_sqrt
+let test_newton_sqrt x : Int -> Tuple =
+  let s2 = newton_sqrt 2.0 in
+  let s9 = newton_sqrt 9.0 in
+  let s100 = newton_sqrt 100.0 in
+  let cb27 = newton_cbrt 27.0 in
+  (s2, s9, s100, cb27)

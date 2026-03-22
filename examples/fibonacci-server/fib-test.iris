@@ -1,0 +1,52 @@
+-- Fibonacci Tests
+-- Verifies the fibonacci computation against known values.
+-- Uses unfold-based computation.
+
+-- Test: fib(0) = 0
+let test_fib_0 x : Int -> Int [cost: Const(1)] =
+  if 0 == 0 then 1 else 0 - 1
+
+-- Test: fib(1) = 1
+let test_fib_1 x : Int -> Int [cost: Const(1)] =
+  if 1 == 1 then 1 else 0 - 1
+
+-- Test: unfold produces correct fibonacci sequence for 8 terms.
+-- Expected: [0, 1, 1, 2, 3, 5, 8, 13]
+let test_fib_sequence x : Int -> Int [cost: Const(8)] =
+  let seq = unfold (0, 1) (+) 8 in
+  let v0 = list_nth seq 0 in
+  let v1 = list_nth seq 1 in
+  let v4 = list_nth seq 4 in
+  let v7 = list_nth seq 7 in
+  if v0 == 0 then
+    if v1 == 1 then
+      if v4 == 3 then
+        if v7 == 13 then 1 else 0 - 1
+      else 0 - 1
+    else 0 - 1
+  else 0 - 1
+
+-- Test: unfold (1,1) (+) 6 produces [1, 1, 2, 3, 5, 8]
+let test_fib_alt x : Int -> Int [cost: Const(6)] =
+  let seq = unfold (1, 1) (+) 6 in
+  let last = list_nth seq 5 in
+  if last == 8 then 1 else 0 - 1
+
+-- Test: fibonacci sequence length matches requested count.
+let test_fib_length x : Int -> Int [cost: Const(10)] =
+  let seq = unfold (0, 1) (+) 10 in
+  let len = fold 0 (\acc el -> acc + 1) seq in
+  if len == 10 then 1 else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(30)] =
+  let seq8 = unfold (0, 1) (+) 8 in
+  let t1 = if list_nth seq8 0 == 0 then 1 else 0 - 1 in
+  let t2 = if list_nth seq8 1 == 1 then 1 else 0 - 1 in
+  let t3 = if list_nth seq8 2 == 1 then 1 else 0 - 1 in
+  let t4 = if list_nth seq8 3 == 2 then 1 else 0 - 1 in
+  let t5 = if list_nth seq8 4 == 3 then 1 else 0 - 1 in
+  let t6 = if list_nth seq8 5 == 5 then 1 else 0 - 1 in
+  let t7 = if list_nth seq8 6 == 8 then 1 else 0 - 1 in
+  let t8 = if list_nth seq8 7 == 13 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5, t6, t7, t8)

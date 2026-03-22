@@ -1,0 +1,99 @@
+-- Effect lowering: convert effect nodes to yield/resume pairs (Compiler Pass 5)
+--
+-- Effect nodes are replaced with EffectYield + EffectResume pairs,
+-- implementing a trampolining strategy.
+--
+-- Effect (kind 10) ->
+--   EffectYield (Prim VYIELD=0x1B, suspends, returns to handler)
+--   + EffectResume (Prim VRESUME=0x1C, handler resumes computation)
+--
+-- The Effect node itself becomes the Yield node (in-place replacement).
+-- A new Resume node is created and wired:
+--   Yield -> Resume (continuation)
+--   Original effect argument edges -> Yield
+--   Consumers of effect node -> Resume (re-wired)
+--
+-- Consumer re-wiring:
+--   Any node that has the Effect node as a target in its outgoing edges
+--   must be re-wired to point at the Resume node instead. This is done by:
+--   1. Finding all edges where target == effect_id (consumers)
+--   2. Removing those edges
+--   3. Creating new edges from those consumers to the Resume node
+
+-- Rewire consumers of an old node to point to a new replacement node.
+-- Scans all nodes for outgoing edges targeting old_id and redirects them to new_id.
+-- Returns the updated graph.
+let rewire_consumers program old_id new_id : Int -> Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  -- Find all edges targeting old_id and redirect them to new_id
+  -- We iterate all nodes, check their outgoing edges, disconnect old, reconnect new
+  fold program
+    (\g nid ->
+      let children = graph_outgoing g nid in
+      let num_children = list_len children in
+      fold g
+        (\g2 port ->
+          if port < num_children then
+            let child = list_nth children port in
+            if child == old_id then
+              -- Disconnect old edge and connect to new target
+              let g3 = graph_disconnect g2 nid old_id in
+              graph_connect g3 nid new_id port
+            else g2
+          else g2)
+        (list_range 0 num_children))
+    nodes
+
+-- Count effect nodes in a program
+let count_effects program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 10 then acc + 1 else acc)
+    nodes
+
+-- Lower a single Effect node into a Yield+Resume pair
+-- effect_id: the Effect node to transform
+-- Returns transformed graph with consumers re-wired to Resume
+let lower_effect_node program effect_id : Int -> Int -> Int [cost: Linear(program)] =
+  -- Step 1: Save original outgoing children before transformation
+  let original_children = graph_outgoing program effect_id in
+  -- Step 2: Replace the Effect node with EffectYield (Prim VYIELD=0x1B=27)
+  let g1_r = graph_set_prim_op program effect_id 27 in
+  let g1 = g1_r.0 in
+  let yield_id = g1_r.1 in
+  -- Step 3: Create EffectResume node (Prim VRESUME=0x1C=28)
+  let added = graph_add_node_rt g1 0 in
+  let g2 = added.0 in
+  let resume_id = added.1 in
+  let g3_r = graph_set_prim_op g2 resume_id 28 in
+  let g3 = g3_r.0 in
+  let resume_new = g3_r.1 in
+  -- Step 4: Wire: Resume -> Yield (continuation, port 0)
+  let g4 = graph_connect g3 resume_new yield_id 0 in
+  -- Step 5: Re-wire consumers of the original Effect node to point at Resume.
+  -- After graph_set_prim_op, the old effect_id has been replaced by yield_id.
+  -- Any node that was consuming the effect_id now consumes yield_id.
+  -- We need to redirect those consumers to resume_new instead.
+  let g5 = rewire_consumers g4 yield_id resume_new in
+  -- Step 6: Re-connect Yield -> Resume continuation (port 0) which may have been
+  -- affected by rewire_consumers. The yield node's own connection to resume is
+  -- not a consumer relationship, it's the continuation link.
+  -- Restore the yield->resume continuation edge:
+  let g6 = graph_connect g5 resume_new yield_id 0 in
+  g6
+
+-- Lower all effects in a program
+-- Returns the transformed program with no Effect nodes
+let lower_effects program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let effect_count = count_effects program in
+  if effect_count == 0 then program
+  else
+    fold program
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 10 then lower_effect_node g nid
+        else g)
+      nodes

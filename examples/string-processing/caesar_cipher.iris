@@ -1,0 +1,34 @@
+-- Caesar Cipher
+-- Shift each letter by a fixed number of positions in the alphabet.
+-- Generalization of ROT13 (which is Caesar with shift=13).
+
+-- Shift a single character code by `shift` positions.
+let caesar_char code shift : Int -> Int -> Int [cost: Const(5)] =
+  if code >= 65 then
+    if code <= 90 then
+      65 + (code - 65 + shift) % 26
+    else if code >= 97 then
+      if code <= 122 then
+        97 + (code - 97 + shift) % 26
+      else code
+    else code
+  else code
+
+-- Encrypt a string: shift forward.
+let caesar_encrypt s shift : String -> Int -> String [cost: Linear(s)] =
+  let codes = map (\c -> char_at c 0) (str_chars s) in
+  str_from_chars (map (\c -> caesar_char c shift) codes)
+
+-- Decrypt a string: shift backward (by 26 - shift).
+let caesar_decrypt s shift : String -> Int -> String [cost: Linear(s)] =
+  caesar_encrypt s (26 - shift)
+
+-- Brute force: try all 26 shifts (useful for cracking).
+let caesar_brute_force s : String -> Tuple [cost: Unknown] =
+  map (\shift -> caesar_decrypt s shift) (list_range 0 26)
+
+-- Test
+let test_caesar x : Int -> Tuple =
+  let encrypted = caesar_encrypt "ATTACK" 3 in
+  let decrypted = caesar_decrypt encrypted 3 in
+  (encrypted, decrypted)

@@ -1,0 +1,141 @@
+-- FFI bridge: interface between IRIS and the C CLCU interpreter
+--
+-- Mirrors the Rust FFI module in iris-exec/src/ffi.rs.
+-- Manages opcode mapping, container conversion, and value marshaling
+-- between the Rust compiler output and the C interpreter's layout.
+--
+-- C interpreter register file: 8 ZMM registers x 16 i32 lanes = 512 bytes
+-- Input convention: zmm0-zmm5 hold up to 6 inputs
+-- Output convention: zmm0 holds the result (lane 0 = scalar)
+
+-- ZMM register constants
+let zmm_lanes : Int [cost: Const(1)] = 16
+let max_input_regs : Int [cost: Const(1)] = 6
+
+-- CLCU container flag constants
+let flag_is_entry : Int [cost: Const(1)] = 128
+let flag_is_continuation : Int [cost: Const(1)] = 64
+let flag_prefetch_valid : Int [cost: Const(1)] = 32
+
+-- CLCU next-container sentinel values
+let next_terminal : Int [cost: Const(1)] = 255
+let next_sequential : Int [cost: Const(1)] = 0
+
+-- C-side opcode constants (from clcu.h)
+let c_op_nop : Int [cost: Const(1)] = 0
+let c_op_vadd : Int [cost: Const(1)] = 1
+let c_op_vmul : Int [cost: Const(1)] = 2
+let c_op_vfma : Int [cost: Const(1)] = 3
+let c_op_vsub : Int [cost: Const(1)] = 4
+let c_op_vneg : Int [cost: Const(1)] = 7
+let c_op_vabs : Int [cost: Const(1)] = 8
+let c_op_vmin : Int [cost: Const(1)] = 9
+let c_op_vmax : Int [cost: Const(1)] = 10
+let c_op_vbroadcast : Int [cost: Const(1)] = 13
+let c_op_vblend : Int [cost: Const(1)] = 15
+let c_op_vand : Int [cost: Const(1)] = 16
+let c_op_vor : Int [cost: Const(1)] = 17
+let c_op_vxor : Int [cost: Const(1)] = 18
+let c_op_vshl : Int [cost: Const(1)] = 20
+let c_op_vshr : Int [cost: Const(1)] = 21
+let c_op_vcmp : Int [cost: Const(1)] = 32
+let c_op_vload : Int [cost: Const(1)] = 48
+let c_op_vstore : Int [cost: Const(1)] = 49
+
+-- Map a compiler opcode to the C interpreter opcode.
+-- Returns the C opcode, or -1 for unsupported opcodes.
+-- Matches the Rust map_opcode function in ffi.rs exactly.
+let map_opcode compiler_opcode : Int -> Int [cost: Const(30)] =
+  if compiler_opcode == 0 then c_op_nop           -- NOP
+  else if compiler_opcode == 1 then c_op_vadd     -- VADD
+  else if compiler_opcode == 2 then c_op_vsub     -- VSUB
+  else if compiler_opcode == 3 then -1             -- VDIV (not implemented in C)
+  else if compiler_opcode == 4 then c_op_vmul     -- VMUL
+  else if compiler_opcode == 5 then c_op_vfma     -- VFMA
+  else if compiler_opcode == 6 then c_op_vcmp     -- VCMP_EQ -> VCMP
+  else if compiler_opcode == 7 then c_op_vcmp     -- VCMP_LT -> VCMP
+  else if compiler_opcode == 8 then c_op_vcmp     -- VCMP_LE -> VCMP
+  else if compiler_opcode == 9 then c_op_vblend   -- VBLEND
+  else if compiler_opcode == 10 then c_op_vbroadcast -- VBROADCAST
+  else if compiler_opcode == 11 then c_op_vload   -- VLOAD
+  else if compiler_opcode == 12 then c_op_vstore  -- VSTORE
+  else if compiler_opcode == 13 then c_op_nop     -- VMOV -> NOP (if dst==src)
+  else if compiler_opcode == 14 then c_op_vand    -- VAND
+  else if compiler_opcode == 15 then c_op_vor     -- VOR
+  else if compiler_opcode == 16 then c_op_vxor    -- VXOR
+  else if compiler_opcode == 17 then c_op_vneg    -- VNEG
+  else if compiler_opcode == 18 then c_op_vabs    -- VABS
+  else if compiler_opcode == 19 then c_op_vshl    -- VSHL
+  else if compiler_opcode == 20 then c_op_vshr    -- VSHR
+  else if compiler_opcode == 21 then c_op_vmin    -- VMIN
+  else if compiler_opcode == 22 then c_op_vmax    -- VMAX
+  else if compiler_opcode == 23 then -1            -- VMOD (not implemented)
+  else if compiler_opcode == 24 then -1            -- VCVT (not implemented)
+  else if compiler_opcode == 32 then c_op_vbroadcast -- VCONST -> VBROADCAST
+  else -1                                          -- All others unsupported
+
+-- Encode the magic_and_version field for a C container.
+-- C layout: [15:12]=0xC magic, [11:8]=version, [7:0]=unit_length
+let encode_magic_version version unit_length : Int -> Int -> Int [cost: Const(2)] =
+  let magic = 12 in
+  magic * 4096 + (version - (version / 16) * 16) * 256 + (unit_length - (unit_length / 256) * 256)
+
+-- Compute the flags byte for a C container.
+-- Matches the Rust flags_to_c function exactly.
+let compute_container_flags is_first is_continuation has_prefetch mask_source : Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  let flags = 0 in
+  let flags = if is_first == 1 then flags + flag_is_entry else flags in
+  let flags = if is_continuation == 1 then flags + flag_is_continuation else flags in
+  let flags = if has_prefetch == 1 then flags + flag_prefetch_valid else flags in
+  let flags = flags + (mask_source - (mask_source / 4) * 4) * 4 in
+  flags
+
+-- Encode a micro-op into the C interpreter's 6-byte format.
+-- Returns the encoding as a single integer (simplified).
+-- In the real Rust implementation, this produces 6 bytes via bit packing.
+--
+-- C micro-op layout:
+--   byte 0: opcode
+--   byte 1: [7:5]=dst, [4:2]=src1, [1:0]=src2_hi
+--   byte 2: [7]=src2_lo, [6:4]=width, [3:0]=modifier
+--   bytes 3-5: 24-bit immediate
+let encode_micro_op opcode dst src1 src2 width modifier immediate : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let dst3 = bitand dst 7 in
+  let src1_3 = bitand src1 7 in
+  let src2_3 = bitand src2 7 in
+  let byte0 = opcode in
+  let byte1 = shl dst3 5 + shl src1_3 2 + shr src2_3 1 in
+  let byte2 = shl (bitand src2_3 1) 7 + shl (bitand width 7) 4 + bitand modifier 15 in
+  let byte3 = bitand immediate 255 in
+  let byte4 = bitand (shr immediate 8) 255 in
+  let byte5 = bitand (shr immediate 16) 255 in
+  byte0 + shl byte1 8 + shl byte2 16 + shl byte3 24
+
+-- Marshal an integer input into ZMM lanes (broadcast scalar)
+let marshal_int_input value : Int -> Int [cost: Const(1)] =
+  value
+
+-- Extract scalar output from ZMM register
+let extract_scalar_output lane0 : Int -> Int [cost: Const(1)] =
+  lane0
+
+-- Check if the output is scalar (all lanes same) or vector
+let classify_output all_same : Int -> Int [cost: Const(1)] =
+  if all_same == 1 then 0 else 1
+
+-- Validate that a chain is non-empty
+let validate_chain container_count : Int -> Int [cost: Const(1)] =
+  if container_count > 0 then 1 else 0
+
+-- Compute next_container field for a container in a chain
+let compute_next_container is_last offset : Int -> Int -> Int [cost: Const(1)] =
+  if is_last == 1 then next_terminal else offset
+
+-- Validate register index (must be 0-7 for compute registers)
+let validate_register reg : Int -> Int [cost: Const(1)] =
+  if reg >= 0 then
+    if reg <= 7 then 1 else 0
+  else 0
+
+-- Default ZMM width for operations
+let default_width : Int [cost: Const(1)] = 6  -- WIDTH_512B

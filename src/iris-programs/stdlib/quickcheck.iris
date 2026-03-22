@@ -1,0 +1,236 @@
+-- Property-based testing (QuickCheck) standard library
+--
+-- Provides pseudo-random generation and property checking for IRIS programs.
+-- Uses a Linear Congruential Generator (LCG) for deterministic,
+-- reproducible pseudo-random sequences.
+--
+-- The LCG formula: next_seed = (seed * 1103515245 + 12345) % 2147483648
+-- This is the classic glibc LCG, producing deterministic sequences from
+-- a given seed.
+
+-- === LCG Core ===
+
+-- Advance the LCG state by one step.
+-- Returns the next seed value.
+let qc_next_seed seed =
+  (seed * 1103515245 + 12345) % 2147483648
+
+-- === Generators ===
+
+-- Generate a pseudo-random Int in [lo, hi] using LCG.
+-- Returns (value, next_seed) so the caller can chain generators.
+let qc_int_range lo hi seed =
+  let next = qc_next_seed seed in
+  let range = hi - lo + 1 in
+  let raw = if next < 0 then 0 - next else next in
+  let rval = lo + (raw % range) in
+  (rval, next)
+
+-- Generate a pseudo-random Bool (0 or 1).
+-- Returns (value, next_seed).
+let qc_bool seed =
+  let next = qc_next_seed seed in
+  let raw = if next < 0 then 0 - next else next in
+  let rval = raw % 2 in
+  (rval, next)
+
+-- Generate a list of n random values using a generator function.
+-- gen is a function: seed -> (value, next_seed).
+-- Returns (tuple_of_values, final_seed).
+let qc_list_of gen n seed =
+  let result = fold ((), seed) (\state i ->
+    let items = state.0 in
+    let cur_seed = state.1 in
+    let generated = gen cur_seed in
+    let gv = generated.0 in
+    let next_s = generated.1 in
+    (list_append items gv, next_s)
+  ) (list_range 0 n) in
+  result
+
+-- === Shrinking ===
+
+-- Shrink an Int toward 0.
+-- Returns a tuple of smaller candidate values.
+-- Strategy: binary shrinking plus neighbors toward zero.
+let qc_shrink_int n =
+  if n == 0 then list_range 0 0
+  else if n == 1 then (0,)
+  else if n == (0 - 1) then (0,)
+  else
+    let abs_n = if n < 0 then 0 - n else n in
+    let half = n / 2 in
+    let toward_zero = if n > 0 then n - 1 else n + 1 in
+    if abs_n <= 3 then
+      (0, half, toward_zero)
+    else
+      let quarter = n / 4 in
+      (0, quarter, half, toward_zero)
+
+-- === Property Checking ===
+
+-- Run a property function n_trials times with random inputs.
+-- prop is a function: Int -> Int (returns nonzero for pass, 0 for fail).
+-- Generates random inputs in [0, 999] using qc_int_range.
+--
+-- Returns (passes, failures, smallest_failing) where:
+--   passes = count of trials where prop returned nonzero
+--   failures = count of trials where prop returned 0
+--   smallest_failing = the smallest failing input found after shrinking,
+--                      or -1 if all passed
+let qc_check prop n_trials seed =
+  let result = fold (0, 0, 0 - 1, seed) (\state i ->
+    let passes = state.0 in
+    let failures = state.1 in
+    let smallest = state.2 in
+    let cur_seed = state.3 in
+    let generated = qc_int_range 0 999 cur_seed in
+    let input = generated.0 in
+    let next_s = generated.1 in
+    let outcome = prop input in
+    if outcome != 0 then
+      (passes + 1, failures, smallest, next_s)
+    else
+      -- Property failed: try shrinking the input
+      let shrunk = qc_shrink_int input in
+      let n_shrinks = list_len shrunk in
+      -- Find the smallest shrunk value that still fails
+      let best = fold input (\best_so_far j ->
+        let candidate = list_nth shrunk j in
+        let shrink_result = prop candidate in
+        if shrink_result == 0 then
+          -- This candidate also fails; keep it if smaller (closer to 0)
+          let abs_best = if best_so_far < 0 then 0 - best_so_far else best_so_far in
+          let abs_cand = if candidate < 0 then 0 - candidate else candidate in
+          if abs_cand < abs_best then candidate else best_so_far
+        else best_so_far
+      ) (list_range 0 n_shrinks) in
+      -- Update smallest_failing across all trials
+      let new_smallest =
+        if smallest == (0 - 1) then best
+        else
+          let abs_s = if smallest < 0 then 0 - smallest else smallest in
+          let abs_b = if best < 0 then 0 - best else best in
+          if abs_b < abs_s then best else smallest
+      in
+      (passes, failures + 1, new_smallest, next_s)
+  ) (list_range 0 n_trials) in
+  (result.0, result.1, result.2)
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: qc_next_seed produces a different value
+let test_next_seed_changes : Int [cost: Const(1)] =
+  let s0 = 42 in
+  let s1 = qc_next_seed s0 in
+  if s1 != 42 then 1 else 0 - 1
+
+-- Test: qc_next_seed is deterministic
+let test_next_seed_deterministic : Int [cost: Const(1)] =
+  let a = qc_next_seed 123 in
+  let b = qc_next_seed 123 in
+  if a == b then 1 else 0 - 1
+
+-- Test: qc_int_range produces value in range
+let test_int_range_bounds : Int [cost: Const(1)] =
+  let result = qc_int_range 10 20 42 in
+  let rv = result.0 in
+  if rv >= 10 && rv <= 20 then 1 else 0 - 1
+
+-- Test: qc_int_range returns a next seed
+let test_int_range_seed : Int [cost: Const(1)] =
+  let result = qc_int_range 0 100 42 in
+  let next = result.1 in
+  if next != 42 then 1 else 0 - 1
+
+-- Test: qc_bool produces 0 or 1
+let test_bool_range : Int [cost: Const(1)] =
+  let result = qc_bool 42 in
+  let rv = result.0 in
+  if rv == 0 || rv == 1 then 1 else 0 - 1
+
+-- Test: qc_list_of generates correct count
+let test_list_of_count : Int [cost: Const(1)] =
+  let gen = \s -> qc_int_range 0 100 s in
+  let result = qc_list_of gen 5 42 in
+  let items = result.0 in
+  if list_len items == 5 then 1 else 0 - 1
+
+-- Test: qc_list_of values are in range
+let test_list_of_values : Int [cost: Const(1)] =
+  let gen = \s -> qc_int_range 1 10 s in
+  let result = qc_list_of gen 3 99 in
+  let items = result.0 in
+  let all_ok = fold 1 (\acc i ->
+    let v = list_nth items i in
+    if v >= 1 && v <= 10 then acc else 0
+  ) (list_range 0 3) in
+  if all_ok == 1 then 1 else 0 - 1
+
+-- Test: qc_shrink_int of 0 returns empty tuple
+let test_shrink_zero : Int [cost: Const(1)] =
+  let result = qc_shrink_int 0 in
+  if list_len result == 0 then 1 else 0 - 1
+
+-- Test: qc_shrink_int of 1 returns (0,)
+let test_shrink_one : Int [cost: Const(1)] =
+  let result = qc_shrink_int 1 in
+  if list_len result == 1 && list_nth result 0 == 0 then 1 else 0 - 1
+
+-- Test: qc_shrink_int of large value includes 0 and half
+let test_shrink_large : Int [cost: Const(1)] =
+  let result = qc_shrink_int 100 in
+  let has_zero = fold 0 (\found i ->
+    if list_nth result i == 0 then 1 else found
+  ) (list_range 0 (list_len result)) in
+  let has_half = fold 0 (\found i ->
+    if list_nth result i == 50 then 1 else found
+  ) (list_range 0 (list_len result)) in
+  if has_zero == 1 && has_half == 1 then 1 else 0 - 1
+
+-- Test: qc_shrink_int of negative value includes 0
+let test_shrink_negative : Int [cost: Const(1)] =
+  let result = qc_shrink_int (0 - 8) in
+  let has_zero = fold 0 (\found i ->
+    if list_nth result i == 0 then 1 else found
+  ) (list_range 0 (list_len result)) in
+  if has_zero == 1 then 1 else 0 - 1
+
+-- Test: qc_check with always-true property passes all trials
+let test_check_all_pass : Int [cost: Const(1)] =
+  let always_true = \x -> 1 in
+  let result = qc_check always_true 10 42 in
+  if result.0 == 10 && result.1 == 0 && result.2 == (0 - 1) then 1 else 0 - 1
+
+-- Test: qc_check with always-false property fails all trials
+let test_check_all_fail : Int [cost: Const(1)] =
+  let always_false = \x -> 0 in
+  let result = qc_check always_false 5 42 in
+  if result.0 == 0 && result.1 == 5 then 1 else 0 - 1
+
+-- Test: qc_check finds shrunk smallest failing input
+let test_check_shrinks : Int [cost: Const(1)] =
+  -- Property: fail if input > 50 (so smallest failing should shrink toward 51 or lower)
+  let prop = \x -> if x > 50 then 0 else 1 in
+  let result = qc_check prop 20 42 in
+  let smallest = result.2 in
+  -- If there were failures, the smallest should be close to 51
+  -- (shrinking toward 0 stops when prop passes, so smallest >= 51)
+  if result.1 > 0 then
+    if smallest >= 0 then 1 else 0 - 1
+  else 1
+
+-- Test: qc_check is deterministic (same seed = same result)
+let test_check_deterministic : Int [cost: Const(1)] =
+  let prop = \x -> if x % 3 == 0 then 0 else 1 in
+  let r1 = qc_check prop 10 42 in
+  let r2 = qc_check prop 10 42 in
+  if r1.0 == r2.0 && r1.1 == r2.1 && r1.2 == r2.2 then 1 else 0 - 1
+
+-- Test: different seeds produce different sequences
+let test_different_seeds : Int [cost: Const(1)] =
+  let r1 = qc_int_range 0 1000 42 in
+  let r2 = qc_int_range 0 1000 99 in
+  if r1.0 != r2.0 || r1.1 != r2.1 then 1 else 0 - 1

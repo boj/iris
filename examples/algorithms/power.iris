@@ -1,0 +1,8 @@
+-- Fast exponentiation by squaring
+-- Computes base^exp in O(log exp) multiplications
+let rec fast_pow base exp : Int -> Int -> Int [cost: Unknown] =
+  if exp == 0 then 1
+  else if exp % 2 == 0 then
+    let half = fast_pow base (exp / 2) in
+    half * half
+  else base * fast_pow base (exp - 1)

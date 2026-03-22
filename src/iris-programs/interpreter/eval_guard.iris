@@ -1,0 +1,41 @@
+-- Evaluate a Guard node: check predicate, execute body or fallback.
+--
+-- Mirrors the guard handling from iris-exec interpreter.rs eval_guard.
+--
+-- A Guard node contains three sub-expressions:
+--   predicate : evaluates to a Bool
+--   body      : evaluated when predicate is true
+--   fallback  : evaluated when predicate is false
+--
+-- Inputs:
+--   predicate : Int (0 = false, nonzero = true)
+--   body      : Int (value to return when predicate is true)
+--   fallback  : Int (value to return when predicate is false)
+--
+-- Output: Int (body if predicate is truthy, fallback otherwise)
+--
+-- The Rust interpreter checks that the predicate is a Bool and returns
+-- a TypeError if it is not. In the surface language, we encode booleans
+-- as integers: 0 = false, nonzero = true.
+
+let eval_guard predicate body fallback : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if predicate == 0 then fallback
+  else body
+
+-- Chained guard: two predicates with three possible outcomes.
+-- Equivalent to:
+--   if p1 then body1
+--   else if p2 then body2
+--   else fallback
+let eval_guard_chain p1 body1 p2 body2 fallback : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  if p1 == 0 then
+    if p2 == 0 then fallback
+    else body2
+  else body1
+
+-- Clamping guard: restrict a value to [lo, hi] range.
+-- Demonstrates guard composition for a common pattern.
+let eval_guard_clamp value lo hi : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if value < lo then lo
+  else if value > hi then hi
+  else value

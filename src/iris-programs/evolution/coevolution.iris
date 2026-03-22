@@ -1,0 +1,159 @@
+-- Competitive coevolution of programs and test cases (Digital Red Queen).
+--
+-- Programs and test cases evolve in an arms race:
+--   Program fitness  = fraction of test cases passed
+--   Test fitness     = fraction of programs failed
+--
+-- This prevents stagnation by continuously raising the difficulty bar.
+-- Phase Transition 2: Individual -> Ecology
+--
+-- Coevolution loop:
+--   1. Evaluate all programs on all tests (interaction matrix)
+--   2. Compute program fitness (pass rate) and test fitness (fail rate)
+--   3. Select best programs and hardest tests
+--   4. Mutate programs and mutate test cases
+--   5. Replace worst programs and easiest tests
+
+-- =========================================================================
+-- Evaluation
+-- =========================================================================
+
+-- Evaluate a single program on a single test case
+-- Returns 1 if the program's output matches expected, 0 otherwise
+let eval_one program test_input expected : Int -> Int -> Int -> Int [cost: Unknown] =
+  let result = graph_eval program test_input in
+  if result == expected then 1 else 0
+
+-- Compute program fitness: fraction of tests passed (as percentage * 100)
+-- pass_count / total_tests, scaled to integer range
+let program_fitness pass_count total_tests : Int -> Int -> Int [cost: Const(1)] =
+  if total_tests == 0 then 0
+  else (pass_count * 100) / total_tests
+
+-- Compute test fitness: fraction of programs failed (as percentage * 100)
+-- fail_count / total_programs, scaled to integer range
+let test_fitness fail_count total_programs : Int -> Int -> Int [cost: Const(1)] =
+  if total_programs == 0 then 0
+  else (fail_count * 100) / total_programs
+
+-- Count how many tests a program passes
+let count_passes program tests : Int -> Int -> Int [cost: Linear(tests)] =
+  fold 0
+    (\acc test ->
+      let result = graph_eval program test.0 in
+      if result == test.1 then acc + 1 else acc)
+    tests
+
+-- Count how many programs fail a given test
+let count_failures test programs : Int -> Int -> Int [cost: Linear(programs)] =
+  fold 0
+    (\acc prog ->
+      let result = graph_eval prog test.0 in
+      if result == test.1 then acc else acc + 1)
+    programs
+
+-- =========================================================================
+-- Test case mutation
+-- =========================================================================
+
+-- Perturb an integer input by a small delta for test mutation
+-- delta_choice: 0 = +/-1, 1 = +/-10, 2 = +/-100
+let perturb_input value delta_choice sign : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let delta = if delta_choice == 0 then 1
+              else if delta_choice == 1 then 10
+              else 100 in
+  if sign == 0 then value + delta
+  else value - delta
+
+-- Mutate a test case by perturbing its input
+-- test: (input, expected_output) pair
+-- Returns: mutated (input, expected_output) pair
+-- The expected output must be recomputed using a reference program
+let mutate_test_input test seed : Int -> Int -> (Int, Int) [cost: Const(3)] =
+  let delta_choice = (if seed < 0 then 0 - seed else seed) % 3 in
+  let sign = (if seed < 0 then 0 - seed else seed) % 2 in
+  let new_input = perturb_input test.0 delta_choice sign in
+  (new_input, test.1)
+
+-- Mutate a test case and recompute expected output using a reference program
+let mutate_test test reference_prog seed : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let mutated = mutate_test_input test seed in
+  let new_expected = graph_eval reference_prog mutated.0 in
+  (mutated.0, new_expected)
+
+-- =========================================================================
+-- Selection
+-- =========================================================================
+
+-- Tournament selection on test fitness: compare two test fitnesses
+-- Returns 0 if a wins, 1 if b wins
+let test_tournament a_fitness b_fitness : Int -> Int -> Int [cost: Const(1)] =
+  if a_fitness >= b_fitness then 0 else 1
+
+-- Select programs to survive (top k by fitness)
+-- Returns: number of survivors
+let program_survivors total_programs survival_rate : Int -> Int -> Int [cost: Const(1)] =
+  (total_programs * survival_rate) / 100
+
+-- Select tests to keep (hardest k by test fitness)
+let test_survivors total_tests survival_rate : Int -> Int -> Int [cost: Const(1)] =
+  (total_tests * survival_rate) / 100
+
+-- =========================================================================
+-- Coevolution loop
+-- =========================================================================
+
+-- One coevolution step: evaluate, select, mutate
+-- state: (programs_best_score, tests_hardest_score, generation)
+-- programs: list of programs
+-- tests: list of (input, expected) pairs
+-- Returns: (new_best_program_score, new_hardest_test_score, new_generation)
+let coevolution_step programs tests gen : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let test_count = fold 0 (\acc t -> acc + 1) tests in
+  let prog_count = fold 0 (\acc p -> acc + 1) programs in
+  -- Evaluate all programs
+  let best_prog_score = fold 0
+    (\best prog ->
+      let passes = count_passes prog tests in
+      let fitness = program_fitness passes test_count in
+      max best fitness)
+    programs in
+  -- Evaluate all tests
+  let hardest_test_score = fold 0
+    (\hardest test ->
+      let fails = count_failures test programs in
+      let fitness = test_fitness fails prog_count in
+      max hardest fitness)
+    tests in
+  (best_prog_score, hardest_test_score, gen + 1)
+
+-- Run N generations of coevolution
+-- Returns: (final_best_prog_score, final_hardest_test_score, generations_run)
+let coevolve programs tests max_gens : Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  fold (0, 0, 0)
+    (\state gen ->
+      coevolution_step programs tests gen)
+    max_gens
+
+-- =========================================================================
+-- Arms race metrics
+-- =========================================================================
+
+-- Compute the arms race intensity: product of program and test improvement rates
+-- Higher intensity = active arms race = good for avoiding stagnation
+let arms_race_intensity prog_improvement test_improvement : Int -> Int -> Int [cost: Const(1)] =
+  (prog_improvement * test_improvement) / 100
+
+-- Check if the arms race has stalled (both sides stagnating)
+let arms_race_stalled prog_stag test_stag threshold : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if prog_stag > threshold then
+    if test_stag > threshold then 1 else 0
+  else 0
+
+-- Red Queen metric: ratio of improvement to test difficulty increase
+-- > 100 means programs improving faster than tests getting harder
+-- < 100 means tests getting harder faster than programs improving
+-- = 100 is balanced (ideal)
+let red_queen_ratio prog_rate test_rate : Int -> Int -> Int [cost: Const(1)] =
+  if test_rate == 0 then 200
+  else (prog_rate * 100) / test_rate

@@ -1,0 +1,36 @@
+-- FFI wrappers for common libc functions.
+-- Uses the ffi_call effect (0x2B) to call into the C standard library.
+
+-- Get the current process ID.
+let getpid : Int [cost: Unknown] =
+  ffi_call "libc" "getpid" ()
+
+-- Get the current user ID.
+let getuid : Int [cost: Unknown] =
+  ffi_call "libc" "getuid" ()
+
+-- Get the current group ID.
+let getgid : Int [cost: Unknown] =
+  ffi_call "libc" "getgid" ()
+
+-- Get the parent process ID.
+let getppid : Int [cost: Unknown] =
+  ffi_call "libc" "getppid" ()
+
+-- Get current time as seconds since epoch.
+let time : Int [cost: Unknown] =
+  ffi_call "libc" "time" (0)
+
+-- Sleep for N seconds. Returns 0 on success.
+let c_sleep n : Int -> Int [cost: Unknown] =
+  ffi_call "libc" "sleep" (n)
+
+-- Get an environment variable (returns pointer as Int, 0 if not set).
+-- Note: returns a raw C pointer; use env_get effect for safe string access.
+let c_getenv name : Int -> Int [cost: Unknown] =
+  ffi_call "libc" "getenv" (name)
+
+-- Check if a file is accessible. Returns 0 on success, -1 on error.
+-- mode: 0=F_OK (exists), 1=X_OK, 2=W_OK, 4=R_OK
+let access path mode : Int -> Int -> Int [cost: Unknown] =
+  ffi_call "libc" "access" (path, mode)

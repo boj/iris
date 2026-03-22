@@ -1,0 +1,45 @@
+-- Fragment registry: lookup and management of compiled program fragments
+--
+-- The registry maps FragmentIds (BLAKE3 content hashes) to compiled
+-- representations. Supports caching of compilation results, LRU
+-- eviction, and fragment dependency tracking.
+
+-- Compute a simple hash-based fragment key from program content
+-- In the real implementation this is a BLAKE3 hash
+let fragment_key program : Int -> Int [cost: Const(2)] =
+  let h = program * 2654435761 in
+  if h < 0 then 0 - h else h
+
+-- Check if a fragment exists in the registry
+-- registry_size: number of fragments stored
+-- fragment_id: the fragment to look up
+-- Returns 1 if found, 0 if not
+let fragment_exists registry_size fragment_id : Int -> Int -> Int [cost: Const(1)] =
+  if fragment_id > 0 then
+    if registry_size > 0 then 1 else 0
+  else 0
+
+-- Estimate registry memory usage
+-- Each fragment entry: ~4KB (graph + metadata + compiled form)
+let registry_memory_bytes fragment_count : Int -> Int [cost: Const(1)] =
+  fragment_count * 4096
+
+-- Check if registry should evict entries
+-- current_count: entries currently stored
+-- max_entries: maximum allowed entries
+-- Returns 1 if should evict, 0 otherwise
+let should_evict current_count max_entries : Int -> Int -> Int [cost: Const(1)] =
+  if current_count >= max_entries then 1 else 0
+
+-- Compute number of entries to evict (10% of max, minimum 1)
+let eviction_count max_entries : Int -> Int [cost: Const(2)] =
+  let ten_pct = max_entries / 10 in
+  if ten_pct < 1 then 1 else ten_pct
+
+-- Registry statistics: report usage
+-- Returns (entry_count, memory_estimate, utilization_pct)
+let registry_stats entry_count max_entries : Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  let mem = registry_memory_bytes entry_count in
+  let util = if max_entries == 0 then 0
+             else (entry_count * 100) / max_entries in
+  (entry_count, mem, util)

@@ -1,0 +1,6 @@
+-- Count steps in the Collatz sequence until reaching 1
+-- Collatz conjecture: this always terminates
+let rec collatz_steps n : Int -> Int [cost: Unknown] =
+  if n <= 1 then 0
+  else if n % 2 == 0 then 1 + collatz_steps (n / 2)
+  else 1 + collatz_steps (3 * n + 1)

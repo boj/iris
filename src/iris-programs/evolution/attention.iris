@@ -1,0 +1,57 @@
+-- Dynamic attention weights for evolutionary resource allocation
+--
+-- The "attention economy": problems showing improvement get more compute
+-- (larger populations, more generations). Stagnating problems get diversity
+-- injection or early abandonment. Replaces fixed population/generation
+-- counts with an adaptive budget that responds to fitness trajectory.
+--
+-- Tracks an exponentially smoothed improvement rate and decides per
+-- generation whether to Invest, Maintain, InjectDiversity, or Abandon.
+
+-- Compute exponential moving average of improvement rate
+-- smoothing: EMA weight (e.g. 0.3)
+-- improvement: current generation's fitness delta
+-- prev_rate: previous smoothed rate
+let ema_improvement smoothing improvement prev_rate : Int -> Int -> Int -> Int [cost: Const(2)] =
+  smoothing * improvement + (100 - smoothing) * prev_rate
+
+-- Classify improvement into a resource decision
+-- improvement: fitness delta (scaled by 1000 for integer arithmetic)
+-- stagnation_count: consecutive stagnating generations
+-- Returns: 0=Invest, 1=Maintain, 2=InjectDiversity, 3=Abandon
+let allocate_decision improvement stagnation_count : Int -> Int -> Int [cost: Const(3)] =
+  if improvement > 10 then 0
+  else if improvement > 1 then 1
+  else if stagnation_count > 50 then 3
+  else 2
+
+-- Compute new population size after an Invest decision
+-- current_pop: current population size
+-- max_pop: population ceiling from budget
+-- Returns: new population size (current * 1.5, clamped to max)
+let grow_population current_pop max_pop : Int -> Int -> Int [cost: Const(2)] =
+  let grown = (current_pop * 3) / 2 in
+  if grown > max_pop then max_pop else grown
+
+-- Compute new generation budget after an Invest decision
+-- current_gens: currently allocated generations
+-- max_gens: generation ceiling from budget
+-- Returns: new generation allocation (current + 100, clamped to max)
+let grow_generations current_gens max_gens : Int -> Int -> Int [cost: Const(2)] =
+  let grown = current_gens + 100 in
+  if grown > max_gens then max_gens else grown
+
+-- Update stagnation counter based on improvement
+-- Returns 0 if improving, stagnation_count + 1 if stagnating
+let update_stagnation improvement stagnation_count : Int -> Int -> Int [cost: Const(2)] =
+  if improvement > 1 then 0
+  else stagnation_count + 1
+
+-- Full attention step: given current best fitness and previous state,
+-- compute the resource decision and new state
+-- Returns (decision, new_stagnation_count)
+let attention_step current_best last_best stagnation_count : Int -> Int -> Int -> (Int, Int) [cost: Const(5)] =
+  let improvement = current_best - last_best in
+  let new_stag = update_stagnation improvement stagnation_count in
+  let decision = allocate_decision improvement new_stag in
+  (decision, new_stag)

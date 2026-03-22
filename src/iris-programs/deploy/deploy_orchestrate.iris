@@ -1,0 +1,98 @@
+-- Deploy orchestration: generate standalone binaries, shared libs, native ELFs
+--
+-- Mirrors iris-deploy/src/lib.rs (400 LOC).
+-- Chains serialization, ELF generation, and output writing.
+--
+-- Three deployment targets:
+--   1. Standalone: self-contained binary with embedded bytecode + mini VM
+--   2. Shared library: .so/.dylib with C ABI entry point
+--   3. Native ELF: direct x86-64 machine code in ELF container
+
+-- External stubs (defined in sibling files)
+let serialize_bytecode_to_bytes x : Int -> Int [cost: Const(1)] = x
+let aot_compile x : Int -> Int [cost: Const(1)] = x
+let vm_run a b c : Int -> Int -> Int -> (Int, Int) [cost: Const(1)] = (a, b)
+let generate_shared_lib a b : Int -> String -> Int [cost: Const(1)] = a
+let elf_wrap a b : Int -> String -> Int [cost: Const(1)] = a
+
+-- Deploy target constants
+let target_standalone : Int [cost: Const(1)] = 0
+let target_shared_lib : Int [cost: Const(1)] = 1
+let target_native_elf : Int [cost: Const(1)] = 2
+
+-- Deploy error codes
+let deploy_ok : Int [cost: Const(1)] = 0
+let deploy_err_serialize : Int [cost: Const(1)] = 1
+let deploy_err_codegen : Int [cost: Const(1)] = 2
+let deploy_err_write : Int [cost: Const(1)] = 3
+
+-- The standalone VM template.
+-- Embeds bytecode and provides a minimal stack-machine interpreter.
+-- Uses the same step/run logic as standalone.iris.
+let standalone_vm_template bytecode : Int -> Int [cost: Linear(bytecode)] =
+  let ip = 0 in
+  let reg_a = 0 in
+  let reg_b = 0 in
+  vm_run reg_a reg_b bytecode
+
+-- Generate the standalone VM source (a self-contained program with
+-- embedded bytecode and a minimal interpreter).
+-- Mirrors runtime.rs generate_standalone_source().
+let generate_standalone_vm serialized_bytecode program_name : Int -> String -> Int [cost: Linear(serialized_bytecode)] =
+  let header = str_concat "-- Auto-generated IRIS standalone: " program_name in
+  let bytecode_section = serialized_bytecode in
+  let vm_code = standalone_vm_template bytecode_section in
+  (header, vm_code)
+
+-- Deploy a program as a standalone binary.
+-- 1. Serialize the bytecode
+-- 2. Generate standalone source/binary with embedded bytecode
+-- 3. Write output file
+-- Returns deploy_ok on success, error code on failure.
+let deploy_standalone bytecode program_name output_path : Int -> String -> String -> Int [cost: Linear(bytecode)] =
+  let serialized = serialize_bytecode_to_bytes bytecode in
+  if serialized == 0 then deploy_err_serialize
+  else
+    let vm_source = generate_standalone_vm serialized program_name in
+    let h = file_open output_path 1 in
+    let unused = file_write_bytes h vm_source in
+    let unused = file_close h in
+    deploy_ok
+
+-- Deploy a program as a shared library (.so).
+-- 1. Serialize the bytecode
+-- 2. Generate shared library with C ABI wrapper
+-- 3. Write output file
+let deploy_shared_lib bytecode program_name output_path : Int -> String -> String -> Int [cost: Linear(bytecode)] =
+  let serialized = serialize_bytecode_to_bytes bytecode in
+  if serialized == 0 then deploy_err_serialize
+  else
+    let lib_bytes = generate_shared_lib serialized program_name in
+    let h = file_open output_path 1 in
+    let unused = file_write_bytes h lib_bytes in
+    let unused = file_close h in
+    deploy_ok
+
+-- Deploy a program as a native ELF binary.
+-- 1. Compile to native x86-64 machine code
+-- 2. Wrap in ELF container with proper headers
+-- 3. Write output file
+let deploy_native graph program_name output_path : Int -> String -> String -> Int [cost: Linear(graph)] =
+  let code = aot_compile graph in
+  if code == 0 then deploy_err_codegen
+  else
+    let elf = elf_wrap code program_name in
+    let h = file_open output_path 1 in
+    let unused = file_write_bytes h elf in
+    let unused = file_close h in
+    deploy_ok
+
+-- Deploy dispatcher: choose target based on integer selector.
+let deploy program target program_name output_path : Int -> Int -> String -> String -> Int [cost: Linear(program)] =
+  if target == target_standalone then
+    deploy_standalone program program_name output_path
+  else if target == target_shared_lib then
+    deploy_shared_lib program program_name output_path
+  else if target == target_native_elf then
+    deploy_native program program_name output_path
+  else deploy_err_codegen

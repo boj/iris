@@ -1,0 +1,87 @@
+-- Regex-Redux (Benchmarks Game)
+-- Pattern matching and replacement on DNA sequences.
+--
+-- The full benchmark uses regex to count pattern occurrences and perform
+-- substitutions. Since IRIS has no regex engine, we implement simplified
+-- string matching using str_contains, str_replace, and manual counting.
+--
+-- The benchmark:
+--   1. Count occurrences of specific DNA patterns
+--   2. Apply a sequence of replacements to transform the DNA
+--   3. Report final sequence length
+--
+-- Uses: str_contains, str_replace, str_len, str_slice, fold
+
+-- Count non-overlapping occurrences of a pattern in a string.
+-- Scans character by character, checking for pattern at each position.
+let count_pattern text pattern =
+  let text_len = str_len text in
+  let pat_len = str_len pattern in
+  if pat_len > text_len then 0
+  else
+    let num_positions = text_len - pat_len + 1 in
+    fold (0, 0) (\state i ->
+      let count = state.0 in
+      let skip = state.1 in
+      if skip > 0 then (count, skip - 1)
+      else
+        let sub = str_slice text i (i + pat_len) in
+        if str_eq sub pattern == 1 then
+          (count + 1, pat_len - 1)
+        else
+          (count, 0)
+    ) (list_range 0 num_positions)
+
+-- Get the count from the (count, skip) tuple
+let get_pattern_count text pattern =
+  let res = count_pattern text pattern in
+  res.0
+
+-- Apply a sequence of DNA substitutions (simplified from the Benchmarks Game).
+-- The real benchmark uses regex replacements; we use literal string replacements.
+--
+-- IUB code replacements:
+--   B -> (c|g|t)  simplified to: B -> CGT
+--   D -> (a|g|t)  simplified to: D -> AGT
+--   H -> (a|c|t)  simplified to: H -> ACT
+--   K -> (g|t)    simplified to: K -> GT
+--   M -> (a|c)    simplified to: M -> AC
+--   N -> (a|c|g|t) simplified to: N -> ACGT
+--   R -> (a|g)    simplified to: R -> AG
+--   S -> (g|c)    simplified to: S -> GC
+--   V -> (a|c|g)  simplified to: V -> ACG
+--   W -> (a|t)    simplified to: W -> AT
+--   Y -> (c|t)    simplified to: Y -> CT
+let apply_replacements dna =
+  let s1 = str_replace dna "B" "CGT" in
+  let s2 = str_replace s1 "D" "AGT" in
+  let s3 = str_replace s2 "H" "ACT" in
+  let s4 = str_replace s3 "K" "GT" in
+  let s5 = str_replace s4 "M" "AC" in
+  let s6 = str_replace s5 "N" "ACGT" in
+  let s7 = str_replace s6 "R" "AG" in
+  let s8 = str_replace s7 "S" "GC" in
+  let s9 = str_replace s8 "V" "ACG" in
+  let s10 = str_replace s9 "W" "AT" in
+  str_replace s10 "Y" "CT"
+
+-- Main benchmark:
+-- 1. Count specific patterns in the input DNA
+-- 2. Apply IUB code replacements
+-- 3. Return (original_len, pattern_counts, new_len)
+let regex_redux dna =
+  let original_len = str_len dna in
+  let count_a = get_pattern_count dna "A" in
+  let count_t = get_pattern_count dna "T" in
+  let count_g = get_pattern_count dna "G" in
+  let count_c = get_pattern_count dna "C" in
+  let replaced = apply_replacements dna in
+  let new_len = str_len replaced in
+  (original_len, count_a, count_t, count_g, count_c, new_len)
+
+-- Benchmark entry: apply replacements and return length change.
+let bench dna =
+  let original_len = str_len dna in
+  let replaced = apply_replacements dna in
+  let new_len = str_len replaced in
+  (original_len, new_len)

@@ -1,0 +1,16 @@
+<header class="site-header">
+  <nav class="nav-container">
+    <a href="{{ "/" | relURL }}" class="logo">
+      <img src="{{ "img/iris-icon.svg" | relURL }}" alt="IRIS" width="32" height="32">
+      <span>IRIS</span>
+    </a>
+    <ul class="nav-links">
+      {{ range .Site.Menus.main }}
+      <li><a href="{{ .URL | relURL }}"{{ if $.IsMenuCurrent "main" . }} class="active"{{ end }}>{{ .Name }}</a></li>
+      {{ end }}
+    </ul>
+    <button class="nav-toggle" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+  </nav>
+</header>

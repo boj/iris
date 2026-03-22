@@ -1,0 +1,26 @@
+-- Assign Pareto rank to an individual within a population
+-- The rank is the count of other individuals that dominate it.
+-- Rank 0 = non-dominated (Pareto front).
+--
+-- Uses the dominance check: A dominates B iff
+--   A[i] >= B[i] for all i AND A[j] > B[j] for some j.
+--
+-- individual: fitness vector (tuple of Ints)
+-- population: collection of fitness vectors
+--
+-- Returns Int (domination count = Pareto rank)
+
+-- Check if fitness vector a dominates b
+-- Returns 1 if a dominates b, 0 otherwise
+let dominates a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  let all_geq = fold 1 (\acc pair -> acc * (if pair.0 >= pair.1 then 1 else 0)) pairs in
+  let any_gt = fold 0 (\acc pair -> acc + (if pair.0 > pair.1 then 1 else 0)) pairs in
+  all_geq * (if any_gt > 0 then 1 else 0)
+
+-- Count how many members of the population dominate the individual
+-- rank 0 = non-dominated front
+let pareto_rank individual population : Int -> Int -> Int [cost: Linear(population)] =
+  fold 0
+    (\acc other -> acc + dominates other individual)
+    population

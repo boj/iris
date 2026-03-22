@@ -1,0 +1,154 @@
+-- Tests for effects dispatch subsystem
+-- depends: programs/exec/effects_dispatch.iris, programs/exec/semantic_hash.iris
+
+-- =========================================================================
+-- NoOp handler tests
+-- =========================================================================
+
+-- Test: noop returns (0, 0) for any effect
+let test_noop_dispatch : Int [cost: Const(5)] =
+  let r = noop_dispatch 0 42 in
+  let ok1 = assert_eq (r.0) 0 0 in
+  let ok2 = assert_eq (r.1) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- =========================================================================
+-- Logging handler tests
+-- =========================================================================
+
+-- Test: logging returns (tag, 0) capturing the effect tag
+let test_logging_dispatch : Int [cost: Const(5)] =
+  let r = logging_dispatch 5 42 in
+  let ok1 = assert_eq (r.0) 5 0 in
+  let ok2 = assert_eq (r.1) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- =========================================================================
+-- Real handler tests
+-- =========================================================================
+
+-- Test: real_dispatch Random (tag 10) with seed produces non-zero
+let test_effects_random : Int [cost: Const(5)] =
+  let r = real_dispatch 10 0 in
+  let ok1 = assert_eq (r.1) 0 0 in
+  let ok2 = assert_neq (r.0) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: real_dispatch Random is deterministic with same seed
+let test_effects_random_deterministic : Int [cost: Const(5)] =
+  let r1 = real_dispatch 10 12345 in
+  let r2 = real_dispatch 10 12345 in
+  assert_eq (r1.0) (r2.0) 0
+
+-- Test: real_dispatch Timestamp (tag 9)
+let test_effects_timestamp : Int [cost: Const(5)] =
+  let r = real_dispatch 9 1711234567 in
+  let ok1 = assert_eq (r.1) 0 0 in
+  let ok2 = assert_eq (r.0) 1711234567 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: real_dispatch Log (tag 11) returns arg
+let test_effects_log : Int [cost: Const(5)] =
+  let r = real_dispatch 11 42 in
+  let ok1 = assert_eq (r.1) 0 0 in
+  let ok2 = assert_eq (r.0) 42 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: real_dispatch HttpGet (tag 2) unsupported
+let test_effects_unsupported : Int [cost: Const(5)] =
+  let r = real_dispatch 2 0 in
+  assert_eq (r.1) (0 - 1) 0
+
+-- Test: real_dispatch FileRead (tag 4) no host primitive
+let test_effects_no_host : Int [cost: Const(5)] =
+  let r = real_dispatch 4 0 in
+  assert_eq (r.1) (0 - 3) 0
+
+-- =========================================================================
+-- Main dispatch entry point tests
+-- =========================================================================
+
+-- Test: effects_dispatch noop mode (handler_mode 0)
+let test_effects_main_noop : Int [cost: Const(5)] =
+  let r = effects_dispatch 10 42 0 in
+  let ok1 = assert_eq (r.0) 0 0 in
+  let ok2 = assert_eq (r.1) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: effects_dispatch real mode (handler_mode 1) for Random
+let test_effects_main_real : Int [cost: Const(5)] =
+  let r = effects_dispatch 10 0 1 in
+  let ok1 = assert_eq (r.1) 0 0 in
+  let ok2 = assert_neq (r.0) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- Test: effects_dispatch logging mode (handler_mode 3)
+let test_effects_main_logging : Int [cost: Const(5)] =
+  let r = effects_dispatch 7 99 3 in
+  let ok1 = assert_eq (r.0) 7 0 in
+  let ok2 = assert_eq (r.1) 0 1 in
+  if ok1 > 0 then (if ok2 > 0 then 1 else 0 - 1) else 0 - 1
+
+-- =========================================================================
+-- effect_allowed and effect_risk_level
+-- =========================================================================
+
+-- Test: effect_allowed with bitmask
+let test_effect_allowed_yes : Int [cost: Const(3)] =
+  assert_eq (effect_allowed 10 1024) 1 0
+
+-- Test: effect_allowed not in mask
+let test_effect_allowed_no : Int [cost: Const(3)] =
+  assert_eq (effect_allowed 5 1024) 0 0
+
+-- Test: effect_risk_level Timestamp (pure)
+let test_risk_level_timestamp : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 9) 0 0
+
+-- Test: effect_risk_level Random (pure)
+let test_risk_level_random : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 10) 0 0
+
+-- Test: effect_risk_level Print (read-only)
+let test_risk_level_print : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 0) 1 0
+
+-- Test: effect_risk_level FileWrite (write)
+let test_risk_level_filewrite : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 5) 2 0
+
+-- Test: effect_risk_level HttpGet (network)
+let test_risk_level_httpget : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 2) 3 0
+
+-- Test: effect_risk_level ThreadSpawn (system)
+let test_risk_level_threadspawn : Int [cost: Const(3)] =
+  assert_eq (effect_risk_level 32) 4 0
+
+-- =========================================================================
+-- semantic_hash.iris tests
+-- =========================================================================
+
+-- Test: default_probe_count is 128
+let test_hash_default_probe_count : Int [cost: Const(3)] =
+  assert_eq default_probe_count 128 0
+
+-- Test: probe_from_seed is deterministic
+let test_hash_probe_deterministic : Int [cost: Const(3)] =
+  assert_eq (probe_from_seed 12345) (probe_from_seed 12345) 0
+
+-- Test: hash_pair is order-sensitive
+let test_hash_pair_order : Int [cost: Const(3)] =
+  assert_neq (hash_pair 1 2) (hash_pair 2 1) 0
+
+-- Test: hash_pair produces non-negative results
+let test_hash_pair_nonneg : Int [cost: Const(3)] =
+  assert_gte (hash_pair 1 2) 0 0
+
+-- Test: semantic_eq on equal values
+let test_semantic_eq_true : Int [cost: Const(3)] =
+  assert_eq (semantic_eq 42 42) 1 0
+
+-- Test: semantic_eq on different values
+let test_semantic_eq_false : Int [cost: Const(3)] =
+  assert_eq (semantic_eq 42 99) 0 0

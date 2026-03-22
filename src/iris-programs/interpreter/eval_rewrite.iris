@@ -1,0 +1,29 @@
+-- Evaluate a Rewrite node: apply a verified term rewrite.
+--
+-- Mirrors the rewrite handling from iris-exec interpreter.rs eval_rewrite.
+--
+-- A Rewrite node has:
+--   - rule_id: RewriteRuleId (256-bit identity of the verified rewrite rule)
+--   - body: NodeId (the node to evaluate after the rewrite)
+--
+-- The Rust interpreter simply evaluates the body node. The rewrite
+-- itself was verified at compile time / proof time — at runtime,
+-- the Rewrite node is transparent (just evaluates its body).
+--
+-- This is important for IRIS's verification architecture: rewrite rules
+-- are proven correct by the proof kernel, and Rewrite nodes record that
+-- a particular verified transformation was applied.
+
+-- Rewrite is a no-op wrapper at runtime: just evaluate the body.
+let eval_rewrite body : Int -> Int [cost: Const(1)] =
+  body
+
+-- Rewrite with a verification tag: the tag is ignored at runtime.
+-- Simulates: Rewrite(rule_42, body) -> body
+let eval_rewrite_tagged tag body : Int -> Int -> Int [cost: Const(1)] =
+  body
+
+-- Chain of rewrites: multiple verified transformations.
+-- Each rewrite is transparent — the final body is what matters.
+let eval_rewrite_chain body : Int -> Int [cost: Const(1)] =
+  body

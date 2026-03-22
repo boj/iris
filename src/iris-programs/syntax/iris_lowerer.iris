@@ -1,0 +1,1148 @@
+-- Complete IRIS lowerer: AST -> (Program, SourceMap)
+-- Returns a tuple of (Program, source_map_list) where source_map_list
+-- contains (node_id, start_pos, end_pos) tuples.
+-- Type inference is applied to the Program via graph_set_node_type.
+-- Cost bounds from [cost: ...] annotations are applied via graph_set_cost.
+-- Uses fold-based stack machine with cons-cell stacks.
+-- Stack depths tracked by integer counters (nsp/wsp) to avoid
+-- comparing Tuples to Int which causes type errors.
+--
+-- Capability declarations (allow/deny) from ast.1 are encoded as a
+-- hub Lit node (type_tag=0, value=n_caps) attached to root via port 127.
+-- Each entry is a Lit node (packed int) connected to the hub at port 0..n.
+
+let lower ast src =
+  let mt = list_range 0 0 in
+  let cap_info = ast.1 in
+  let items = ast.2 in
+  let n_items = list_len items in
+
+  if n_items == 0 then (graph_new, mt)
+  else
+    let entry = list_nth items (n_items - 1) in
+    let params = (entry.2).0 in
+    let body_ast = (entry.2).1 in
+    let n_params = list_len params in
+
+    -- Gap 3: Scan imports (kind 32) from items and build import scope entries
+    -- Import declarations have kind 32, payload = name_hash
+    -- Scope entry for imports: (name_hash, fragment_id, 2)
+    --   where tag 2 = Fragment binding (as opposed to 0=param, 1=let)
+    let import_scope = fold mt
+      (\is _i ->
+        if _i >= n_items then is
+        else
+          let item = list_nth items _i in
+          if item.0 == 32 then
+            -- Import: store name_hash with a fake fragment ID (_i as ID)
+            list_append is (item.1, _i + 10000, 2)
+          else is)
+      n_items in
+
+    let scope = fold import_scope
+      (\s _i ->
+        let param = list_nth params _i in
+        list_append s (param.1, _i, 0))
+      n_params in
+
+    let prog = graph_new in
+
+    -- Gap 4: Source map accumulator
+    -- Source map is a list of (node_id, token_start_pos, token_end_pos) tuples
+    -- We track current token position during lowering
+    let smap = mt in
+
+    -- Gap 7: Extract cost bound from the LetDecl if present
+    -- Cost is at (entry.2).2 if the tuple has enough elements
+    -- Cost node: (22, cost_kind, cost_args)
+    -- Extract cost value early using a simple fold-based lookup
+    let entry_children = entry.2 in
+    let n_ec = list_len entry_children in
+    -- Use a fold to avoid deeply-nested if/else
+    -- Result: (found, cost_val)
+    let cost_lookup = fold (0, 0)
+      (\cl _j ->
+        if cl.0 == 1 then cl
+        else if n_ec < 3 then (1, 0)
+        else
+          let cn = list_nth entry_children 2 in
+          if cn.0 == 22 then
+            let ck = cn.1 in
+            -- ck 0,1 = Unit(0), ck 2 = Constant(extract), ck 3,4 = Inherited(1)
+            if ck == 2 then
+              let ca = cn.2 in
+              let nca = list_len ca in
+              if nca > 0 then (1, (list_nth ca 0).1) else (1, 2)
+            else if ck == 3 then (1, 1)
+            else if ck == 4 then (1, 1)
+            else (1, 0)
+          else (1, 0))
+      1 in
+    let cost_val_early = cost_lookup.1 in
+
+    -- Simple cases handled directly (no stack machine needed)
+    let bk = body_ast.0 in
+    if bk == 0 then
+      let step = graph_add_node_rt prog 5 in
+      let step2 = graph_set_lit_value (step.0) (step.1) 0 (body_ast.1) in
+      let g = graph_set_root (step2.0) (step2.1) in
+      let sm = list_append mt (step2.1, 0, str_len src) in
+      (g, sm)
+    else if bk == 3 then
+      let step = graph_add_node_rt prog 5 in
+      let step2 = graph_set_lit_value (step.0) (step.1) 4 (body_ast.1) in
+      let g = graph_set_root (step2.0) (step2.1) in
+      let g2 = graph_set_node_type g (step2.1) 1 in
+      let sm = list_append mt (step2.1, 0, str_len src) in
+      (g2, sm)
+    else if bk == 4 then
+      let nh = body_ast.1 in
+      let nsc = list_len scope in
+      let lk = fold (0, 0, 0)
+        (\l _j ->
+          if l.0 == 1 then l
+          else
+            let idx = nsc - 1 - _j in
+            if idx < 0 then l
+            else
+              let e = list_nth scope idx in
+              if e.0 == nh then (1, e.2, e.1)
+              else l)
+        nsc in
+      if lk.0 == 1 then
+        if lk.1 == 0 then
+          let step = graph_add_node_rt prog 5 in
+          let step2 = graph_set_lit_value (step.0) (step.1) 255 (lk.2) in
+          let g = graph_set_root (step2.0) (step2.1) in
+          let sm = list_append mt (step2.1, 0, str_len src) in
+          (g, sm)
+        else
+          let g = graph_set_root prog (lk.2) in
+          let sm = list_append mt (lk.2, 0, str_len src) in
+          (g, sm)
+      else
+        let step = graph_add_node_rt prog 5 in
+        let step2 = graph_set_lit_value (step.0) (step.1) 0 0 in
+        let g = graph_set_root (step2.0) (step2.1) in
+        let sm = list_append mt (step2.1, 0, str_len src) in
+        (g, sm)
+    else
+
+    -- Stack machine for compound expressions
+    -- State: (prog, ns, nsp, ws, wsp, scope)
+    -- ns = cons-cell node stack: (node_id, rest_stack)
+    -- ws = cons-cell work stack: (item, rest_stack)
+    -- Sentinel for empty stack: nsp==0 (never access ns when nsp==0)
+    let empty = (0, 0) in
+    let init_ws = (body_ast, empty) in
+    let result = fold (prog, empty, 0, init_ws, 1, scope)
+      (\state _i ->
+        let pg = state.0 in
+        let ns = state.1 in
+        let nsp = state.2 in
+        let ws = state.3 in
+        let wsp = state.4 in
+        let sc = state.5 in
+
+        if wsp == 0 then state
+        else
+          let item = ws.0 in
+          let rws = ws.1 in
+          let nwsp = wsp - 1 in
+          let k = item.0 in
+
+          -- ==========================================================
+          -- Combine operations (kind >= 50)
+          -- ==========================================================
+
+          -- BinOp combine (50): pop right(ns0), left(ns1)
+          -- Also applies type inference: comparison opcodes 32-37 -> Bool type
+          if k == 50 then
+            let right_id = ns.0 in
+            let left_id = (ns.1).0 in
+            let rns = (ns.1).1 in
+            let opcode = item.1 in
+            let step = graph_add_node_rt pg 0 in
+            let step2 = graph_set_prim_op (step.0) (step.1) opcode in
+            let p2 = graph_connect (step2.0) (step2.1) left_id 0 in
+            let p3 = graph_connect p2 (step2.1) right_id 1 in
+            -- Type inference: set type tag based on opcode
+            let p4 =
+              if opcode >= 32 then
+                if opcode <= 37 then graph_set_node_type p3 (step2.1) 1
+                else p3
+              else if opcode == 179 then graph_set_node_type p3 (step2.1) 1
+              else if opcode == 184 then graph_set_node_type p3 (step2.1) 1
+              else if opcode == 185 then graph_set_node_type p3 (step2.1) 1
+              else if opcode == 186 then graph_set_node_type p3 (step2.1) 1
+              else if opcode == 177 then graph_set_node_type p3 (step2.1) 3
+              else if opcode == 178 then graph_set_node_type p3 (step2.1) 3
+              else if opcode == 181 then graph_set_node_type p3 (step2.1) 3
+              else if opcode == 183 then graph_set_node_type p3 (step2.1) 3
+              else p3 in
+            (p4, (step2.1, rns), nsp - 1, rws, nwsp, sc)
+
+          -- Guard combine (51): pop else, then, cond
+          else if k == 51 then
+            let else_id = ns.0 in
+            let then_id = (ns.1).0 in
+            let cond_id = ((ns.1).1).0 in
+            let rns = ((ns.1).1).1 in
+            let step = graph_add_guard_rt pg cond_id then_id else_id in
+            (step.0, (step.1, rns), nsp - 2, rws, nwsp, sc)
+
+          -- Unary combine (52): pop 1
+          -- Also applies type inference for int_to_float (64) -> Float64
+          else if k == 52 then
+            let arg_id = ns.0 in
+            let rns = ns.1 in
+            let opcode = item.1 in
+            let step = graph_add_node_rt pg 0 in
+            let step2 = graph_set_prim_op (step.0) (step.1) opcode in
+            let p2 = graph_connect (step2.0) (step2.1) arg_id 0 in
+            -- Type inference for unary prims
+            let p3 =
+              if opcode == 64 then graph_set_node_type p2 (step2.1) 2
+              else if opcode == 183 then graph_set_node_type p2 (step2.1) 3
+              else if opcode == 188 then graph_set_node_type p2 (step2.1) 3
+              else if opcode == 189 then graph_set_node_type p2 (step2.1) 3
+              else if opcode == 190 then graph_set_node_type p2 (step2.1) 3
+              else if opcode == 191 then graph_set_node_type p2 (step2.1) 3
+              else p2 in
+            (p3, (step2.1, rns), nsp, rws, nwsp, sc)
+
+          -- Tuple combine (53): pop n_elems, set Product type
+          else if k == 53 then
+            let ne = item.1 in
+            let step = graph_add_node_rt pg 11 in
+            let tr = fold (step.0, step.1, ns, 0)
+              (\ts _j ->
+                if ts.3 >= ne then ts
+                else
+                  let eid = (ts.2).0 in
+                  let rest = (ts.2).1 in
+                  let port = ne - 1 - ts.3 in
+                  let p2 = graph_connect (ts.0) (ts.1) eid port in
+                  (p2, ts.1, rest, ts.3 + 1))
+              ne in
+            let tg = graph_set_node_type (tr.0) (tr.1) 4 in
+            (tg, (tr.1, tr.2), nsp - ne + 1, rws, nwsp, sc)
+
+          -- Project combine (54)
+          else if k == 54 then
+            let base_id = ns.0 in
+            let rns = ns.1 in
+            let fi = item.1 in
+            let step = graph_add_node_rt pg 13 in
+            let step2 = graph_set_field_index (step.0) (step.1) fi in
+            let p2 = graph_connect (step2.0) (step2.1) base_id 0 in
+            (p2, (step2.1, rns), nsp, rws, nwsp, sc)
+
+          -- Apply combine (55)
+          else if k == 55 then
+            let arg_id = ns.0 in
+            let func_id = (ns.1).0 in
+            let rns = (ns.1).1 in
+            let step = graph_add_node_rt pg 1 in
+            let p2 = graph_connect (step.0) (step.1) func_id 0 in
+            let p3 = graph_connect p2 (step.1) arg_id 1 in
+            (p3, (step.1, rns), nsp - 1, rws, nwsp, sc)
+
+          -- LetBind (56)
+          else if k == 56 then
+            let val_id = ns.0 in
+            let rns = ns.1 in
+            let nh = item.1 in
+            let rh = if nh >= 2147483648 then nh - 2147483648 else nh in
+            let new_sc = list_append sc (rh, val_id, 1) in
+            let body2 = item.2 in
+            (pg, rns, nsp - 1, (body2, rws), nwsp + 1, new_sc)
+
+          -- Pipe combine (57)
+          else if k == 57 then
+            let func_id = ns.0 in
+            let arg_id = (ns.1).0 in
+            let rns = (ns.1).1 in
+            let step = graph_add_node_rt pg 1 in
+            let p2 = graph_connect (step.0) (step.1) func_id 0 in
+            let p3 = graph_connect p2 (step.1) arg_id 1 in
+            (p3, (step.1, rns), nsp - 1, rws, nwsp, sc)
+
+          -- Fold combine (58)
+          else if k == 58 then
+            let list_id = ns.0 in
+            let fn_id = (ns.1).0 in
+            let base_id = ((ns.1).1).0 in
+            let rns = ((ns.1).1).1 in
+            let step = graph_add_node_rt pg 8 in
+            let p2 = graph_connect (step.0) (step.1) base_id 0 in
+            let p3 = graph_connect p2 (step.1) fn_id 1 in
+            let p4 = graph_connect p3 (step.1) list_id 2 in
+            (p4, (step.1, rns), nsp - 2, rws, nwsp, sc)
+
+          -- Fold combine 2-arg (58): pop step, base -> fold node
+          -- (already handled above for 3-arg case)
+
+          -- Not combine (59)
+          else if k == 59 then
+            let pred_id = ns.0 in
+            let rns = ns.1 in
+            let rt = graph_add_node_rt pg 5 in
+            let tl = graph_set_lit_value (rt.0) (rt.1) 4 1 in
+            let rf = graph_add_node_rt (tl.0) 5 in
+            let fl = graph_set_lit_value (rf.0) (rf.1) 4 0 in
+            let step = graph_add_guard_rt (fl.0) pred_id (fl.1) (tl.1) in
+            (step.0, (step.1, rns), nsp, rws, nwsp, sc)
+
+          -- Unfold combine (60): pop bound, step, seed -> Unfold node
+          else if k == 60 then
+            let bound_id = ns.0 in
+            let step_id = (ns.1).0 in
+            let seed_id = ((ns.1).1).0 in
+            let rns = ((ns.1).1).1 in
+            -- Create a dummy termination node (int 0)
+            let dt = graph_add_node_rt pg 5 in
+            let dt2 = graph_set_lit_value (dt.0) (dt.1) 0 0 in
+            -- Create Unfold node (kind=9 in SemanticGraph)
+            let step3 = graph_add_node_rt (dt2.0) 9 in
+            let p2 = graph_connect (step3.0) (step3.1) seed_id 0 in
+            let p3 = graph_connect p2 (step3.1) step_id 1 in
+            let p4 = graph_connect p3 (step3.1) (dt2.1) 2 in
+            let p5 = graph_connect p4 (step3.1) bound_id 3 in
+            (p5, (step3.1, rns), nsp - 2, rws, nwsp, sc)
+
+          -- Gap 2: Effect combine (61): pop 1 arg, create Effect node
+          -- item.1 = effect tag byte
+          else if k == 61 then
+            let arg_id = ns.0 in
+            let rns = ns.1 in
+            let tag = item.1 in
+            let step = graph_add_node_rt pg 10 in
+            let step2 = graph_set_prim_op (step.0) (step.1) tag in
+            let p2 = graph_connect (step2.0) (step2.1) arg_id 0 in
+            (p2, (step2.1, rns), nsp, rws, nwsp, sc)
+
+          -- Effect combine 2-arg (62): pop 2 args, create Effect node
+          else if k == 62 then
+            let arg2_id = ns.0 in
+            let arg1_id = (ns.1).0 in
+            let rns = (ns.1).1 in
+            let tag = item.1 in
+            let step = graph_add_node_rt pg 10 in
+            let step2 = graph_set_prim_op (step.0) (step.1) tag in
+            let p2 = graph_connect (step2.0) (step2.1) arg1_id 0 in
+            let p3 = graph_connect p2 (step2.1) arg2_id 1 in
+            (p3, (step2.1, rns), nsp - 1, rws, nwsp, sc)
+
+          -- ==========================================================
+          -- AST expression nodes
+          -- ==========================================================
+
+          -- IntLit (0)
+          else if k == 0 then
+            let step = graph_add_node_rt pg 5 in
+            let step2 = graph_set_lit_value (step.0) (step.1) 0 (item.1) in
+            (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- FloatLit (1): payload is scaled integer (int_part * 1000000 + dec_scaled)
+          else if k == 1 then
+            let step = graph_add_node_rt pg 5 in
+            let step2 = graph_set_lit_value (step.0) (step.1) 2 (item.1) in
+            (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- StringLit (2)
+          else if k == 2 then
+            let start = item.1 in
+            let slen = str_len src in
+            let scan = fold (start + 1, 0)
+              (\s2 _j ->
+                if s2.1 == 1 then s2
+                else if s2.0 >= slen then (s2.0, 1)
+                else if (char_at src s2.0) == 34 then (s2.0, 1)
+                else (s2.0 + 1, 0))
+              slen in
+            let content = str_slice src (start + 1) scan.0 in
+            let step = graph_add_node_rt pg 5 in
+            let step2 = graph_set_lit_value (step.0) (step.1) 7 content in
+            (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- BoolLit (3)
+          else if k == 3 then
+            let step = graph_add_node_rt pg 5 in
+            let step2 = graph_set_lit_value (step.0) (step.1) 4 (item.1) in
+            (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- Var (4)
+          else if k == 4 then
+            let nh = item.1 in
+            let nsc = list_len sc in
+            let lk = fold (0, 0, 0)
+              (\l _j ->
+                if l.0 == 1 then l
+                else
+                  let idx = nsc - 1 - _j in
+                  if idx < 0 then l
+                  else
+                    let e = list_nth sc idx in
+                    if e.0 == nh then (1, e.2, e.1)
+                    else l)
+              nsc in
+            if lk.0 == 1 then
+              -- Gap 3: Check binding tag
+              if lk.1 == 2 then
+                -- Fragment reference (import): create Ref node (kind 14 in graph)
+                let step = graph_add_node_rt pg 14 in
+                let step2 = graph_set_lit_value (step.0) (step.1) 8 (lk.2) in
+                (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+              else if lk.1 == 0 then
+                let step = graph_add_node_rt pg 5 in
+                let step2 = graph_set_lit_value (step.0) (step.1) 255 (lk.2) in
+                (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+              else
+                (pg, (lk.2, ns), nsp + 1, rws, nwsp, sc)
+            else
+              -- Gap 8: Check if nh matches a known primitive used as a value
+              -- Resolve prim by hash -> create Prim node with opcode
+              let prim_result = fold (0, 0)
+                (\pr _j ->
+                  if pr.0 == 1 then pr
+                  else
+                  -- Arithmetic
+                  if nh == 297 then (1, 0)
+                  else if nh == 330 then (1, 1)
+                  else if nh == 334 then (1, 2)
+                  else if nh == 323 then (1, 3)
+                  else if nh == 320 then (1, 4)
+                  else if nh == 314 then (1, 5)
+                  else if nh == 310 then (1, 6)
+                  else if nh == 324 then (1, 7)
+                  else if nh == 326 then (1, 8)
+                  else if nh == 342 then (1, 9)
+                  -- Bitwise
+                  else if nh == 626 then (1, 16)
+                  else if nh == 544 then (1, 17)
+                  else if nh == 664 then (1, 18)
+                  else if nh == 656 then (1, 19)
+                  else if nh == 327 then (1, 20)
+                  else if nh == 333 then (1, 21)
+                  -- Comparison
+                  else if nh == 214 then (1, 32)
+                  else if nh == 211 then (1, 33)
+                  else if nh == 224 then (1, 34)
+                  else if nh == 219 then (1, 35)
+                  else if nh == 209 then (1, 36)
+                  else if nh == 204 then (1, 37)
+                  -- Higher-order
+                  else if nh == 318 then (1, 48)
+                  else if nh == 646 then (1, 49)
+                  else if nh == 339 then (1, 50)
+                  -- Conversion
+                  else if nh == 1282 then (1, 64)
+                  else if nh == 1176 then (1, 68)
+                  -- Graph introspection
+                  else if nh == 1051 then (1, 128)
+                  else if nh == 1162 then (1, 129)
+                  else if nh == 1462 then (1, 130)
+                  else if nh == 1798 then (1, 131)
+                  else if nh == 1810 then (1, 132)
+                  else if nh == 1764 then (1, 133)
+                  else if nh == 1371 then (1, 134)
+                  else if nh == 1691 then (1, 135)
+                  else if nh == 2214 then (1, 136)
+                  else if nh == 1049 then (1, 137)
+                  else if nh == 1492 then (1, 138)
+                  else if nh == 1873 then (1, 139)
+                  else if nh == 1659 then (1, 140)
+                  else if nh == 1493 then (1, 141)
+                  else if nh == 2005 then (1, 142)
+                  else if nh == 1501 then (1, 143)
+                  -- State
+                  else if nh == 1199 then (1, 85)
+                  -- Evolution
+                  else if nh == 1842 then (1, 160)
+                  -- String ops
+                  else if nh == 759 then (1, 176)
+                  else if nh == 1072 then (1, 177)
+                  else if nh == 968 then (1, 178)
+                  else if nh == 1303 then (1, 179)
+                  else if nh == 996 then (1, 180)
+                  else if nh == 872 then (1, 181)
+                  else if nh == 1093 then (1, 182)
+                  else if nh == 1411 then (1, 183)
+                  else if nh == 654 then (1, 184)
+                  else if nh == 1652 then (1, 185)
+                  else if nh == 1405 then (1, 186)
+                  else if nh == 1172 then (1, 187)
+                  else if nh == 884 then (1, 188)
+                  else if nh == 993 then (1, 190)
+                  else if nh == 969 then (1, 191)
+                  else if nh == 722 then (1, 192)
+                  -- List ops
+                  else if nh == 1171 then (1, 193)
+                  else if nh == 869 then (1, 194)
+                  else if nh == 960 then (1, 195)
+                  else if nh == 976 then (1, 196)
+                  else if nh == 995 then (1, 197)
+                  else if nh == 1069 then (1, 198)
+                  else if nh == 1064 then (1, 199)
+                  -- Map ops
+                  else if nh == 1074 then (1, 200)
+                  else if nh == 733 then (1, 201)
+                  else if nh == 1067 then (1, 202)
+                  else if nh == 857 then (1, 203)
+                  else if nh == 856 then (1, 205)
+                  -- JSON
+                  else if nh == 1076 then (1, 208)
+                  else if nh == 1528 then (1, 209)
+                  else if nh == 1494 then (1, 211)
+                  -- Math
+                  else if nh == 979 then (1, 216)
+                  else if nh == 843 then (1, 217)
+                  else if nh == 854 then (1, 218)
+                  else if nh == 851 then (1, 219)
+                  else if nh == 846 then (1, 220)
+                  else if nh == 934 then (1, 222)
+                  else if nh == 1073 then (1, 223)
+                  else if nh == 738 then (1, 224)
+                  else if nh == 622 then (1, 225)
+                  else if nh == 1270 then (1, 227)
+                  -- Time
+                  else if nh == 1175 then (1, 228)
+                  else if nh == 1065 then (1, 229)
+                  -- Bytes
+                  else if nh == 1623 then (1, 230)
+                  else if nh == 1278 then (1, 231)
+                  else if nh == 965 then (1, 232)
+                  -- Lazy
+                  else if nh == 1191 then (1, 233)
+                  else if nh == 964 then (1, 235)
+                  else if nh == 861 then (1, 236)
+                  -- Graph construction
+                  else if nh == 955 then (1, 237)
+                  else if nh == 1504 then (1, 238)
+                  else if nh == 2017 then (1, 239)
+                  else if nh == 858 then (1, 240)
+                  else if nh == 2199 then (1, 241)
+                  -- Random
+                  else if nh == 737 then (1, 137)
+                  -- Graph type/cost introspection
+                  else if nh == 1998 then (1, 144)
+                  else if nh == 2019 then (1, 145)
+                  else if nh == 2007 then (1, 146)
+                  else (0, 0))
+                1 in
+              if prim_result.0 == 1 then
+                let step = graph_add_node_rt pg 0 in
+                let step2 = graph_set_prim_op (step.0) (step.1) (prim_result.1) in
+                (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+              else
+                -- Unknown: emit int 0
+                let step = graph_add_node_rt pg 5 in
+                let step2 = graph_set_lit_value (step.0) (step.1) 0 0 in
+                (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- UnitLit (5)
+          else if k == 5 then
+            let step = graph_add_node_rt pg 11 in
+            (step.0, (step.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- BinOp (10)
+          else if k == 10 then
+            let la = (item.2).0 in
+            let ra = (item.2).1 in
+            let opcode =
+              if item.1 == 0 then 0
+              else if item.1 == 1 then 1
+              else if item.1 == 2 then 2
+              else if item.1 == 3 then 3
+              else if item.1 == 4 then 4
+              else if item.1 == 5 then 32
+              else if item.1 == 6 then 33
+              else if item.1 == 7 then 34
+              else if item.1 == 8 then 35
+              else if item.1 == 9 then 36
+              else if item.1 == 10 then 37
+              else if item.1 == 11 then 16
+              else if item.1 == 12 then 17
+              else 0 in
+            let w1 = ((50, opcode, mt), rws) in
+            let w2 = (ra, w1) in
+            let w3 = (la, w2) in
+            (pg, ns, nsp, w3, nwsp + 3, sc)
+
+          -- UnaryOp (11)
+          else if k == 11 then
+            let opa = list_nth (item.2) 0 in
+            if item.1 == 0 then
+              (pg, ns, nsp, (opa, ((52, 5, mt), rws)), nwsp + 2, sc)
+            else
+              (pg, ns, nsp, (opa, ((59, 0, mt), rws)), nwsp + 2, sc)
+
+          -- App (12)
+          else if k == 12 then
+            let fa = (item.2).0 in
+            let aa = (item.2).1 in
+            if fa.0 == 12 then
+              let inf = (fa.2).0 in
+              let ina = (fa.2).1 in
+              if inf.0 == 12 then
+                -- Triple application: head a0 ina aa
+                let hd = (inf.2).0 in
+                let a0 = (inf.2).1 in
+                if hd.0 == 4 then
+                  -- fold base step coll (hash=421)
+                  if hd.1 == 421 then
+                    (pg, ns, nsp, (a0, (ina, (aa, ((58, 0, mt), rws)))), nwsp + 4, sc)
+                  -- guard pred body fallback (hash=531)
+                  else if hd.1 == 531 then
+                    (pg, ns, nsp, (a0, (ina, (aa, ((51, 0, mt), rws)))), nwsp + 4, sc)
+                  -- unfold seed step bound (hash=648)
+                  else if hd.1 == 648 then
+                    (pg, ns, nsp, (a0, (ina, (aa, ((60, 0, mt), rws)))), nwsp + 4, sc)
+                  else
+                    (pg, ns, nsp, ((12, 0, (inf, ina)), (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+                else
+                  (pg, ns, nsp, ((12, 0, (inf, ina)), (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+              else
+                -- Double application: inf ina aa
+                if inf.0 == 4 then
+                  -- max a b (hash=326)
+                  if inf.1 == 326 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 8, mt), rws))), nwsp + 3, sc)
+                  -- min a b (hash=324)
+                  else if inf.1 == 324 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 7, mt), rws))), nwsp + 3, sc)
+                  -- map f coll (hash=318) - binary prim 0x30
+                  else if inf.1 == 318 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 48, mt), rws))), nwsp + 3, sc)
+                  -- filter f coll (hash=646) - binary prim 0x31
+                  else if inf.1 == 646 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 49, mt), rws))), nwsp + 3, sc)
+                  -- zip a b (hash=339) - binary prim 0x32
+                  else if inf.1 == 339 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 50, mt), rws))), nwsp + 3, sc)
+                  -- pow a b (hash=342) - binary prim 0x09
+                  else if inf.1 == 342 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 9, mt), rws))), nwsp + 3, sc)
+                  -- fold base step (2-arg fold, hash=421)
+                  else if inf.1 == 421 then
+                    (pg, ns, nsp, (ina, (aa, ((58, 0, mt), rws))), nwsp + 3, sc)
+                  -- Gap 8: Additional binary prims
+                  -- bitand a b (hash=626)
+                  else if inf.1 == 626 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 16, mt), rws))), nwsp + 3, sc)
+                  -- bitor a b (hash=544)
+                  else if inf.1 == 544 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 17, mt), rws))), nwsp + 3, sc)
+                  -- bitxor a b (hash=664)
+                  else if inf.1 == 664 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 18, mt), rws))), nwsp + 3, sc)
+                  -- shl a b (hash=327)
+                  else if inf.1 == 327 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 20, mt), rws))), nwsp + 3, sc)
+                  -- shr a b (hash=333)
+                  else if inf.1 == 333 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 21, mt), rws))), nwsp + 3, sc)
+                  -- eq a b (hash=214)
+                  else if inf.1 == 214 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 32, mt), rws))), nwsp + 3, sc)
+                  -- ne a b (hash=211)
+                  else if inf.1 == 211 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 33, mt), rws))), nwsp + 3, sc)
+                  -- lt a b (hash=224)
+                  else if inf.1 == 224 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 34, mt), rws))), nwsp + 3, sc)
+                  -- gt a b (hash=219)
+                  else if inf.1 == 219 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 35, mt), rws))), nwsp + 3, sc)
+                  -- le a b (hash=209)
+                  else if inf.1 == 209 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 36, mt), rws))), nwsp + 3, sc)
+                  -- ge a b (hash=204)
+                  else if inf.1 == 204 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 37, mt), rws))), nwsp + 3, sc)
+                  -- str_concat a b (hash=1072)
+                  else if inf.1 == 1072 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 177, mt), rws))), nwsp + 3, sc)
+                  -- str_contains a b (hash=1303)
+                  else if inf.1 == 1303 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 179, mt), rws))), nwsp + 3, sc)
+                  -- str_split a b (hash=996) -- collision with str_upper arity 1
+                  else if inf.1 == 996 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 180, mt), rws))), nwsp + 3, sc)
+                  -- str_join a b (hash=872)
+                  else if inf.1 == 872 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 181, mt), rws))), nwsp + 3, sc)
+                  -- str_eq a b (hash=654)
+                  else if inf.1 == 654 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 184, mt), rws))), nwsp + 3, sc)
+                  -- str_starts_with a b (hash=1652)
+                  else if inf.1 == 1652 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 185, mt), rws))), nwsp + 3, sc)
+                  -- str_ends_with a b (hash=1405)
+                  else if inf.1 == 1405 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 186, mt), rws))), nwsp + 3, sc)
+                  -- char_at a b (hash=722)
+                  else if inf.1 == 722 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 192, mt), rws))), nwsp + 3, sc)
+                  -- list_append a b (hash=1171)
+                  else if inf.1 == 1171 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 193, mt), rws))), nwsp + 3, sc)
+                  -- list_nth a b (hash=869)
+                  else if inf.1 == 869 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 194, mt), rws))), nwsp + 3, sc)
+                  -- list_take a b (hash=960)
+                  else if inf.1 == 960 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 195, mt), rws))), nwsp + 3, sc)
+                  -- list_drop a b (hash=976)
+                  else if inf.1 == 976 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 196, mt), rws))), nwsp + 3, sc)
+                  -- list_range a b (hash=1064)
+                  else if inf.1 == 1064 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 199, mt), rws))), nwsp + 3, sc)
+                  -- map_get a b (hash=733)
+                  else if inf.1 == 733 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 201, mt), rws))), nwsp + 3, sc)
+                  -- map_remove a b (hash=1067) -- collision arity 2
+                  else if inf.1 == 1067 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 202, mt), rws))), nwsp + 3, sc)
+                  -- tuple_get a b (hash=857) -- collision with map_keys arity 1
+                  else if inf.1 == 857 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 210, mt), rws))), nwsp + 3, sc)
+                  -- random_int a b (hash=1067 same as map_remove, handled above)
+                  -- graph_eval a b (hash=1049)
+                  else if inf.1 == 1049 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 137, mt), rws))), nwsp + 3, sc)
+                  -- perform_effect tag value (hash=1479)
+                  else if inf.1 == 1479 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 161, mt), rws))), nwsp + 3, sc)
+                  -- graph_get_kind a b (hash=1462)
+                  else if inf.1 == 1462 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 130, mt), rws))), nwsp + 3, sc)
+                  -- graph_get_prim_op a b (hash=1798)
+                  else if inf.1 == 1798 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 131, mt), rws))), nwsp + 3, sc)
+                  -- graph_add_node_rt a b (hash=1764)
+                  else if inf.1 == 1764 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 133, mt), rws))), nwsp + 3, sc)
+                  -- graph_add_ref_rt a b (hash=1659)
+                  else if inf.1 == 1659 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 140, mt), rws))), nwsp + 3, sc)
+                  -- graph_get_lit_value a b (hash=2005)
+                  else if inf.1 == 2005 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 142, mt), rws))), nwsp + 3, sc)
+                  -- graph_outgoing a b (hash=1501)
+                  else if inf.1 == 1501 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 143, mt), rws))), nwsp + 3, sc)
+                  -- graph_set_root a b (hash=1504)
+                  else if inf.1 == 1504 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 238, mt), rws))), nwsp + 3, sc)
+                  -- bytes_concat a b (hash=1278)
+                  else if inf.1 == 1278 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 231, mt), rws))), nwsp + 3, sc)
+                  -- lazy_unfold a b (hash=1191)
+                  else if inf.1 == 1191 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 233, mt), rws))), nwsp + 3, sc)
+                  -- lazy_take a b (hash=964)
+                  else if inf.1 == 964 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 235, mt), rws))), nwsp + 3, sc)
+                  -- lazy_map a b (hash=861)
+                  else if inf.1 == 861 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 236, mt), rws))), nwsp + 3, sc)
+                  -- time_format a b (hash=1175)
+                  else if inf.1 == 1175 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 228, mt), rws))), nwsp + 3, sc)
+                  -- time_parse a b (hash=1065)
+                  else if inf.1 == 1065 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 229, mt), rws))), nwsp + 3, sc)
+                  -- Gap 2: 2-arg effect dispatch
+                  -- send_message a b (hash=1262)
+                  else if inf.1 == 1262 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 12, mt), rws))), nwsp + 3, sc)
+                  -- recv_message a b (hash=1268)
+                  else if inf.1 == 1268 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 13, mt), rws))), nwsp + 3, sc)
+                  -- tcp_connect a b (hash=1168)
+                  else if inf.1 == 1168 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 16, mt), rws))), nwsp + 3, sc)
+                  -- tcp_read a b (hash=834)
+                  else if inf.1 == 834 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 17, mt), rws))), nwsp + 3, sc)
+                  -- tcp_write a b (hash=977)
+                  else if inf.1 == 977 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 18, mt), rws))), nwsp + 3, sc)
+                  -- tcp_close a b (hash=956)
+                  else if inf.1 == 956 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 19, mt), rws))), nwsp + 3, sc)
+                  -- tcp_accept a b (hash=1046)
+                  else if inf.1 == 1046 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 21, mt), rws))), nwsp + 3, sc)
+                  -- file_read_bytes a b (hash=1569)
+                  else if inf.1 == 1569 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 23, mt), rws))), nwsp + 3, sc)
+                  -- file_write_bytes a b (hash=1712)
+                  else if inf.1 == 1712 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 24, mt), rws))), nwsp + 3, sc)
+                  -- file_close a b (hash=1045)
+                  else if inf.1 == 1045 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 25, mt), rws))), nwsp + 3, sc)
+                  -- random_bytes a b (hash=1287)
+                  else if inf.1 == 1287 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 30, mt), rws))), nwsp + 3, sc)
+                  -- thread_spawn a b (hash=1280)
+                  else if inf.1 == 1280 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 32, mt), rws))), nwsp + 3, sc)
+                  -- atomic_write a b (hash=1287 same as random_bytes, handled above)
+                  -- atomic_swap a b (hash=1175 same as time_format, handled above)
+                  -- atomic_add a b (hash=1029)
+                  else if inf.1 == 1029 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 37, mt), rws))), nwsp + 3, sc)
+                  -- rwlock_read a b (hash=1165)
+                  else if inf.1 == 1165 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 38, mt), rws))), nwsp + 3, sc)
+                  -- rwlock_write a b (hash=1308)
+                  else if inf.1 == 1308 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 39, mt), rws))), nwsp + 3, sc)
+                  -- call_native a b (hash=1154)
+                  else if inf.1 == 1154 then
+                    (pg, ns, nsp, (ina, (aa, ((62, 42, mt), rws))), nwsp + 3, sc)
+                  -- graph_get_node_cost a b (hash=1998)
+                  else if inf.1 == 1998 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 144, mt), rws))), nwsp + 3, sc)
+                  -- graph_get_node_type a b (hash=2007)
+                  else if inf.1 == 2007 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 146, mt), rws))), nwsp + 3, sc)
+                  else
+                    (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+                else
+                  (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+            else
+              -- Single application: fa aa
+              if fa.0 == 4 then
+                -- Gap 8: Full unary prim dispatch
+                -- neg x (hash=314)
+                if fa.1 == 314 then (pg, ns, nsp, (aa, ((52, 5, mt), rws)), nwsp + 2, sc)
+                -- abs x (hash=310)
+                else if fa.1 == 310 then (pg, ns, nsp, (aa, ((52, 6, mt), rws)), nwsp + 2, sc)
+                -- bitnot x (hash=656)
+                else if fa.1 == 656 then (pg, ns, nsp, (aa, ((52, 19, mt), rws)), nwsp + 2, sc)
+                -- int_to_float (hash=1282)
+                else if fa.1 == 1282 then (pg, ns, nsp, (aa, ((52, 64, mt), rws)), nwsp + 2, sc)
+                -- bool_to_int (hash=1176)
+                else if fa.1 == 1176 then (pg, ns, nsp, (aa, ((52, 68, mt), rws)), nwsp + 2, sc)
+                -- graph_nodes (hash=1162)
+                else if fa.1 == 1162 then (pg, ns, nsp, (aa, ((52, 129, mt), rws)), nwsp + 2, sc)
+                -- graph_get_root (hash=1492)
+                else if fa.1 == 1492 then (pg, ns, nsp, (aa, ((52, 138, mt), rws)), nwsp + 2, sc)
+                -- str_len (hash=759)
+                else if fa.1 == 759 then (pg, ns, nsp, (aa, ((52, 176, mt), rws)), nwsp + 2, sc)
+                -- str_to_int (hash=1093)
+                else if fa.1 == 1093 then (pg, ns, nsp, (aa, ((52, 182, mt), rws)), nwsp + 2, sc)
+                -- int_to_string (hash=1411)
+                else if fa.1 == 1411 then (pg, ns, nsp, (aa, ((52, 183, mt), rws)), nwsp + 2, sc)
+                -- str_trim (hash=884)
+                else if fa.1 == 884 then (pg, ns, nsp, (aa, ((52, 188, mt), rws)), nwsp + 2, sc)
+                -- str_upper (hash=996) -- collision with str_split, but arity-1
+                else if fa.1 == 996 then (pg, ns, nsp, (aa, ((52, 189, mt), rws)), nwsp + 2, sc)
+                -- str_lower (hash=993)
+                else if fa.1 == 993 then (pg, ns, nsp, (aa, ((52, 190, mt), rws)), nwsp + 2, sc)
+                -- str_chars (hash=969)
+                else if fa.1 == 969 then (pg, ns, nsp, (aa, ((52, 191, mt), rws)), nwsp + 2, sc)
+                -- list_sort (hash=995)
+                else if fa.1 == 995 then (pg, ns, nsp, (aa, ((52, 197, mt), rws)), nwsp + 2, sc)
+                -- list_dedup (hash=1069) -- collision with map_values, pick list_dedup
+                else if fa.1 == 1069 then (pg, ns, nsp, (aa, ((52, 198, mt), rws)), nwsp + 2, sc)
+                -- map_keys (hash=857) -- collision with tuple_get (arity 2)
+                else if fa.1 == 857 then (pg, ns, nsp, (aa, ((52, 203, mt), rws)), nwsp + 2, sc)
+                -- map_values (hash=1069 - same as list_dedup, handled above)
+                -- map_size (hash=856)
+                else if fa.1 == 856 then (pg, ns, nsp, (aa, ((52, 205, mt), rws)), nwsp + 2, sc)
+                -- (json_parse removed — hash=1076 no longer dispatched)
+                -- (json_stringify removed — hash=1528 no longer dispatched)
+                -- (json_array_len removed — hash=1494 no longer dispatched)
+                -- math_sqrt (hash=979)
+                else if fa.1 == 979 then (pg, ns, nsp, (aa, ((52, 216, mt), rws)), nwsp + 2, sc)
+                -- math_log (hash=843)
+                else if fa.1 == 843 then (pg, ns, nsp, (aa, ((52, 217, mt), rws)), nwsp + 2, sc)
+                -- math_exp (hash=854)
+                else if fa.1 == 854 then (pg, ns, nsp, (aa, ((52, 218, mt), rws)), nwsp + 2, sc)
+                -- math_sin (hash=851)
+                else if fa.1 == 851 then (pg, ns, nsp, (aa, ((52, 219, mt), rws)), nwsp + 2, sc)
+                -- math_cos (hash=846)
+                else if fa.1 == 846 then (pg, ns, nsp, (aa, ((52, 220, mt), rws)), nwsp + 2, sc)
+                -- math_floor (hash=1067) -- collision with map_remove/random_int (arity 2)
+                else if fa.1 == 1067 then (pg, ns, nsp, (aa, ((52, 221, mt), rws)), nwsp + 2, sc)
+                -- math_ceil (hash=934)
+                else if fa.1 == 934 then (pg, ns, nsp, (aa, ((52, 222, mt), rws)), nwsp + 2, sc)
+                -- math_round (hash=1073)
+                else if fa.1 == 1073 then (pg, ns, nsp, (aa, ((52, 223, mt), rws)), nwsp + 2, sc)
+                -- list_len (hash=858)
+                else if fa.1 == 858 then (pg, ns, nsp, (aa, ((52, 240, mt), rws)), nwsp + 2, sc)
+                -- bytes_from_ints (hash=1623)
+                else if fa.1 == 1623 then (pg, ns, nsp, (aa, ((52, 230, mt), rws)), nwsp + 2, sc)
+                -- bytes_len (hash=965)
+                else if fa.1 == 965 then (pg, ns, nsp, (aa, ((52, 232, mt), rws)), nwsp + 2, sc)
+                -- str_bc (hash=1172) = str_replace is arity 3, skip
+                -- thunk_force (hash=1176 same as bool_to_int, handled above)
+                -- Gap 2: Effect name dispatch for single-arg effects
+                -- print (hash=557)
+                else if fa.1 == 557 then
+                  (pg, ns, nsp, (aa, ((61, 0, mt), rws)), nwsp + 2, sc)
+                -- read_line (hash=931)
+                else if fa.1 == 931 then
+                  (pg, ns, nsp, (aa, ((61, 1, mt), rws)), nwsp + 2, sc)
+                -- sleep (hash=537)
+                else if fa.1 == 537 then
+                  (pg, ns, nsp, (aa, ((61, 8, mt), rws)), nwsp + 2, sc)
+                -- timestamp (hash=980)
+                else if fa.1 == 980 then
+                  (pg, ns, nsp, (aa, ((61, 9, mt), rws)), nwsp + 2, sc)
+                -- random (hash=641)
+                else if fa.1 == 641 then
+                  (pg, ns, nsp, (aa, ((61, 10, mt), rws)), nwsp + 2, sc)
+                -- log (hash=322)
+                else if fa.1 == 322 then
+                  (pg, ns, nsp, (aa, ((61, 11, mt), rws)), nwsp + 2, sc)
+                -- tcp_listen (hash=1077)
+                else if fa.1 == 1077 then
+                  (pg, ns, nsp, (aa, ((61, 20, mt), rws)), nwsp + 2, sc)
+                -- file_open (hash=945)
+                else if fa.1 == 945 then
+                  (pg, ns, nsp, (aa, ((61, 22, mt), rws)), nwsp + 2, sc)
+                -- file_stat (hash=955)
+                else if fa.1 == 955 then
+                  (pg, ns, nsp, (aa, ((61, 26, mt), rws)), nwsp + 2, sc)
+                -- dir_list (hash=858 - collision with list_len, list_len wins)
+                -- env_get (hash=744)
+                else if fa.1 == 744 then
+                  (pg, ns, nsp, (aa, ((61, 28, mt), rws)), nwsp + 2, sc)
+                -- clock_ns (hash=844)
+                else if fa.1 == 844 then
+                  (pg, ns, nsp, (aa, ((61, 29, mt), rws)), nwsp + 2, sc)
+                -- sleep_ms (hash=856 - collision with map_size, map_size wins)
+                -- thread_join (hash=1159)
+                else if fa.1 == 1159 then
+                  (pg, ns, nsp, (aa, ((61, 33, mt), rws)), nwsp + 2, sc)
+                -- atomic_read (hash=1144)
+                else if fa.1 == 1144 then
+                  (pg, ns, nsp, (aa, ((61, 34, mt), rws)), nwsp + 2, sc)
+                -- rwlock_release (hash=1490)
+                else if fa.1 == 1490 then
+                  (pg, ns, nsp, (aa, ((61, 40, mt), rws)), nwsp + 2, sc)
+                -- mmap_exec (hash=943)
+                else if fa.1 == 943 then
+                  (pg, ns, nsp, (aa, ((61, 41, mt), rws)), nwsp + 2, sc)
+                -- ffi_call (hash=816)
+                else if fa.1 == 816 then
+                  (pg, ns, nsp, (aa, ((61, 43, mt), rws)), nwsp + 2, sc)
+                else
+                  (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+              -- OpSection (16) used as function: apply to argument
+              else if fa.0 == 16 then
+                (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+              else
+                (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+
+          -- Lambda (13)
+          else if k == 13 then
+            let ph = item.1 in
+            let ba = list_nth (item.2) 0 in
+            let nsc = list_len sc in
+            let pc = fold 0
+              (\c2 _j ->
+                if _j >= nsc then c2
+                else
+                  let e = list_nth sc _j in
+                  if e.2 == 0 then c2 + 1 else c2)
+              nsc in
+            let new_sc = list_append sc (ph, pc, 0) in
+            (pg, ns, nsp, (ba, rws), nwsp + 1, new_sc)
+
+          -- Let/in (14)
+          else if k == 14 then
+            let nh = item.1 in
+            let va = (item.2).0 in
+            let ba = (item.2).1 in
+            (pg, ns, nsp, (va, ((56, nh, ba), rws)), nwsp + 2, sc)
+
+          -- If/then/else (15)
+          else if k == 15 then
+            let ca = (item.2).0 in
+            let ta = (item.2).1 in
+            let ea = (item.2).2 in
+            (pg, ns, nsp, (ca, (ta, (ea, ((51, 0, mt), rws)))), nwsp + 4, sc)
+
+          -- Tuple (17)
+          else if k == 17 then
+            let elems = item.2 in
+            let ne = list_len elems in
+            if ne == 0 then
+              let step = graph_add_node_rt pg 11 in
+              (step.0, (step.1, ns), nsp + 1, rws, nwsp, sc)
+            else
+              let w1 = ((53, ne, mt), rws) in
+              let wf = fold (w1, 0)
+                (\wst _j ->
+                  if wst.1 >= ne then wst
+                  else
+                    let idx = ne - 1 - wst.1 in
+                    let elem = list_nth elems idx in
+                    ((elem, wst.0), wst.1 + 1))
+                ne in
+              (pg, ns, nsp, wf.0, nwsp + ne + 1, sc)
+
+          -- TupleAccess (18)
+          else if k == 18 then
+            let ba = list_nth (item.2) 0 in
+            let fi = item.1 in
+            (pg, ns, nsp, (ba, ((54, fi, mt), rws)), nwsp + 2, sc)
+
+          -- OpSection (16): operator as first-class value
+          -- op_id: 0=add,1=sub,2=mul,3=div,4=mod,5=eq,6=ne,7=lt,8=gt,9=le,10=ge
+          else if k == 16 then
+            let op_id = item.1 in
+            let opcode =
+              if op_id == 0 then 0
+              else if op_id == 1 then 1
+              else if op_id == 2 then 2
+              else if op_id == 3 then 3
+              else if op_id == 4 then 4
+              else if op_id == 5 then 32
+              else if op_id == 6 then 33
+              else if op_id == 7 then 34
+              else if op_id == 8 then 35
+              else if op_id == 9 then 36
+              else if op_id == 10 then 37
+              else 0 in
+            let step = graph_add_node_rt pg 0 in
+            let step2 = graph_set_prim_op (step.0) (step.1) opcode in
+            (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+
+          -- Pipe (19)
+          else if k == 19 then
+            let la = (item.2).0 in
+            let ra = (item.2).1 in
+            (pg, ns, nsp, (la, (ra, ((57, 0, mt), rws))), nwsp + 3, sc)
+
+          -- Match (20): scrutinee with arms -> cascading guards
+          -- children = (scrutinee, arms_list)
+          -- Each arm = (pattern_kind, pattern_val, body_ast)
+          -- Lowered as: guard (scrutinee == pat0) body0
+          --               (guard (scrutinee == pat1) body1 ... default)
+          else if k == 20 then
+            let scr = (item.2).0 in
+            let arms = (item.2).1 in
+            let n_arms = list_len arms in
+            if n_arms == 0 then
+              let step = graph_add_node_rt pg 5 in
+              let step2 = graph_set_lit_value (step.0) (step.1) 0 0 in
+              (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+            else if n_arms == 1 then
+              -- Single arm: just emit the body (with scrutinee bound)
+              let arm = list_nth arms 0 in
+              let body = arm.2 in
+              (pg, ns, nsp, (body, rws), nwsp + 1, sc)
+            else
+              -- Multiple arms: push scrutinee first, then cascade guards
+              -- We build: push scrutinee, then for each arm push a guard-combine
+              -- For now, flatten as nested if-then-else using guard combines
+              -- Push arms in reverse, with combine operations
+              let last_arm = list_nth arms (n_arms - 1) in
+              let last_body = last_arm.2 in
+              -- Start work stack with last arm body as fallback
+              let w1 = (last_body, rws) in
+              let nw1 = nwsp + 1 in
+              -- For each arm from n_arms-2 down to 0, push:
+              --   scrutinee, pattern_lit, eq_compare(50), arm_body, guard_combine(51)
+              let wf = fold (w1, nw1, n_arms - 2)
+                (\wst _j ->
+                  if wst.2 < 0 then wst
+                  else
+                    let arm = list_nth arms wst.2 in
+                    let arm_body = arm.2 in
+                    -- Push: scr, patlit, eq-combine, arm_body, guard-combine
+                    let w_guard = ((51, 0, mt), wst.0) in
+                    let w_body = (arm_body, w_guard) in
+                    let w_eq = ((50, 32, mt), w_body) in
+                    let w_pat = ((0, arm.1, mt), w_eq) in
+                    let w_scr = (scr, w_pat) in
+                    (w_scr, wst.1 + 5, wst.2 - 1))
+                n_arms in
+              (pg, ns, nsp, wf.0, wf.1, sc)
+
+          -- ForAll (21): just lower the body expression (type variables erased)
+          else if k == 21 then
+            let ba = list_nth (item.2) 0 in
+            (pg, ns, nsp, (ba, rws), nwsp + 1, sc)
+
+          -- CostExpr (22): skip in lowering (cost is metadata)
+          else if k == 22 then
+            (pg, ns, nsp, rws, nwsp, sc)
+
+          -- Unknown: skip
+          else (pg, ns, nsp, rws, nwsp, sc)
+      )
+      512 in
+
+    let pre_graph = graph_set_root (result.0) ((result.1).0) in
+    let root_id = (result.1).0 in
+
+    -- Apply cost bound right after setting root
+    let cost_graph =
+      if cost_val_early >= 2 then
+        graph_set_cost pre_graph root_id cost_val_early
+      else if cost_val_early == 1 then
+        graph_set_cost pre_graph root_id 1
+      else pre_graph in
+
+    -- Attach capability metadata if present.
+    -- cap_info is 0 (no capabilities) or a list of entries.
+    -- Each entry: (is_allow, name_hash, name_len, arg_start, arg_end)
+    -- Hub node: Lit(type_tag=0, value=n_caps) connected to root at port 127.
+    -- Entry nodes: Lit(type_tag=0, packed_value) connected to hub at ports 0..n.
+    -- Packed entry: is_allow + name_hash * 2 + name_len * 8192
+    let capped_graph =
+      if cap_info == 0 then cost_graph
+      else
+        let n_caps = list_len cap_info in
+        if n_caps == 0 then cost_graph
+        else
+          let hub_step = graph_add_node_rt cost_graph 5 in
+          let hub_lit = graph_set_lit_value (hub_step.0) (hub_step.1) 0 n_caps in
+          let g1 = graph_connect (hub_lit.0) root_id (hub_lit.1) 127 in
+          let cap_result = fold (g1, 0)
+            (\cr _i ->
+              if cr.1 >= n_caps then cr
+              else
+                let e = list_nth cap_info (cr.1) in
+                let packed = (e.0) + (e.1) * 2 + (e.2) * 8192 in
+                let entry_step = graph_add_node_rt (cr.0) 5 in
+                let entry_lit = graph_set_lit_value (entry_step.0) (entry_step.1) 0 packed in
+                let g2 = graph_connect (entry_lit.0) (hub_lit.1) (entry_lit.1) (cr.1) in
+                (g2, cr.1 + 1))
+            n_caps in
+          cap_result.0 in
+
+    let final_graph = capped_graph in
+
+    -- Build source map from the graph
+    let body_start = 0 in
+    let body_end = str_len src in
+    let source_map = list_append mt (root_id, body_start, body_end) in
+
+    let nodes = graph_nodes final_graph in
+    let n_nodes = list_len nodes in
+
+    let ext_smap = fold source_map
+      (\sm _i ->
+        if _i >= n_nodes then sm
+        else
+          let nid = list_nth nodes _i in
+          let chunk = if n_nodes > 0 then body_end / (n_nodes + 1) else body_end in
+          let es = _i * chunk in
+          let ee = if es + chunk > body_end then body_end else es + chunk in
+          list_append sm (nid, es, ee))
+      n_nodes in
+
+    -- Return: (Program, source_map)
+    (final_graph, ext_smap)

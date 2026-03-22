@@ -1,0 +1,110 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Inline helper: fold with early termination via (continue?, acc) pairs.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    if state.0 then step_fn state.1 elem else state
+  ) xs in
+  result.1
+
+-- Union-Find (Disjoint Set)
+-- Tracks a partition of elements into disjoint sets.
+-- Supports union and find operations with path compression.
+--
+-- Representation: tuple where parent[i] = parent of element i.
+-- If parent[i] == i, then i is a root (representative of its set).
+-- Also track rank for union by rank.
+-- State: (parent_tuple, rank_tuple)
+
+-- Create a new union-find with n elements (each in its own set).
+let uf_new n : Int -> Tuple [cost: Linear(n)] =
+  let parents = list_range 0 n in
+  let ranks = map (\i -> 0) (list_range 0 n) in
+  (parents, ranks)
+
+-- Find the root representative of element x (with path compression).
+let rec uf_find parents x : Tuple -> Int -> Tuple [cost: Unknown] =
+  let px = list_nth parents x in
+  if px == x then (parents, x)
+  else
+    -- Recursively find root
+    let result = uf_find parents px in
+    let new_parents = result.0 in
+    let root = result.1 in
+    -- Path compression: point x directly to root
+    let compressed = list_set new_parents x root in
+    (compressed, root)
+
+-- Union two sets. Returns updated (parents, ranks).
+let uf_union state x y : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  let parents = state.0 in
+  let ranks = state.1 in
+  let fx = uf_find parents x in
+  let parents2 = fx.0 in
+  let root_x = fx.1 in
+  let fy = uf_find parents2 y in
+  let parents3 = fy.0 in
+  let root_y = fy.1 in
+  if root_x == root_y then (parents3, ranks)  -- already in same set
+  else
+    -- Union by rank
+    let rank_x = list_nth ranks root_x in
+    let rank_y = list_nth ranks root_y in
+    if rank_x < rank_y then
+      (list_set parents3 root_x root_y, ranks)
+    else if rank_x > rank_y then
+      (list_set parents3 root_y root_x, ranks)
+    else
+      let new_parents = list_set parents3 root_y root_x in
+      let new_ranks = list_set ranks root_x (rank_x + 1) in
+      (new_parents, new_ranks)
+
+-- Check if two elements are in the same set.
+let uf_connected state x y : Tuple -> Int -> Int -> Bool [cost: Unknown] =
+  let parents = state.0 in
+  let fx = uf_find parents x in
+  let fy = uf_find fx.0 y in
+  fx.1 == fy.1
+
+-- Count the number of distinct sets.
+let uf_count_sets state : Tuple -> Int [cost: Unknown] =
+  let parents = state.0 in
+  let n = list_len parents in
+  let roots = filter (\i -> list_nth parents i == i) (list_range 0 n) in
+  list_len roots
+
+-- Kruskal's MST using union-find.
+-- Edges: tuple of (weight, from, to) sorted by weight.
+-- Returns the edges in the MST and total weight.
+let kruskal n edges : Int -> Tuple -> Tuple [cost: Unknown] =
+  let sorted_edges = list_sort edges in  -- sort by weight (first element)
+  let init = (uf_new n, (), 0) in  -- (uf_state, mst_edges, total_weight)
+  fold init (\state edge ->
+    let uf = state.0 in
+    let mst = state.1 in
+    let total = state.2 in
+    let w = list_nth edge 0 in
+    let u = list_nth edge 1 in
+    let v = list_nth edge 2 in
+    if uf_connected uf u v then state
+    else
+      let new_uf = uf_union uf u v in
+      (new_uf, list_append mst edge, total + w)
+  ) sorted_edges
+
+-- Test
+let test_union_find x : Int -> Tuple =
+  let uf = uf_new 6 in
+  let uf = uf_union uf 0 1 in
+  let uf = uf_union uf 2 3 in
+  let uf = uf_union uf 0 2 in
+  let connected_01 = uf_connected uf 0 1 in  -- true
+  let connected_03 = uf_connected uf 0 3 in  -- true
+  let connected_04 = uf_connected uf 0 4 in  -- false
+  let sets = uf_count_sets uf in              -- 3 (sets: {0,1,2,3}, {4}, {5})
+  -- Kruskal's MST on a small graph
+  let edges = ((1, 0, 1), (3, 0, 2), (2, 1, 2), (4, 1, 3), (5, 2, 3)) in
+  let mst = kruskal 4 edges in
+  (connected_01, connected_03, connected_04, sets, mst.2)

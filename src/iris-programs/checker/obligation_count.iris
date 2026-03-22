@@ -1,0 +1,18 @@
+-- Count verification obligations in a SemanticGraph.
+--
+-- Input:
+--   program : SemanticGraph
+--
+-- Output: Int (number of nodes = number of proof obligations)
+--
+-- Each node in the graph represents one verification obligation.
+-- We use graph_nodes to get all node IDs as a tuple, then fold
+-- over them with a lambda that increments the accumulator by 1
+-- for each element (ignoring the element value).
+--
+-- Note: this is a Tier 1 program (uses Fold). The Rust test
+-- equivalent uses Fold mode 0x05 (count), which is also Tier 1.
+
+let obligation_count program : Int -> Int [cost: Linear(n)] =
+  let nodes = graph_nodes program in
+  fold 0 (\pair -> pair.0 + 1) nodes

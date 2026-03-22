@@ -1,0 +1,27 @@
+-- Detect product pattern: output = product of input list elements
+--
+-- Takes a list of (list_input, expected_output) pairs and count n.
+-- We fold each inner list with multiplication (base 1), then compare
+-- to expected output.
+-- Returns confidence score 0-100.
+
+-- Compute product of all elements in a list
+let product_list xs : Int -> Int [cost: Linear(xs)] =
+  fold 1 (\acc x -> acc * x) xs
+
+-- Check if a single test case's output matches the product of its input list
+-- pair.0 = input list, pair.1 = expected output
+let is_product_match pair : (Int, Int) -> Int [cost: Linear(pair)] =
+  if product_list pair.0 == pair.1 then 1 else 0
+
+-- Count how many test cases match the product pattern
+let count_product_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_product_match pair) pairs
+
+-- Detect product pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_product pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_product_matches pairs in
+    (matches * 100) / n

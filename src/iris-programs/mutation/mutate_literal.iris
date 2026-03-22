@@ -1,0 +1,11 @@
+-- Mutate a literal node's value
+-- For Int: add a small delta. For Bool: flip.
+let mutate_int program node_id delta =
+  let current = graph_get_lit_value program node_id in
+  let new_value = current + delta in
+  graph_set_lit_value program node_id 0 new_value
+
+let flip_bool program node_id =
+  let current = graph_get_lit_value program node_id in
+  let flipped = if current == 0 then 1 else 0 in
+  graph_set_lit_value program node_id 4 flipped

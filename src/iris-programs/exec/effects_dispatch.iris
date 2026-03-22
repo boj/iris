@@ -1,0 +1,253 @@
+-- Effect handler dispatch: map effect tags to handler functions.
+--
+-- Mirrors the effect handling from iris-exec effects.rs.
+--
+-- The Rust effect system defines EffectTag values:
+--   0x00 = Print,      0x01 = ReadLine,    0x02 = HttpGet,     0x03 = HttpPost,
+--   0x04 = FileRead,   0x05 = FileWrite,   0x06 = DbQuery,     0x07 = DbExecute,
+--   0x08 = Sleep,      0x09 = Timestamp,   0x0A = Random,      0x0B = Log,
+--   0x0C = SendMessage, 0x0D = RecvMessage, 0x0E = FfiCall
+--
+-- Raw I/O primitives (0x10-0x1F):
+--   0x10 = TcpConnect,  0x11 = TcpRead,     0x12 = TcpWrite,    0x13 = TcpClose,
+--   0x14 = TcpListen,   0x15 = TcpAccept,   0x16 = FileOpen,    0x17 = FileReadBytes,
+--   0x18 = FileWriteBytes, 0x19 = FileClose, 0x1A = FileStat,   0x1B = DirList,
+--   0x1C = EnvGet,      0x1D = ClockNs,     0x1E = RandomBytes, 0x1F = SleepMs
+--
+-- Threading primitives (0x20-0x28):
+--   0x20 = ThreadSpawn, 0x21 = ThreadJoin,  0x22 = AtomicRead,  0x23 = AtomicWrite,
+--   0x24 = AtomicSwap,  0x25 = AtomicAdd,   0x26 = RwLockRead,  0x27 = RwLockWrite,
+--   0x28 = RwLockRelease
+--
+-- JIT primitives (0x29-0x2A):
+--   0x29 = MmapExec,    0x2A = CallNative
+--
+-- FFI (0x2B):
+--   0x2B = FfiCall
+--
+-- Handler policies from effects.rs:
+--   NoOpHandler:      returns Unit (0) for everything (safe for evolution)
+--   LoggingHandler:   captures requests (returns 0, logs tag)
+--   RealHandler:      performs actual I/O for all std-library-feasible effects
+--   SandboxedHandler: wraps another handler with allow/deny lists
+--   CompositeHandler: chains multiple handlers, trying each in order
+--
+-- Security limits (from effects.rs):
+--   MAX_CONNECTIONS = 1024
+--   MAX_LISTENERS   = 256
+--   MAX_FILES       = 1024
+--   MAX_THREADS     = 256
+--   MAX_MMAP_SIZE   = 1048576  (1 MiB)
+--   MAX_SLEEP_MS    = 3600000  (1 hour)
+--
+-- Inputs:
+--   effect_tag  : Int (the effect tag byte)
+--   arg         : Int (the effect argument, if applicable)
+--   handler_mode: Int (0=noop, 1=real, 2=sandboxed, 3=logging, 4=composite)
+--
+-- Output: DispatchResult ADT
+--   DispatchOk(value)  — effect completed successfully
+--   EffectUnsupported  — effect tag not supported by this handler
+--   EffectDenied       — effect blocked by sandbox policy
+--   DispatchErr(code)  — error (e.g. no host primitive available)
+
+type DispatchResult = DispatchOk(Int) | EffectUnsupported | EffectDenied | DispatchErr(Int)
+
+-- Security limit constants
+let max_connections : Int [cost: Const(1)] = 1024
+let max_listeners : Int [cost: Const(1)] = 256
+let max_files : Int [cost: Const(1)] = 1024
+let max_threads : Int [cost: Const(1)] = 256
+let max_mmap_size : Int [cost: Const(1)] = 1048576
+let max_sleep_ms : Int [cost: Const(1)] = 3600000
+
+-- NoOp handler: returns Unit (0) for all effects.
+-- Safe for evolution: effects are side-effect-free during fitness evaluation.
+let noop_dispatch effect_tag arg : Int -> Int -> DispatchResult [cost: Const(1)] =
+  DispatchOk(0)
+
+-- Logging handler: captures effect request, returns Unit.
+-- The log is maintained externally; this returns the tag for inspection.
+let logging_dispatch effect_tag arg : Int -> Int -> DispatchResult [cost: Const(1)] =
+  DispatchOk(effect_tag)
+
+-- Check if an effect tag is permitted by a sandbox allow-list.
+-- The allow-list is encoded as a bitmask: bit N = tag N is allowed.
+let effect_allowed effect_tag allow_mask : Int -> Int -> Int [cost: Const(3)] =
+  let shifted = shr allow_mask effect_tag in
+  bitand shifted 1
+
+-- Real handler dispatch: implements actual effect behavior.
+-- For effects that need host I/O, delegates to host primitives where available.
+--
+-- LIMITATION: IRIS .iris programs have NO direct file/network/thread primitives.
+-- The Rust effects.rs RealHandler performs actual I/O via syscalls; this .iris
+-- dispatch can only model effects that are pure computation (Random, Timestamp,
+-- ClockNs) or acknowledge the request without performing I/O (Log, Print).
+--
+-- Effects that CANNOT do real I/O return DispatchErr(0) indicating "no host
+-- primitive available". The Rust RealHandler should be used for real I/O.
+-- Effects that CAN be modeled in pure IRIS return DispatchOk(value).
+let real_dispatch effect_tag arg : Int -> Int -> DispatchResult [cost: Const(10)] =
+  -- Print (0x00): IRIS has no stdout primitive. Acknowledges the request.
+  -- Returns DispatchOk(0) — the Rust handler actually writes to stdout.
+  if effect_tag == 0 then DispatchOk(0)
+  -- ReadLine (0x01): IRIS has no stdin primitive. Returns empty (0).
+  else if effect_tag == 1 then DispatchErr(0)
+  -- HttpGet (0x02): requires host networking support.
+  else if effect_tag == 2 then EffectUnsupported
+  -- HttpPost (0x03): requires host networking support.
+  else if effect_tag == 3 then EffectUnsupported
+  -- FileRead (0x04): requires host filesystem access.
+  else if effect_tag == 4 then DispatchErr(0)
+  -- FileWrite (0x05): requires host filesystem access.
+  else if effect_tag == 5 then DispatchErr(0)
+  -- DbQuery (0x06): requires database connection.
+  else if effect_tag == 6 then EffectUnsupported
+  -- DbExecute (0x07): requires database connection.
+  else if effect_tag == 7 then EffectUnsupported
+  -- Sleep (0x08): IRIS cannot sleep; acknowledge with capped duration.
+  else if effect_tag == 8 then
+    let capped = if arg > max_sleep_ms then max_sleep_ms else arg in
+    DispatchOk(capped)
+  -- Timestamp (0x09): Modelable — return arg as simulated timestamp.
+  -- In a real host, this would call clock_gettime. Here the caller can
+  -- pass the current timestamp as arg for simulation.
+  else if effect_tag == 9 then DispatchOk(arg)
+  -- Random (0x0A): Fully modelable — xorshift64 PRNG.
+  -- Pass previous random state as arg (0 = use default seed).
+  else if effect_tag == 10 then
+    let x = if arg == 0 then 6364136223846793005 else arg in
+    let x1 = bitxor x (shl x 13) in
+    let x2 = bitxor x1 (shr x1 7) in
+    let x3 = bitxor x2 (shl x2 17) in
+    DispatchOk(x3)
+  -- Log (0x0B): Modelable — accumulate log entries.
+  -- Returns the arg value back as acknowledgment (caller can accumulate).
+  else if effect_tag == 11 then DispatchOk(arg)
+  -- SendMessage (0x0C): requires a MessageBus host.
+  else if effect_tag == 12 then EffectUnsupported
+  -- RecvMessage (0x0D): requires a MessageBus host.
+  else if effect_tag == 13 then EffectUnsupported
+  -- FfiCall (0x0E): requires FFI host support.
+  else if effect_tag == 14 then EffectUnsupported
+  -- Raw I/O primitives (0x10-0x1F): all require host support.
+  -- TcpConnect (0x10) through TcpAccept (0x15): network I/O
+  else if effect_tag == 16 then DispatchErr(0)   -- TcpConnect
+  else if effect_tag == 17 then DispatchErr(0)   -- TcpRead
+  else if effect_tag == 18 then DispatchErr(0)   -- TcpWrite
+  else if effect_tag == 19 then DispatchErr(0)   -- TcpClose
+  else if effect_tag == 20 then DispatchErr(0)   -- TcpListen
+  else if effect_tag == 21 then DispatchErr(0)   -- TcpAccept
+  -- File I/O (0x16-0x1B): require host filesystem
+  else if effect_tag == 22 then DispatchErr(0)   -- FileOpen
+  else if effect_tag == 23 then DispatchErr(0)   -- FileReadBytes
+  else if effect_tag == 24 then DispatchErr(0)   -- FileWriteBytes
+  else if effect_tag == 25 then DispatchErr(0)   -- FileClose
+  else if effect_tag == 26 then DispatchErr(0)   -- FileStat
+  else if effect_tag == 27 then DispatchErr(0)   -- DirList
+  -- EnvGet (0x1C): requires host environment access
+  else if effect_tag == 28 then DispatchErr(0)
+  -- ClockNs (0x1D): Modelable — return arg as simulated nanosecond clock.
+  else if effect_tag == 29 then DispatchOk(arg)
+  -- RandomBytes (0x1E): Modelable via xorshift (returns single random i64).
+  else if effect_tag == 30 then
+    let x = if arg == 0 then 1442695040888963407 else arg in
+    let x1 = bitxor x (shl x 13) in
+    let x2 = bitxor x1 (shr x1 7) in
+    let x3 = bitxor x2 (shl x2 17) in
+    DispatchOk(x3)
+  -- SleepMs (0x1F): IRIS cannot sleep; acknowledge with duration.
+  else if effect_tag == 31 then
+    let capped = if arg > max_sleep_ms then max_sleep_ms else arg in
+    DispatchOk(capped)
+  -- Threading primitives (0x20-0x28): require host threading support.
+  else if effect_tag == 32 then DispatchErr(0)   -- ThreadSpawn
+  else if effect_tag == 33 then DispatchErr(0)   -- ThreadJoin
+  -- Atomic ops (0x22-0x25): Modelable as simple read/write on a value.
+  else if effect_tag == 34 then DispatchOk(arg)  -- AtomicRead: return current value
+  else if effect_tag == 35 then DispatchOk(arg)  -- AtomicWrite: acknowledge
+  else if effect_tag == 36 then DispatchOk(arg)  -- AtomicSwap: return old value (= arg)
+  else if effect_tag == 37 then DispatchOk(arg)  -- AtomicAdd: return old value (= arg)
+  -- RwLock (0x26-0x28): Modelable as no-op in single-threaded context.
+  else if effect_tag == 38 then DispatchOk(1)    -- RwLockRead: success
+  else if effect_tag == 39 then DispatchOk(1)    -- RwLockWrite: success
+  else if effect_tag == 40 then DispatchOk(1)    -- RwLockRelease: success
+  -- MmapExec (0x29): requires host mmap support.
+  else if effect_tag == 41 then DispatchErr(0)
+  -- CallNative (0x2A): requires host native call support.
+  else if effect_tag == 42 then DispatchErr(0)
+  -- FfiCall (0x2B): requires host FFI support.
+  else if effect_tag == 43 then EffectUnsupported
+  -- Unknown effect tag
+  else EffectUnsupported
+
+-- Sandboxed handler: only allow safe effects.
+-- The allow-list is controlled by the sandbox configuration.
+-- Default sandbox: allows Timestamp, Random, Log, ClockNs only.
+let sandboxed_dispatch effect_tag arg allow_mask : Int -> Int -> Int -> DispatchResult [cost: Const(5)] =
+  let allowed = effect_allowed effect_tag allow_mask in
+  if allowed == 1 then
+    real_dispatch effect_tag arg
+  else
+    EffectDenied
+
+-- Main dispatch entry point.
+let effects_dispatch effect_tag arg handler_mode : Int -> Int -> Int -> DispatchResult [cost: Const(10)] =
+  if handler_mode == 0 then
+    noop_dispatch effect_tag arg
+  else if handler_mode == 1 then
+    real_dispatch effect_tag arg
+  else if handler_mode == 2 then
+    -- Default sandboxed: allow Timestamp(9), Random(10), Log(11), ClockNs(29)
+    let default_mask = 3584 + 536870912 in  -- bits 9,10,11 + bit 29
+    sandboxed_dispatch effect_tag arg default_mask
+  else if handler_mode == 3 then
+    logging_dispatch effect_tag arg
+  else if handler_mode == 4 then
+    -- Composite: try real first, fall back to noop
+    let result = real_dispatch effect_tag arg in
+    match result with
+    | EffectUnsupported -> noop_dispatch effect_tag arg
+    | DispatchOk(v) -> DispatchOk(v)
+    | EffectDenied -> EffectDenied
+    | DispatchErr(e) -> DispatchErr(e)
+  else
+    noop_dispatch effect_tag arg
+
+-- Classify an effect by its risk level.
+-- 0 = pure (no side effects), 1 = read-only, 2 = write, 3 = network, 4 = system
+let effect_risk_level effect_tag : Int -> Int [cost: Const(5)] =
+  -- Pure effects (no real I/O)
+  if effect_tag == 9 then 0       -- Timestamp
+  else if effect_tag == 10 then 0 -- Random
+  else if effect_tag == 29 then 0 -- ClockNs
+  -- Read-only effects
+  else if effect_tag == 11 then 1 -- Log (writes to stderr but read-only semantics)
+  else if effect_tag == 0 then 1  -- Print
+  else if effect_tag == 1 then 1  -- ReadLine
+  else if effect_tag == 4 then 1  -- FileRead
+  else if effect_tag == 26 then 1 -- FileStat
+  else if effect_tag == 27 then 1 -- DirList
+  else if effect_tag == 28 then 1 -- EnvGet
+  -- Write effects
+  else if effect_tag == 5 then 2  -- FileWrite
+  else if effect_tag == 6 then 2  -- DbQuery (may have side effects)
+  else if effect_tag == 7 then 2  -- DbExecute
+  else if effect_tag == 8 then 2  -- Sleep
+  -- Network effects
+  else if effect_tag == 2 then 3  -- HttpGet
+  else if effect_tag == 3 then 3  -- HttpPost
+  else if effect_tag == 12 then 3 -- SendMessage
+  else if effect_tag == 13 then 3 -- RecvMessage
+  else if effect_tag == 16 then 3 -- TcpConnect
+  -- System effects
+  else if effect_tag == 32 then 4 -- ThreadSpawn
+  else if effect_tag == 41 then 4 -- MmapExec
+  else if effect_tag == 43 then 4 -- FfiCall
+  else 2  -- default: write level
+
+-- Count the number of effect tags at each risk level
+-- Returns (pure_count, read_count, write_count, network_count, system_count)
+let count_effect_levels : (Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (3, 7, 5, 6, 3)

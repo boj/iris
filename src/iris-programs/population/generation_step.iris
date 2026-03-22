@@ -1,0 +1,22 @@
+-- Full generation step: evaluate -> rank -> select -> mutate -> replace
+-- Operates on a 2-individual population for tractable graph depth.
+--
+-- prog0, prog1: the two candidate programs
+-- test_cases: tuple of test case pairs for fitness evaluation
+-- evaluator: program that scores a candidate on test cases
+-- mutator: program that mutates a candidate
+--
+-- Steps:
+--   1. Evaluate: score each individual via graph_eval
+--   2. Select: pick the better individual (tournament of 2)
+--   3. Mutate: produce offspring from the winner
+--   4. Replace: return (winner, offspring) — worst is replaced
+--
+-- Returns: (best_program, mutated_child)
+
+let generation_step prog0 prog1 test_cases evaluator mutator : Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let score0 = graph_eval evaluator (prog0, test_cases) in
+  let score1 = graph_eval evaluator (prog1, test_cases) in
+  let best = if score0 >= score1 then prog0 else prog1 in
+  let child = graph_set_prim_op best () 0 in
+  (best, child)

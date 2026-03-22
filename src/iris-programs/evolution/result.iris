@@ -1,0 +1,46 @@
+-- Evolution result: output of an evolutionary run.
+--
+-- Mirrors the Rust result.rs in iris-evolve.
+--
+-- EvolutionResult is a tuple:
+--   (best_program, best_fitness, generations_run, total_time_ns, pareto_size, history)
+-- GenerationSnapshot is a tuple:
+--   (generation, best_fitness, avg_fitness, pareto_front_size, phase)
+
+-- Build an evolution result from components
+let make_result best_prog best_fit gens time_ns pareto_size :
+    Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (best_prog, best_fit, gens, time_ns, pareto_size)
+
+-- Build a generation snapshot
+let make_snapshot gen best_fit avg_fit pareto_size phase :
+    Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (gen, best_fit, avg_fit, pareto_size, phase)
+
+-- Accessors
+let result_best_program r : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = r.0
+let result_best_fitness r : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = r.1
+let result_generations  r : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = r.2
+let result_time_ns      r : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = r.3
+let result_pareto_size  r : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = r.4
+
+let snapshot_generation  s : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = s.0
+let snapshot_best_fit    s : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = s.1
+let snapshot_avg_fit     s : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = s.2
+let snapshot_pareto_size s : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = s.3
+let snapshot_phase       s : (Int, Int, Int, Int, Int) -> Int [cost: Const(1)] = s.4
+
+-- Record a generation into a history list (cons-list of snapshots)
+let record_generation history gen best_fit avg_fit pareto_size phase :
+    Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  let snap = make_snapshot gen best_fit avg_fit pareto_size phase in
+  (snap, history)
+
+-- Check if result is successful (best_fitness > threshold)
+let is_successful result threshold : (Int, Int, Int, Int, Int) -> Int -> Int [cost: Const(1)] =
+  if result.1 >= threshold then 1 else 0
+
+-- Summarize result: (success, generations, pareto_size)
+let summarize_result result threshold :
+    (Int, Int, Int, Int, Int) -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  (if result.1 >= threshold then 1 else 0, result.2, result.4)

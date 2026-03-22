@@ -1,0 +1,75 @@
+-- Detect linear transform pattern: output = a * input + b
+--
+-- Takes a list of (scalar_input, expected_output) pairs and count n.
+-- Uses the first two distinct-input pairs to compute coefficients a and b,
+-- then validates against all remaining pairs.
+-- Returns: (confidence, a, b)
+
+-- Find two pairs with distinct input values
+-- Returns: (found_flag, x1, y1, x2, y2)
+let find_two_distinct pairs : Int -> (Int, Int, Int, Int, Int) [cost: Linear(pairs)] =
+  let first = fold (0, 0, 0)
+    (\state pair ->
+      if state.0 == 1 then state
+      else (1, pair.0, pair.1))
+    pairs in
+  if first.0 == 0 then (0, 0, 0, 0, 0)
+  else
+    let x1 = first.1 in
+    let y1 = first.2 in
+    let second = fold (0, 0, 0)
+      (\state pair ->
+        if state.0 == 1 then state
+        else if pair.0 == x1 then state
+        else (1, pair.0, pair.1))
+      pairs in
+    if second.0 == 0 then (0, x1, y1, x1, y1)
+    else (1, x1, y1, second.1, second.2)
+
+-- Compute slope a = (y2 - y1) / (x2 - x1)
+-- Returns (a, exact_flag) where exact_flag = 1 if division is exact
+let compute_slope x1 y1 x2 y2 : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(3)] =
+  let dx = x2 - x1 in
+  let dy = y2 - y1 in
+  if dx == 0 then (0, 0)
+  else
+    let remainder = dy - (dy / dx) * dx in
+    let a = dy / dx in
+    let exact = if remainder == 0 then 1 else 0 in
+    (a, exact)
+
+-- Compute intercept b = y1 - a * x1
+let compute_intercept a x1 y1 : Int -> Int -> Int -> Int [cost: Const(1)] =
+  y1 - a * x1
+
+-- Count pairs matching a*x + b == y
+let count_linear_matches pairs a b : Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  fold 0
+    (\acc pair ->
+      let predicted = a * pair.0 + b in
+      if predicted == pair.1 then acc + 1 else acc)
+    pairs
+
+-- Detect linear transform pattern
+-- Returns: (confidence, a, b)
+let detect_linear_transform pairs n : Int -> Int -> (Int, Int, Int) [cost: Linear(pairs)] =
+  if n < 2 then (0, 0, 0)
+  else
+    let pts = find_two_distinct pairs in
+    if pts.0 == 0 then (0, 0, 0)
+    else
+      let x1 = pts.1 in
+      let y1 = pts.2 in
+      let x2 = pts.3 in
+      let y2 = pts.4 in
+      if x1 == x2 then (0, 0, 0)
+      else
+        let slope = compute_slope x1 y1 x2 y2 in
+        let a = slope.0 in
+        let exact = slope.1 in
+        if exact == 0 then (0, 0, 0)
+        else
+          let b = compute_intercept a x1 y1 in
+          let matches = count_linear_matches pairs a b in
+          let conf = (matches * 100) / n in
+          (conf, a, b)

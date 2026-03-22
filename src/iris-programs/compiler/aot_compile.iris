@@ -1,0 +1,927 @@
+-- AOT compiler v3: SemanticGraph -> x86-64 machine code bytes.
+--
+-- Register-based codegen: eliminates push/pop overhead by keeping
+-- intermediate values in GP registers. Each node returns (bytes, result_reg,
+-- next_free_reg) so parents know where children left their results.
+--
+-- NodeKind discriminants (verified via graph_get_kind):
+--   0  = Prim       1  = Apply      2  = Lambda     3  = Let
+--   4  = Match      5  = Lit        6  = Ref         7  = Neural
+--   8  = Fold       9  = Unfold    10  = Effect     11  = Tuple
+--  12  = Inject    13  = Project   14  = TypeAbst   15  = TypeApp
+--  16  = LetRec    17  = Guard     18  = Rewrite    19  = Extern
+--
+-- Stack layout (System V AMD64 + fold slots):
+--   [rbp - 48]  = arg 0 (rdi)      [rbp - 56]  = arg 1 (rsi)
+--   [rbp - 64]  = arg 2 (rdx)      [rbp - 72]  = arg 3 (rcx)
+--   [rbp - 80]  = arg 4 (r8)       [rbp - 88]  = arg 5 (r9)
+--   [rbp - 96]  = fold accumulator  [rbp - 104] = fold element/index
+--   [rbp - 112] = fold counter (rbx saved)
+--   [rbp - 120] = fold limit (r12 saved)
+--
+-- Register allocation (7 allocatable GP regs):
+--   Slot 0: r10 (enc 10)   Slot 1: r11 (enc 11)
+--   Slot 2: r8  (enc 8)    Slot 3: r9  (enc 9)
+--   Slot 4: rsi (enc 6)    Slot 5: rcx (enc 1)
+--   Slot 6: rdx (enc 2)
+--
+-- Reserved: rax (scratch/return), rsp, rbp, rbx/r12/r13/r14/r15 (callee-saved)
+--
+-- Spill: when next_reg > 6, spill to [rbp - 128 - slot*8]
+
+-- =========================================================================
+-- Helper: encode a 32-bit little-endian displacement
+-- =========================================================================
+let encode_i32 v =
+  let b0 = bitand v 255 in
+  let b1 = bitand (shr v 8) 255 in
+  let b2 = bitand (shr v 16) 255 in
+  let b3 = bitand (shr v 24) 255 in
+  (b0, b1, b2, b3)
+
+-- =========================================================================
+-- Register encoding helpers
+-- =========================================================================
+
+-- Map slot index (0-6) to x86-64 register number
+let reg_num slot =
+  if slot == 0 then 10      -- r10
+  else if slot == 1 then 11 -- r11
+  else if slot == 2 then 8  -- r8
+  else if slot == 3 then 9  -- r9
+  else if slot == 4 then 6  -- rsi
+  else if slot == 5 then 1  -- rcx
+  else if slot == 6 then 2  -- rdx
+  else 0 -- rax (fallback / scratch)
+
+-- Is register number >= 8? (needs REX extension bit)
+let reg_hi r = if r >= 8 then 1 else 0
+
+-- REX.W prefix for two registers (used in ALU reg,reg and MOV reg,reg)
+-- REX = 0100_WRXB = 0100_1_R_0_B = 0x48 | (R << 2) | B
+-- 0x48 = 72 decimal.  R extends ModRM.reg, B extends ModRM.rm.
+let rex_rr reg rm =
+  let r_hi = reg_hi reg in
+  let rm_hi = reg_hi rm in
+  bitand (72 + r_hi * 4 + rm_hi) 255
+
+-- ModRM byte: mod=11 (reg-reg), reg field, rm field
+let modrm_rr reg rm =
+  bitand (192 + bitand reg 7 * 8 + bitand rm 7) 255
+
+-- =========================================================================
+-- Instruction emitters
+-- =========================================================================
+
+-- MOV dst_reg, src_reg  (64-bit reg-to-reg)
+-- Encoding: REX.W 0x89 ModRM(11, src, dst)  -- note: 0x89 is MOV r/m, r
+let emit_mov_rr dst src =
+  let rex = rex_rr src dst in
+  let modrm = modrm_rr src dst in
+  bytes_from_ints (rex, 0x89, modrm)
+
+-- MOV dst_reg, [rbp + disp8]  (load from stack)
+-- Encoding: REX.W 0x8B ModRM(01, dst, 101=rbp) disp8
+let emit_load_rbp dst disp8 =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi * 4) 255 in
+  let modrm = bitand (69 + bitand dst 7 * 8) 255 in
+  bytes_from_ints (rex, 0x8b, modrm, bitand disp8 255)
+
+-- MOV [rbp + disp8], src_reg  (store to stack)
+-- Encoding: REX.W 0x89 ModRM(01, src, 101=rbp) disp8
+let emit_store_rbp src disp8 =
+  let s_hi = reg_hi src in
+  let rex = bitand (72 + s_hi * 4) 255 in
+  let modrm = bitand (69 + bitand src 7 * 8) 255 in
+  bytes_from_ints (rex, 0x89, modrm, bitand disp8 255)
+
+-- MOV dst_reg, imm64
+-- Encoding: REX.W (0xB8 + dst&7) imm64_le
+let emit_mov_imm64 dst imm =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi) 255 in
+  let opc = bitand (184 + bitand dst 7) 255 in
+  let b0 = bitand imm 255 in
+  let n1 = shr imm 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in
+  let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in
+  let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in
+  let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (rex, opc, b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ALU dst_reg, src_reg with 1-byte opcode (ADD=0x01, SUB=0x29, AND=0x21, OR=0x09, XOR=0x31, CMP=0x39)
+-- These use form: op r/m64, r64  so ModRM.reg=src, ModRM.rm=dst
+let emit_alu_rr op dst src =
+  let rex = rex_rr src dst in
+  let modrm = modrm_rr src dst in
+  bytes_from_ints (rex, op, modrm)
+
+-- IMUL dst_reg, src_reg (two-byte opcode: 0x0F 0xAF, dst = dst * src)
+-- This uses form: IMUL r64, r/m64 so ModRM.reg=dst, ModRM.rm=src
+let emit_imul_rr dst src =
+  let rex = rex_rr dst src in
+  let modrm = modrm_rr dst src in
+  bytes_from_ints (rex, 0x0f, 0xaf, modrm)
+
+-- NEG dst_reg: REX.W 0xF7 ModRM(11, /3, dst)
+let emit_neg dst =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi) 255 in
+  let modrm = bitand (216 + bitand dst 7) 255 in
+  bytes_from_ints (rex, 0xf7, modrm)
+
+-- TEST reg, reg: REX.W 0x85 ModRM(11, reg, reg)
+let emit_test_rr reg =
+  let rex = rex_rr reg reg in
+  let modrm = modrm_rr reg reg in
+  bytes_from_ints (rex, 0x85, modrm)
+
+-- CMP dst, src: REX.W 0x39 ModRM(11, src, dst) -- like SUB but flags only
+let emit_cmp_rr dst src =
+  emit_alu_rr 0x39 dst src
+
+-- SETcc al: 0x0F setcc_opcode 0xC0 (always into AL)
+-- Then MOVZX dst_reg, al: REX 0x0F 0xB6 ModRM(11, dst, 0=al)
+let emit_setcc_to_reg setcc_byte dst =
+  let d_hi = reg_hi dst in
+  let rex_movzx = bitand (72 + d_hi * 4) 255 in
+  let modrm_movzx = bitand (192 + bitand dst 7 * 8) 255 in
+  bytes_from_ints (0x0f, setcc_byte, 0xc0, rex_movzx, 0x0f, 0xb6, modrm_movzx)
+
+-- CMOVL dst, src (move if less): REX.W 0x0F 0x4C ModRM(11, dst, src)
+let emit_cmovl dst src =
+  let rex = rex_rr dst src in
+  let modrm = modrm_rr dst src in
+  bytes_from_ints (rex, 0x0f, 0x4c, modrm)
+
+-- CMOVG dst, src (move if greater): REX.W 0x0F 0x4F ModRM(11, dst, src)
+let emit_cmovg dst src =
+  let rex = rex_rr dst src in
+  let modrm = modrm_rr dst src in
+  bytes_from_ints (rex, 0x0f, 0x4f, modrm)
+
+-- CMOVNS dst, src (move if not sign): REX.W 0x0F 0x49 ModRM(11, dst, src)
+let emit_cmovns dst src =
+  let rex = rex_rr dst src in
+  let modrm = modrm_rr dst src in
+  bytes_from_ints (rex, 0x0f, 0x49, modrm)
+
+-- PUSH reg: for r8-r15, need REX.B prefix 0x41
+let emit_push reg =
+  if reg >= 8 then bytes_from_ints (0x41, bitand (80 + bitand reg 7) 255)
+  else bytes_from_ints (bitand (80 + reg) 255)
+
+-- POP reg: for r8-r15, need REX.B prefix 0x41
+let emit_pop reg =
+  if reg >= 8 then bytes_from_ints (0x41, bitand (88 + bitand reg 7) 255)
+  else bytes_from_ints (bitand (88 + reg) 255)
+
+-- XOR reg, reg (zero a register)
+let emit_xor_rr reg =
+  let rex = rex_rr reg reg in
+  let modrm = modrm_rr reg reg in
+  bytes_from_ints (rex, 0x31, modrm)
+
+-- MOV rax, src_reg (for returning result)
+-- Encoding: REX.W 0x89 ModRM(11, src, 0=rax) -- MOV r/m64(rax), r64(src)
+let emit_mov_rax_from src =
+  if src == 0 then bytes_from_ints () -- already rax
+  else
+    let s_hi = reg_hi src in
+    let rex = bitand (72 + s_hi * 4) 255 in
+    let modrm = bitand (192 + bitand src 7 * 8) 255 in
+    bytes_from_ints (rex, 0x89, modrm)
+
+-- SHL dst_reg, cl: REX.W 0xD3 ModRM(11, /4, dst)
+let emit_shl_cl dst =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi) 255 in
+  let modrm = bitand (224 + bitand dst 7) 255 in
+  bytes_from_ints (rex, 0xd3, modrm)
+
+-- SAR dst_reg, cl: REX.W 0xD3 ModRM(11, /7, dst)
+let emit_sar_cl dst =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi) 255 in
+  let modrm = bitand (248 + bitand dst 7) 255 in
+  bytes_from_ints (rex, 0xd3, modrm)
+
+-- =========================================================================
+-- SSE2 emitter helpers (float values stay in GP regs, move to xmm for ops)
+-- =========================================================================
+
+-- MOVQ xmm_idx, gp_reg  (GP -> XMM)
+-- Encoding: 66 REX.W 0F 6E ModRM(11, xmm, gp)
+-- REX.W = 0x48 | (gp_hi as B bit).  66 prefix for operand-size override.
+let emit_movq_xmm_from xmm gp =
+  let gp_hi = reg_hi gp in
+  let rex = bitand (72 + gp_hi) 255 in
+  let modrm = bitand (192 + bitand xmm 7 * 8 + bitand gp 7) 255 in
+  bytes_from_ints (0x66, rex, 0x0f, 0x6e, modrm)
+
+-- MOVQ gp_reg, xmm_idx  (XMM -> GP)
+-- Encoding: 66 REX.W 0F 7E ModRM(11, xmm, gp)
+let emit_movq_to_from_xmm gp xmm =
+  let gp_hi = reg_hi gp in
+  let rex = bitand (72 + gp_hi) 255 in
+  let modrm = bitand (192 + bitand xmm 7 * 8 + bitand gp 7) 255 in
+  bytes_from_ints (0x66, rex, 0x0f, 0x7e, modrm)
+
+-- Float binary SSE2: op xmm0, xmm1  (F2 0F XX C1)
+-- Given left/right GP regs, emits: movq xmm0,left; movq xmm1,right; OP; movq left,xmm0
+let emit_float_binop sse_byte left right =
+  bytes_concat (emit_movq_xmm_from 0 left) (bytes_concat
+    (emit_movq_xmm_from 1 right) (bytes_concat
+    (bytes_from_ints (0xf2, 0x0f, sse_byte, 0xc1))
+    (emit_movq_to_from_xmm left 0)))
+
+-- Float compare: ucomisd xmm0, xmm1  (66 0F 2E C1)
+-- Then SETcc al + MOVZX left, al  (comparison always returns int)
+let emit_float_cmp setcc_byte left right =
+  let d_hi = reg_hi left in
+  let rex_movzx = bitand (72 + d_hi * 4) 255 in
+  let modrm_movzx = bitand (192 + bitand left 7 * 8) 255 in
+  bytes_concat (emit_movq_xmm_from 0 left) (bytes_concat
+    (emit_movq_xmm_from 1 right) (bytes_concat
+    (bytes_from_ints (0x66, 0x0f, 0x2e, 0xc1))
+    (bytes_from_ints (0x0f, setcc_byte, 0xc0, rex_movzx, 0x0f, 0xb6, modrm_movzx))))
+
+-- Float neg: flip sign bit 63 with BTC reg, 63
+-- Encoding: REX.W 0F BA /7 reg 0x3F
+let emit_float_neg reg =
+  let r_hi = reg_hi reg in
+  let rex = bitand (72 + r_hi) 255 in
+  let modrm = bitand (248 + bitand reg 7) 255 in
+  bytes_from_ints (rex, 0x0f, 0xba, modrm, 0x3f)
+
+-- Float abs: clear sign bit 63 with BTR reg, 63
+-- Encoding: REX.W 0F BA /6 reg 0x3F
+let emit_float_abs reg =
+  let r_hi = reg_hi reg in
+  let rex = bitand (72 + r_hi) 255 in
+  let modrm = bitand (240 + bitand reg 7) 255 in
+  bytes_from_ints (rex, 0x0f, 0xba, modrm, 0x3f)
+
+-- CVTSI2SD xmm0, gp_reg  (int -> float)
+-- Encoding: F2 REX.W 0F 2A ModRM(11, 0, gp)
+let emit_cvtsi2sd gp =
+  let gp_hi = reg_hi gp in
+  let rex = bitand (72 + gp_hi) 255 in
+  let modrm = bitand (192 + bitand gp 7) 255 in
+  bytes_from_ints (0xf2, rex, 0x0f, 0x2a, modrm)
+
+-- CVTTSD2SI gp_reg, xmm0  (float -> int, truncate)
+-- Encoding: F2 REX.W 0F 2C ModRM(11, gp, 0)
+let emit_cvttsd2si gp =
+  let gp_hi = reg_hi gp in
+  let rex = bitand (72 + gp_hi * 4) 255 in
+  let modrm = bitand (192 + bitand gp 7 * 8) 255 in
+  bytes_from_ints (0xf2, rex, 0x0f, 0x2c, modrm)
+
+-- SQRTSD xmm0, xmm0: F2 0F 51 C0
+let emit_sqrtsd_xmm0 =
+  bytes_from_ints (0xf2, 0x0f, 0x51, 0xc0)
+
+-- =========================================================================
+-- Type inference: determine if a node produces int (0) or float (2)
+-- Uses graph_get_node_type when available, falls back to default_type.
+-- Self-recursive via self_graph + graph_eval.
+-- =========================================================================
+
+let node_type program node_id default_type =
+  let kind = graph_get_kind program node_id in
+  -- Lit: check literal type tag
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag program node_id in
+    if tt == 2 then 2            -- Float64 literal
+    else if tt == 255 then       -- InputRef: use graph type annotation
+      let nt = graph_get_node_type program node_id in
+      if nt == 2 then 2 else default_type
+    else 0                       -- Int literal or other
+  -- Prim: result type depends on opcode
+  else if kind == 0 then
+    let opcode = graph_get_prim_op program node_id in
+    -- Comparisons always return int
+    if opcode >= 32 then 0
+    -- int_to_float returns float
+    else if opcode == 64 then 2
+    -- float_to_int returns int
+    else if opcode == 65 then 0
+    -- math_sqrt returns float
+    else if opcode == 216 then 2
+    -- For arithmetic ops, inherit from first child
+    else
+      let children = graph_outgoing program node_id in
+      if list_len children > 0 then
+        let child0 = list_nth children 0 in
+        let me = self_graph in
+        graph_eval me (program, child0, default_type)
+      else default_type
+  -- Guard: inherit from then-branch
+  else if kind == 17 then
+    let children = graph_outgoing program node_id in
+    if list_len children >= 2 then
+      let then_id = list_nth children 1 in
+      let me = self_graph in
+      graph_eval me (program, then_id, default_type)
+    else default_type
+  -- TypeAbst/TypeApp/Rewrite: inherit from child
+  else if kind == 14 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    graph_eval me (program, list_nth children 0, default_type)
+  else if kind == 15 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    graph_eval me (program, list_nth children 0, default_type)
+  else if kind == 18 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    graph_eval me (program, list_nth children 0, default_type)
+  -- Let: inherit from body
+  else if kind == 3 then
+    let children = graph_outgoing program node_id in
+    let body_id = list_nth children 1 in
+    let me = self_graph in
+    graph_eval me (program, body_id, default_type)
+  else default_type
+
+-- Result type of the root node
+let aot_result_type program default_type =
+  let root = graph_get_root program in
+  node_type program root default_type
+
+-- =========================================================================
+-- Node compiler (self-recursive via self_graph + graph_eval)
+--
+-- Takes: (program, node_id, next_reg, default_type)
+--   next_reg = next available register slot (0-6)
+--   default_type = 0 (int) or 2 (float), inherited by InputRefs
+-- Returns: (bytes, result_reg_num, next_free_reg)
+--   result_reg_num = x86-64 register number holding the result
+--   next_free_reg = next available slot after this node
+-- =========================================================================
+
+let aot_compile_node program node_id next_reg default_type =
+  let kind = graph_get_kind program node_id in
+  let out_reg = reg_num next_reg in
+
+  -- Lit (kind 5): constants and input references
+  if kind == 5 then
+    let type_tag = graph_get_lit_type_tag program node_id in
+    let lit_val = graph_get_lit_value program node_id in
+    -- InputRef (type_tag 0xFF): load from stack slot
+    if type_tag == 255 then
+      -- Function args: 0-5 map to [rbp-48] .. [rbp-88]
+      -- disp8 for arg i = -(48 + i*8) = 256 - (48 + i*8) as unsigned byte
+      if lit_val == 0 then (emit_load_rbp out_reg 0xd0, out_reg, next_reg + 1)
+      else if lit_val == 1 then (emit_load_rbp out_reg 0xc8, out_reg, next_reg + 1)
+      else if lit_val == 2 then (emit_load_rbp out_reg 0xc0, out_reg, next_reg + 1)
+      else if lit_val == 3 then (emit_load_rbp out_reg 0xb8, out_reg, next_reg + 1)
+      else if lit_val == 4 then (emit_load_rbp out_reg 0xb0, out_reg, next_reg + 1)
+      else if lit_val == 5 then (emit_load_rbp out_reg 0xa8, out_reg, next_reg + 1)
+      -- Lambda param (0x80 = 128): for fold, push acc then elem as stack-based
+      -- tuple (needed for Project to index into).  Fall back to stack for this.
+      else if lit_val == 128 then
+        (bytes_from_ints (
+          0x48, 0x8b, 0x45, 0x98, 0x50,    -- mov rax,[rbp-104]; push (elem)
+          0x48, 0x8b, 0x45, 0xa0, 0x50      -- mov rax,[rbp-96]; push (acc)
+        ), out_reg, next_reg + 1)
+      else (emit_xor_rr out_reg, out_reg, next_reg + 1)
+    -- Float64 constant (type_tag 2): convert to bits, then mov imm64
+    else if type_tag == 2 then
+      let bits = float_to_bits lit_val in
+      (emit_mov_imm64 out_reg bits, out_reg, next_reg + 1)
+    -- Integer constant: mov out_reg, imm64
+    else
+      (emit_mov_imm64 out_reg lit_val, out_reg, next_reg + 1)
+
+  -- Prim (kind 0): arithmetic, comparison, conversion operators
+  else if kind == 0 then
+    let opcode = graph_get_prim_op program node_id in
+    let children = graph_outgoing program node_id in
+
+    -- ---- Unary: neg (5) ----
+    if opcode == 5 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let reg0 = r0.1 in
+      let child_type = node_type program child0 default_type in
+      if child_type == 2 then
+        -- float neg: btc reg, 63
+        (bytes_concat code0 (emit_float_neg reg0), reg0, next_reg + 1)
+      else
+        (bytes_concat code0 (emit_neg reg0), reg0, next_reg + 1)
+
+    -- ---- Unary: abs (6) ----
+    else if opcode == 6 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let reg0 = r0.1 in
+      let child_type = node_type program child0 default_type in
+      if child_type == 2 then
+        -- float abs: btr reg, 63
+        (bytes_concat code0 (emit_float_abs reg0), reg0, next_reg + 1)
+      else
+        -- int abs: mov rax,reg; neg reg; test rax,rax; cmovns reg,rax
+        let abs_code = bytes_concat code0 (bytes_concat
+          (emit_mov_rax_from reg0)
+          (bytes_concat (emit_neg reg0)
+            (bytes_concat (bytes_from_ints (0x48, 0x85, 0xc0))
+              (emit_cmovns reg0 0)))) in
+        (abs_code, reg0, next_reg + 1)
+
+    -- ---- Unary: int_to_float (0x40 = 64) ----
+    else if opcode == 64 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let reg0 = r0.1 in
+      -- cvtsi2sd xmm0, reg; movq reg, xmm0
+      (bytes_concat code0 (bytes_concat (emit_cvtsi2sd reg0) (emit_movq_to_from_xmm reg0 0)),
+       reg0, next_reg + 1)
+
+    -- ---- Unary: float_to_int (0x41 = 65) ----
+    else if opcode == 65 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let reg0 = r0.1 in
+      -- movq xmm0, reg; cvttsd2si reg, xmm0
+      (bytes_concat code0 (bytes_concat (emit_movq_xmm_from 0 reg0) (emit_cvttsd2si reg0)),
+       reg0, next_reg + 1)
+
+    -- ---- Unary: math_sqrt (0xD8 = 216) ----
+    else if opcode == 216 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let reg0 = r0.1 in
+      -- movq xmm0, reg; sqrtsd xmm0, xmm0; movq reg, xmm0
+      (bytes_concat code0 (bytes_concat (emit_movq_xmm_from 0 reg0) (bytes_concat
+        emit_sqrtsd_xmm0 (emit_movq_to_from_xmm reg0 0))),
+       reg0, next_reg + 1)
+
+    -- ---- Binary ops ----
+    else
+      let child0 = list_nth children 0 in
+      let child1 = list_nth children 1 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let left = r0.1 in
+      let nfr0 = r0.2 in
+      let r1 = graph_eval me (program, child1, nfr0, default_type) in
+      let code1 = r1.0 in
+      let right = r1.1 in
+      -- Determine types of children
+      let lt = node_type program child0 default_type in
+      let rt = node_type program child1 default_type in
+      let is_float = if lt == 2 then 1 else if rt == 2 then 1 else 0 in
+
+      let op_code =
+        -- ---- Comparisons (opcodes 32-37): always int result ----
+        -- Use float compare if either operand is float
+        if opcode == 32 then
+          if is_float == 1 then emit_float_cmp 0x94 left right  -- sete (eq)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x94 left)
+        else if opcode == 33 then
+          if is_float == 1 then emit_float_cmp 0x95 left right  -- setne (ne)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x95 left)
+        else if opcode == 34 then
+          if is_float == 1 then emit_float_cmp 0x92 left right  -- setb (float lt = below)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x9c left)
+        else if opcode == 35 then
+          if is_float == 1 then emit_float_cmp 0x97 left right  -- seta (float gt = above)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x9f left)
+        else if opcode == 36 then
+          if is_float == 1 then emit_float_cmp 0x96 left right  -- setbe (float le)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x9e left)
+        else if opcode == 37 then
+          if is_float == 1 then emit_float_cmp 0x93 left right  -- setae (float ge)
+          else bytes_concat (emit_cmp_rr left right) (emit_setcc_to_reg 0x9d left)
+
+        -- ---- Arithmetic ops: float or int path ----
+        -- add (0)
+        else if opcode == 0 then
+          if is_float == 1 then emit_float_binop 0x58 left right  -- addsd
+          else emit_alu_rr 0x01 left right
+        -- sub (1)
+        else if opcode == 1 then
+          if is_float == 1 then emit_float_binop 0x5c left right  -- subsd
+          else emit_alu_rr 0x29 left right
+        -- mul (2)
+        else if opcode == 2 then
+          if is_float == 1 then emit_float_binop 0x59 left right  -- mulsd
+          else emit_imul_rr left right
+        -- div (3)
+        else if opcode == 3 then
+          if is_float == 1 then emit_float_binop 0x5e left right  -- divsd (no zero check)
+          else
+            let idiv_bytes =
+              let d_hi = reg_hi right in
+              let rex_id = bitand (72 + d_hi) 255 in
+              let modrm_id = bitand (248 + bitand right 7) 255 in
+              bytes_from_ints (rex_id, 0xf7, modrm_id) in
+            let mov_result = emit_mov_rr left 0 in
+            let skip_len = 2 + bytes_len idiv_bytes + bytes_len mov_result in
+            let skip = encode_i32 skip_len in
+            bytes_concat (emit_mov_rax_from left) (bytes_concat
+              (emit_xor_rr left) (bytes_concat
+              (emit_test_rr right) (bytes_concat
+              (bytes_from_ints (0x0f, 0x84, list_nth skip 0, list_nth skip 1, list_nth skip 2, list_nth skip 3)) (bytes_concat
+              (bytes_from_ints (0x48, 0x99)) (bytes_concat
+              idiv_bytes mov_result)))))
+        -- mod (4): int only
+        else if opcode == 4 then
+          let idiv_bytes =
+            let d_hi = reg_hi right in
+            let rex_id = bitand (72 + d_hi) 255 in
+            let modrm_id = bitand (248 + bitand right 7) 255 in
+            bytes_from_ints (rex_id, 0xf7, modrm_id) in
+          let mov_rdx_to_left =
+            let l_hi = reg_hi left in
+            let rex_m = bitand (72 + 1 * 4 + l_hi) 255 in
+            let modrm_m = bitand (192 + 2 * 8 + bitand left 7) 255 in
+            bytes_from_ints (rex_m, 0x89, modrm_m) in
+          let skip_len = 2 + bytes_len idiv_bytes + bytes_len mov_rdx_to_left in
+          let skip = encode_i32 skip_len in
+          bytes_concat (emit_mov_rax_from left) (bytes_concat
+            (emit_xor_rr left) (bytes_concat
+            (emit_test_rr right) (bytes_concat
+            (bytes_from_ints (0x0f, 0x84, list_nth skip 0, list_nth skip 1, list_nth skip 2, list_nth skip 3)) (bytes_concat
+            (bytes_from_ints (0x48, 0x99)) (bytes_concat
+            idiv_bytes mov_rdx_to_left)))))
+        -- min (7)
+        else if opcode == 7 then
+          if is_float == 1 then emit_float_binop 0x5d left right  -- minsd
+          else bytes_concat (emit_cmp_rr left right) (emit_cmovg left right)
+        -- max (8)
+        else if opcode == 8 then
+          if is_float == 1 then emit_float_binop 0x5f left right  -- maxsd
+          else bytes_concat (emit_cmp_rr left right) (emit_cmovl left right)
+        -- bitand (0x10 = 16)
+        else if opcode == 16 then emit_alu_rr 0x21 left right
+        -- bitor (0x11 = 17)
+        else if opcode == 17 then emit_alu_rr 0x09 left right
+        -- shl (0x14 = 20)
+        else if opcode == 20 then
+          if right == 1 then emit_shl_cl left
+          else bytes_concat (emit_mov_rr 1 right) (emit_shl_cl left)
+        -- shr (0x15 = 21)
+        else if opcode == 21 then
+          if right == 1 then emit_sar_cl left
+          else bytes_concat (emit_mov_rr 1 right) (emit_sar_cl left)
+        -- default: add
+        else emit_alu_rr 0x01 left right in
+
+      -- Result stays in left register, right register is freed
+      (bytes_concat (bytes_concat code0 code1) op_code, left, nfr0)
+
+  -- Let (kind 3): compile binding then body
+  -- The binding's register becomes available for body to reference
+  else if kind == 3 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let binding_id = list_nth children 0 in
+    let body_id = list_nth children 1 in
+    let rb = graph_eval me (program, binding_id, next_reg, default_type) in
+    let binding_code = rb.0 in
+    let bind_reg = rb.1 in
+    let nfr_b = rb.2 in
+    -- Body compiles with binding's register still live
+    let r_body = graph_eval me (program, body_id, nfr_b, default_type) in
+    let body_code = r_body.0 in
+    let body_reg = r_body.1 in
+    let nfr_body = r_body.2 in
+    (bytes_concat binding_code body_code, body_reg, nfr_body)
+
+  -- Guard (kind 17): conditional branch (if-then-else)
+  -- Both branches must put their result in the SAME register (next_reg)
+  else if kind == 17 then
+    let children = graph_outgoing program node_id in
+    let cond_id = list_nth children 0 in
+    let then_id = list_nth children 1 in
+    let else_id = list_nth children 2 in
+    let me = self_graph in
+    -- Compile condition
+    let rc = graph_eval me (program, cond_id, next_reg, default_type) in
+    let cond_code = rc.0 in
+    let cond_reg = rc.1 in
+    -- Both branches use next_reg so result lands in the same register
+    let rt = graph_eval me (program, then_id, next_reg, default_type) in
+    let then_code = rt.0 in
+    let then_result = rt.1 in
+    let re = graph_eval me (program, else_id, next_reg, default_type) in
+    let else_code = re.0 in
+    let else_result = re.1 in
+    let then_len = bytes_len then_code in
+    let else_len = bytes_len else_code in
+    -- If then_result != out_reg, add a MOV at end of then branch
+    let then_fixup = if then_result == out_reg then bytes_from_ints ()
+      else emit_mov_rr out_reg then_result in
+    let else_fixup = if else_result == out_reg then bytes_from_ints ()
+      else emit_mov_rr out_reg else_result in
+    let then_total = then_len + bytes_len then_fixup in
+    let else_total = else_len + bytes_len else_fixup in
+    -- test cond_reg, cond_reg; jz else_branch
+    let test_bytes = emit_test_rr cond_reg in
+    let jz_disp = then_total + 5 in
+    let jz = encode_i32 jz_disp in
+    let jz_bytes = bytes_from_ints (
+      0x0f, 0x84, list_nth jz 0, list_nth jz 1, list_nth jz 2, list_nth jz 3
+    ) in
+    let jmp_disp = else_total in
+    let jmp = encode_i32 jmp_disp in
+    let jmp_bytes = bytes_from_ints (
+      0xe9, list_nth jmp 0, list_nth jmp 1, list_nth jmp 2, list_nth jmp 3
+    ) in
+    (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+      cond_code test_bytes) jz_bytes) then_code) then_fixup) jmp_bytes) else_code) else_fixup,
+     out_reg, next_reg + 1)
+
+  -- Tuple (kind 11): compile all children, each into successive registers
+  -- (used mainly for fold collections; tuple as a whole is stack-based for Project)
+  else if kind == 11 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let n_children = list_len children in
+    -- For tuples used with Project (fold lambda input), fall back to stack-based push
+    -- so that Project can index into the stack
+    let result = fold (bytes_from_ints (), next_reg) (\acc_state i ->
+      if i < n_children then
+        let acc_bytes = acc_state.0 in
+        let cur_reg = acc_state.1 in
+        let child_id = list_nth children i in
+        let rc = graph_eval me (program, child_id, cur_reg, default_type) in
+        let child_code = rc.0 in
+        let child_result = rc.1 in
+        -- Push child result onto stack (for Project indexing)
+        let push_code = bytes_concat child_code (emit_push child_result) in
+        (bytes_concat acc_bytes push_code, cur_reg)
+      else acc_state
+    ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+    -- Tuple values are on the stack for Project to access
+    -- Return dummy register since Project will handle the actual value extraction
+    (result.0, out_reg, next_reg + 1)
+
+  -- Project (kind 13): tuple field access via stack offset
+  -- After Tuple pushes values, they're on the stack. Project pops the right one.
+  else if kind == 13 then
+    let children = graph_outgoing program node_id in
+    let child0 = list_nth children 0 in
+    let me = self_graph in
+    let r0 = graph_eval me (program, child0, next_reg, default_type) in
+    let code0 = r0.0 in
+    let field_idx = graph_get_prim_op program node_id in
+    let offset = field_idx * 8 in
+    let off = encode_i32 offset in
+    -- Load from stack: mov out_reg, [rsp + offset]
+    let load_code =
+      let d_hi = reg_hi out_reg in
+      let rex = bitand (72 + d_hi * 4) 255 in
+      let modrm = bitand (4 + bitand out_reg 7 * 8) 255 in
+      -- ModRM = 00_reg_100 (SIB follows), SIB = 00_100_100 (rsp, no index)
+      -- Actually for [rsp + disp32]: ModRM=10_reg_100, SIB=00_100_100, disp32
+      if offset == 0 then
+        bytes_from_ints (rex, 0x8b, bitand (4 + bitand out_reg 7 * 8) 255, 0x24)
+      else
+        bytes_from_ints (rex, 0x8b, bitand (132 + bitand out_reg 7 * 8) 255, 0x24,
+          list_nth off 0, list_nth off 1, list_nth off 2, list_nth off 3) in
+    (bytes_concat code0 load_code, out_reg, next_reg + 1)
+
+  -- Fold (kind 8): iteration
+  else if kind == 8 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let base_id = list_nth children 0 in
+    let r_base = graph_eval me (program, base_id, next_reg, default_type) in
+    let base_code = r_base.0 in
+    let base_reg = r_base.1 in
+    if list_len children >= 3 then
+      let step_id = list_nth children 1 in
+      let coll_id = list_nth children 2 in
+      let step_kind = graph_get_kind program step_id in
+
+      -- Strategy (a): Prim step -> unrolled fold (register-based)
+      if step_kind == 0 then
+        let step_op = graph_get_prim_op program step_id in
+        let coll_children = graph_outgoing program coll_id in
+        let n_elems = list_len coll_children in
+        -- Accumulator stays in base_reg (= out_reg)
+        -- Each element loads into a temp register, then ALU op with acc
+        let fold_body = fold (bytes_from_ints ()) (\acc_bytes i ->
+          if i < n_elems then
+            let elem_id = list_nth coll_children i in
+            -- Use next_reg+1 for element (base_reg is at next_reg)
+            let re = graph_eval me (program, elem_id, next_reg + 1, default_type) in
+            let elem_code = re.0 in
+            let elem_reg = re.1 in
+            let step_code =
+              if step_op == 0 then emit_alu_rr 0x01 base_reg elem_reg
+              else if step_op == 1 then emit_alu_rr 0x29 base_reg elem_reg
+              else if step_op == 2 then emit_imul_rr base_reg elem_reg
+              -- min (7): if base > elem, take elem
+              else if step_op == 7 then bytes_concat (emit_cmp_rr base_reg elem_reg) (emit_cmovg base_reg elem_reg)
+              -- max (8): if base < elem, take elem
+              else if step_op == 8 then bytes_concat (emit_cmp_rr base_reg elem_reg) (emit_cmovl base_reg elem_reg)
+              else emit_alu_rr 0x01 base_reg elem_reg in
+            bytes_concat acc_bytes (bytes_concat elem_code step_code)
+          else acc_bytes
+        ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+        (bytes_concat base_code fold_body, base_reg, next_reg + 1)
+
+      -- Strategy (b): Lambda step -> native x86 counted loop
+      -- Use stack-based approach for fold body since lambda bodies use
+      -- InputRef(128) + Project which expect stack layout
+      else if step_kind == 2 then
+        let lambda_children = graph_outgoing program step_id in
+        let body_id = list_nth lambda_children 0 in
+        -- Compile body in stack-based mode (it uses InputRef 128 / Project)
+        -- The body is compiled with next_reg so it produces its result in a register
+        -- but internally it may use push/pop for the lambda param tuple
+        let r_body = graph_eval me (program, body_id, next_reg, default_type) in
+        let body_code = r_body.0 in
+        let body_reg = r_body.1 in
+        let body_len = bytes_len body_code in
+        -- Move body result to rax for store to acc slot
+        let body_save = bytes_concat (emit_mov_rax_from body_reg) (bytes_from_ints (0x48, 0x89, 0x45, 0xa0)) in
+        let body_save_len = bytes_len body_save in
+
+        let coll_children = graph_outgoing program coll_id in
+        let n_elems = list_len coll_children in
+
+        -- Store elements to stack array (same as v2)
+        let elem_codes = fold (bytes_from_ints ()) (\acc_bytes i ->
+          if i < n_elems then
+            let elem_id = list_nth coll_children i in
+            let re = graph_eval me (program, elem_id, next_reg, default_type) in
+            let elem_code = re.0 in
+            let elem_result = re.1 in
+            let store_offset = i * 8 in
+            let so = encode_i32 store_offset in
+            -- mov rax, elem_result; mov [rsp + offset], rax
+            bytes_concat acc_bytes (bytes_concat elem_code
+              (bytes_concat (emit_mov_rax_from elem_result)
+                (bytes_from_ints (0x48, 0x89, 0x84, 0x24, list_nth so 0, list_nth so 1, list_nth so 2, list_nth so 3))))
+          else acc_bytes
+        ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
+
+        -- Allocate stack array
+        let array_size = n_elems * 8 in
+        let as_enc = encode_i32 array_size in
+        let alloc_array = if n_elems > 0 then
+          bytes_from_ints (0x48, 0x81, 0xec, list_nth as_enc 0, list_nth as_enc 1, list_nth as_enc 2, list_nth as_enc 3)
+        else bytes_from_ints () in
+
+        -- Setup: store base result as initial acc
+        let setup = bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
+          0x48, 0x89, 0x45, 0xa0,                     -- mov [rbp-96], rax (acc)
+          0x31, 0xdb,                                  -- xor ebx, ebx (counter)
+          0x49, 0xc7, 0xc4                             -- mov r12, imm32
+        )) in
+        let n_enc = encode_i32 n_elems in
+        let setup2 = bytes_from_ints (list_nth n_enc 0, list_nth n_enc 1, list_nth n_enc 2, list_nth n_enc 3) in
+
+        -- Loop structure (same displacement math as v2)
+        let fwd_disp = body_len + body_save_len + 3 + 5 in
+        let fwd = encode_i32 fwd_disp in
+        let loop_header = bytes_from_ints (
+          0x49, 0x39, 0xe3,
+          0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
+        ) in
+
+        let load_elem = bytes_from_ints (
+          0x48, 0x8b, 0x04, 0xdc,     -- mov rax, [rsp + rbx*8]
+          0x48, 0x89, 0x45, 0x98      -- mov [rbp-104], rax (elem)
+        ) in
+
+        let loop_tail = bytes_from_ints (
+          0x48, 0xff, 0xc3            -- inc rbx
+        ) in
+        let back_dist = body_len + body_save_len + 3 + 9 + 8 in
+        let back_neg = 0 - back_dist in
+        let back = encode_i32 back_neg in
+        let loop_jmp = bytes_from_ints (
+          0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
+        ) in
+
+        -- Load final accumulator into out_reg
+        let load_final = emit_load_rbp out_reg 0xa0 in
+
+        let dealloc_array = if n_elems > 0 then
+          bytes_from_ints (0x48, 0x81, 0xc4, list_nth as_enc 0, list_nth as_enc 1, list_nth as_enc 2, list_nth as_enc 3)
+        else bytes_from_ints () in
+
+        (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+          base_code alloc_array) elem_codes) setup) setup2) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) (bytes_concat dealloc_array load_final),
+         out_reg, next_reg + 1)
+
+      -- Unknown step kind
+      else (base_code, base_reg, next_reg + 1)
+    else
+      (base_code, base_reg, next_reg + 1)
+
+  -- TypeAbst (kind 14): type erasure, compile inner
+  else if kind == 14 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let child0 = list_nth children 0 in
+    graph_eval me (program, child0, next_reg, default_type)
+
+  -- TypeApp (kind 15): type erasure, compile inner
+  else if kind == 15 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let child0 = list_nth children 0 in
+    graph_eval me (program, child0, next_reg, default_type)
+
+  -- Rewrite (kind 18): transparent, compile inner
+  else if kind == 18 then
+    let children = graph_outgoing program node_id in
+    let me = self_graph in
+    let child0 = list_nth children 0 in
+    graph_eval me (program, child0, next_reg, default_type)
+
+  -- Default: zero in out_reg
+  else
+    (emit_xor_rr out_reg, out_reg, next_reg + 1)
+
+-- =========================================================================
+-- Compilability check
+-- =========================================================================
+
+let is_aot_compilable program =
+  let nodes = graph_nodes program in
+  fold 1 (\acc n ->
+    if acc == 0 then 0
+    else
+      let kind = graph_get_kind program n in
+      let dbg = debug_print (n, kind) in
+      if kind == 0 then 1        -- Prim
+      else if kind == 2 then 1   -- Lambda (compiled inline in Fold)
+      else if kind == 3 then 1   -- Let
+      else if kind == 5 then 1   -- Lit
+      else if kind == 8 then 1   -- Fold
+      else if kind == 11 then 1  -- Tuple
+      else if kind == 13 then 1  -- Project
+      else if kind == 14 then 1  -- TypeAbst
+      else if kind == 15 then 1  -- TypeApp
+      else if kind == 17 then 1  -- Guard
+      else if kind == 18 then 1  -- Rewrite
+      else 0) nodes
+
+-- =========================================================================
+-- Entry point: compile a Program to x86-64 machine code bytes
+-- =========================================================================
+
+let aot_compile program =
+  -- Compilability is checked on the Rust side before calling aot_compile.
+  -- The IRIS is_aot_compilable fold has cross-fragment closure evaluation
+  -- issues, so we skip the redundant check here.
+  let default_type = aot_result_type program 0 in
+  let root = graph_get_root program in
+  let result = aot_compile_node program root 0 default_type in
+  let body = result.0 in
+  let result_reg = result.1 in
+  -- Move result to rax
+  let mov_result = emit_mov_rax_from result_reg in
+  -- Extended System V AMD64 prologue (80 bytes stack frame for fold slots)
+  let prologue = bytes_from_ints (
+    0x55,                         -- push rbp
+    0x48, 0x89, 0xe5,             -- mov rbp, rsp
+    0x53,                         -- push rbx
+    0x41, 0x54,                   -- push r12
+    0x41, 0x55,                   -- push r13
+    0x41, 0x56,                   -- push r14
+    0x41, 0x57,                   -- push r15
+    0x48, 0x83, 0xec, 80,         -- sub rsp, 80 (fold slots)
+    0x48, 0x89, 0x7d, 0xd0,       -- mov [rbp-48], rdi  (arg0)
+    0x48, 0x89, 0x75, 0xc8,       -- mov [rbp-56], rsi  (arg1)
+    0x48, 0x89, 0x55, 0xc0,       -- mov [rbp-64], rdx  (arg2)
+    0x48, 0x89, 0x4d, 0xb8,       -- mov [rbp-72], rcx  (arg3)
+    0x4c, 0x89, 0x45, 0xb0,       -- mov [rbp-80], r8   (arg4)
+    0x4c, 0x89, 0x4d, 0xa8        -- mov [rbp-88], r9   (arg5)
+  ) in
+  -- Epilogue: lea rsp,[rbp-40] to skip over callee-saved + frame
+  let epilogue = bytes_from_ints (
+    0x48, 0x8d, 0x65, 0xd8,       -- lea rsp, [rbp-40]
+    0x41, 0x5f,                   -- pop r15
+    0x41, 0x5e,                   -- pop r14
+    0x41, 0x5d,                   -- pop r13
+    0x41, 0x5c,                   -- pop r12
+    0x5b,                         -- pop rbx
+    0x5d,                         -- pop rbp
+    0xc3                          -- ret
+  ) in
+  bytes_concat (bytes_concat (bytes_concat prologue body) mov_result) epilogue

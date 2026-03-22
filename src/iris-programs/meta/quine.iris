@@ -1,0 +1,5 @@
+-- A quine: a program that returns its own graph representation
+-- Uses self_graph to capture the executing program's structure
+let quine x : Int -> Int [cost: Const(1)] =
+  let me = self_graph () in
+  graph_eval me x

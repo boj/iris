@@ -1,0 +1,11 @@
+-- Replace a node with a Ref node pointing to a fragment
+-- The fragment_id is provided by the caller (e.g., hash of the extracted subtree)
+let extract_to_ref program node_id fragment_id =
+  graph_add_ref_rt program fragment_id
+
+-- Replace a node with a known Ref and redirect all edges
+let replace_with_ref program old_id fragment_id =
+  let s1 = graph_add_ref_rt program fragment_id in
+  let p1 = s1.0 in
+  let ref_id = s1.1 in
+  graph_replace_subtree p1 old_id ref_id

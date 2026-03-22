@@ -1,0 +1,5 @@
+-- Rewire an edge to point to a different target node
+-- Takes: program, edge_source, old_target, new_target, port
+let rewire_edge program source old_target new_target port =
+  let p1 = graph_disconnect program source old_target in
+  graph_connect p1 source new_target port

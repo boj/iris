@@ -1,0 +1,7 @@
+name = "IRIS"
+license = "AGPL-3.0-or-later"
+description = "Custom theme for the IRIS programming language website"
+min_version = "0.100.0"
+
+[author]
+  name = "IRIS Contributors"

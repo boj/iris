@@ -1,0 +1,79 @@
+-- FFI wrappers for libm (C math library) functions.
+-- Uses the ffi_call effect (0x2B) to call into libm.
+-- These functions take and return Float64 values.
+
+-- Square root.
+let c_sqrt x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "sqrt" (x)
+
+-- Sine.
+let c_sin x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "sin" (x)
+
+-- Cosine.
+let c_cos x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "cos" (x)
+
+-- Tangent.
+let c_tan x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "tan" (x)
+
+-- Natural logarithm.
+let c_log x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "log" (x)
+
+-- Exponential (e^x).
+let c_exp x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "exp" (x)
+
+-- Absolute value (float).
+let c_fabs x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "fabs" (x)
+
+-- Ceiling.
+let c_ceil x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "ceil" (x)
+
+-- Floor.
+let c_floor x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "floor" (x)
+
+-- Power (x^y).
+let c_pow x y : Float64 -> Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "pow" (x, y)
+
+-- Arc sine.
+let c_asin x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "asin" (x)
+
+-- Arc cosine.
+let c_acos x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "acos" (x)
+
+-- Arc tangent.
+let c_atan x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "atan" (x)
+
+-- Two-argument arc tangent.
+let c_atan2 y x : Float64 -> Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "atan2" (y, x)
+
+-- Hypotenuse (sqrt(x*x + y*y) without overflow).
+let c_hypot x y : Float64 -> Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "hypot" (x, y)
+
+-- Cube root.
+let c_cbrt x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "cbrt" (x)
+
+-- Log base 2.
+let c_log2 x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "log2" (x)
+
+-- Log base 10.
+let c_log10 x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "log10" (x)
+
+-- Round to nearest integer value (as float).
+let c_round x : Float64 -> Float64 [cost: Unknown] =
+  ffi_call "libm" "round" (x)

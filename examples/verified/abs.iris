@@ -1,0 +1,5 @@
+-- Absolute value with requires/ensures contracts
+let abs x : Int -> Int
+  requires x >= -1000000 && x <= 1000000
+  ensures result >= 0
+  = if x >= 0 then x else 0 - x

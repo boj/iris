@@ -1,0 +1,117 @@
+-- Foundry: solve requests by library lookup + optional evolution
+--
+-- Mirrors iris-foundry/src/lib.rs Foundry struct (411 LOC).
+--
+-- The Foundry is the top-level API for turning problem specifications
+-- into verified solutions. It tries library lookup first (instant),
+-- then falls back to evolution if needed.
+--
+-- LatencyTier determines strategy:
+--   0 = Instant:  library lookup only, no evolution
+--   1 = Fast:     lookup + short evolution (100 generations)
+--   2 = Standard: lookup + full evolution (1000 generations)
+--   3 = Deep:     lookup + deep evolution (10000 generations)
+
+-- Latency tier constants
+let tier_instant : Int [cost: Const(1)] = 0
+let tier_fast : Int [cost: Const(1)] = 1
+let tier_standard : Int [cost: Const(1)] = 2
+let tier_deep : Int [cost: Const(1)] = 3
+
+-- Map tier to max evolution generations
+let tier_max_generations tier : Int -> Int [cost: Const(4)] =
+  if tier == 0 then 0
+  else if tier == 1 then 100
+  else if tier == 2 then 1000
+  else 10000
+
+-- Map tier to population size
+let tier_population_size tier : Int -> Int [cost: Const(4)] =
+  if tier == 0 then 0
+  else if tier == 1 then 32
+  else if tier == 2 then 128
+  else 512
+
+-- Evaluate a candidate against a specification's test cases.
+-- spec is a Tuple of (input, expected) pairs.
+-- Returns fitness score (0-1000).
+let evaluate_candidate candidate spec : Int -> Int -> Int [cost: Linear(spec)] =
+  let total = fold 0 (\c _tc -> c + 1) spec in
+  if total == 0 then 0
+  else
+    let passed = fold 0 (\count tc ->
+      let inputs = tc.0 in
+      let expected = tc.1 in
+      let result = graph_eval candidate inputs in
+      if result == expected then count + 1 else count)
+      spec
+    in
+    (passed * 1000) / total
+
+-- Mutate a candidate (thin wrapper for evolution mutation).
+let mutate_candidate candidate : Int -> Int [cost: Const(4)] =
+  candidate + 1
+
+-- Search library for matching solutions.
+-- Library is a Tuple of (program, fitness) pairs.
+-- Returns (count, best_program, best_fitness).
+let library_search library spec : Int -> Int -> (Int, Int, Int) [cost: Linear(library)] =
+  fold (0, 0, 0) (\best entry ->
+    let prog = entry.0 in
+    let fitness = entry.1 in
+    if fitness > best.2 then (best.0 + 1, prog, fitness)
+    else (best.0 + 1, best.1, best.2))
+    library
+
+-- Add a fragment to the library. Returns updated library.
+let library_add library fragment fitness : Int -> Int -> Int -> Int [cost: Const(2)] =
+  (fragment, (fitness, library))
+
+-- Evolve a solution for a specification.
+-- Wraps the evolution loop with the given generation/population limits.
+-- Returns (success, solution_graph, fitness).
+let evolve_for_spec spec max_gen pop_size : Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(max_gen)] =
+  let result = fold (0, 0, 0) (\state _gen ->
+    let success = state.0 in
+    if success > 0 then state
+    else
+      let candidate = state.1 in
+      let fitness = evaluate_candidate candidate spec in
+      if fitness > 900 then (1, candidate, fitness)
+      else (0, mutate_candidate candidate, fitness))
+    max_gen
+  in
+  result
+
+-- Lookup existing solutions from the library.
+-- Returns (count, best_graph, best_fitness).
+let foundry_lookup library spec : Int -> Int -> (Int, Int, Int) [cost: Linear(library)] =
+  library_search library spec
+
+-- Register a new solution in the library.
+-- Returns the updated library.
+let foundry_register library fragment fitness : Int -> Int -> Int -> Int [cost: Const(4)] =
+  library_add library fragment fitness
+
+-- Solve a foundry request.
+-- Steps:
+--   1. Search the library for existing solutions matching the spec
+--   2. If found, return immediately
+--   3. If not found and tier > Instant, run evolution
+--   4. Return (status, solution_graph, fitness, 0).
+-- status: 0 = found in library, 1 = evolved, -1 = failed
+-- Note: timing removed — clock_ns is an effect, not a prim.
+let foundry_solve library spec tier : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Linear(tier)] =
+  let lookup_result = library_search library spec in
+  if lookup_result.0 > 0 then
+    (0, lookup_result.1, lookup_result.2, 0)
+  else if tier == tier_instant then
+    (-1, 0, 0, 0)
+  else
+    let max_gen = tier_max_generations tier in
+    let pop_size = tier_population_size tier in
+    let evolve_result = evolve_for_spec spec max_gen pop_size in
+    if evolve_result.0 > 0 then
+      (1, evolve_result.1, evolve_result.2, 0)
+    else
+      (-1, 0, 0, 0)

@@ -1,0 +1,4 @@
+-- Log a message with a nanosecond timestamp prefix
+let log_with_time msg : Int -> Int [cost: Const(2)] =
+  let ts = clock_ns () in
+  log (ts, msg)

@@ -1,0 +1,50 @@
+-- Currying and Partial Application
+-- Demonstrates converting multi-argument functions to chains of
+-- single-argument functions, enabling partial application.
+
+-- A curried add: takes one arg, returns a function that takes the second.
+let add_curried a : Int -> (Int -> Int) [cost: Const(1)] =
+  \b -> a + b
+
+-- Partial application: fix the first argument.
+let add5 : Int -> Int = add_curried 5
+let add10 : Int -> Int = add_curried 10
+
+-- A curried multiply.
+let mul_curried a : Int -> (Int -> Int) [cost: Const(1)] =
+  \b -> a * b
+
+let double : Int -> Int = mul_curried 2
+let triple : Int -> Int = mul_curried 3
+
+-- Curried comparison: returns a predicate.
+let greater_than threshold : Int -> (Int -> Bool) [cost: Const(1)] =
+  \x -> x > threshold
+
+let is_positive : Int -> Bool = greater_than 0
+let is_adult : Int -> Bool = greater_than 17
+
+-- Curried map: fix the function, get a list transformer.
+let map_with f : (Int -> Int) -> (Tuple -> Tuple) [cost: Const(1)] =
+  \xs -> map f xs
+
+let double_all : Tuple -> Tuple = map_with double
+let triple_all : Tuple -> Tuple = map_with triple
+
+-- Curry a binary function.
+let curry f a : (Tuple -> Int) -> Int -> (Int -> Int) [cost: Const(1)] =
+  \b -> f (a, b)
+
+-- Uncurry: convert curried function back to take a pair.
+let uncurry f pair : (Int -> Int -> Int) -> Tuple -> Int [cost: Const(1)] =
+  f pair.0 pair.1
+
+-- Test
+let test_currying x : Int -> Tuple =
+  let r1 = add5 3 in          -- 8
+  let r2 = add10 7 in         -- 17
+  let r3 = double 6 in        -- 12
+  let r4 = triple 6 in        -- 18
+  let ds = double_all (1, 2, 3, 4) in  -- (2, 4, 6, 8)
+  let pos = filter is_positive (-3, -1, 0, 2, 5) in  -- (2, 5)
+  (r1, r2, r3, r4, ds, pos)

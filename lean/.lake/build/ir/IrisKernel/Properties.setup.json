@@ -1,0 +1,11 @@
+{"plugins": [],
+ "package": "iris-kernel",
+ "options": {"autoImplicit": false},
+ "name": "IrisKernel.Properties",
+ "isModule": false,
+ "importArts":
+ {"IrisKernel.Types":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Types.olean"],
+  "IrisKernel.Rules":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Rules.olean"]},
+ "dynlibs": []}

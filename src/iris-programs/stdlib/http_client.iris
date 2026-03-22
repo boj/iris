@@ -1,0 +1,110 @@
+-- HTTP Client standard library
+-- Built entirely on TCP primitives: tcp_connect, tcp_write, tcp_read, tcp_close.
+-- No new opcodes required.
+
+-- External stub
+let int_to_str x : Int -> String [cost: Const(1)] = int_to_string x
+
+-- Build an HTTP request string.
+-- method: "GET", "POST", etc.
+-- path: "/api/data", "/", etc.
+-- host: "example.com"
+-- body: request body (empty string for GET)
+let build_request method path host body : String -> String -> String -> String -> String [cost: Unknown] =
+  let request_line = str_concat method (str_concat " " (str_concat path " HTTP/1.1\n")) in
+  let host_header = str_concat "Host: " (str_concat host "\n") in
+  let content_length = str_concat "Content-Length: " (str_concat (int_to_str (str_len body)) "\n") in
+  let connection = "Connection: close\n" in
+  let headers = str_concat host_header (str_concat content_length connection) in
+  str_concat request_line (str_concat headers (str_concat "\n" body))
+
+-- Parse an HTTP response into (status_code, headers_str, body).
+-- Returns a Tuple of (Int, String, String).
+let parse_response raw : String -> Tuple [cost: Unknown] =
+  -- Split on double CRLF to separate headers from body
+  let parts = str_split raw "\n\n" in
+  let header_block = list_nth parts 0 in
+  let body = if list_len parts > 1 then list_nth parts 1 else "" in
+  -- Parse status line: "HTTP/1.1 200 OK"
+  let header_lines = str_split header_block "\n" in
+  let status_line = list_nth header_lines 0 in
+  let status_parts = str_split status_line " " in
+  let status_code = if list_len status_parts > 1
+    then str_to_int (list_nth status_parts 1)
+    else 0 in
+  (status_code, header_block, body)
+
+-- Perform an HTTP GET request.
+-- host: hostname to connect to
+-- port: port number (usually 80)
+-- path: request path (e.g., "/api/data")
+-- Returns the raw HTTP response as a String.
+let http_get host port path : String -> Int -> String -> String [cost: Unknown] =
+  let conn = tcp_connect host port in
+  let req = build_request "GET" path host "" in
+  let unused = tcp_write conn req in
+  let response = tcp_read conn 65536 in
+  let unused = tcp_close conn in
+  response
+
+-- Perform an HTTP POST request.
+-- host: hostname to connect to
+-- port: port number (usually 80)
+-- path: request path
+-- body: request body
+-- Returns the raw HTTP response as a String.
+let http_post host port path body : String -> Int -> String -> String -> String [cost: Unknown] =
+  let conn = tcp_connect host port in
+  let content_type = "Content-Type: application/json\n" in
+  let req_line = str_concat "POST " (str_concat path " HTTP/1.1\n") in
+  let host_hdr = str_concat "Host: " (str_concat host "\n") in
+  let cl_hdr = str_concat "Content-Length: " (str_concat (int_to_str (str_len body)) "\n") in
+  let conn_hdr = "Connection: close\n" in
+  let req = str_concat req_line
+    (str_concat host_hdr
+      (str_concat content_type
+        (str_concat cl_hdr
+          (str_concat conn_hdr
+            (str_concat "\n" body))))) in
+  let unused = tcp_write conn req in
+  let response = tcp_read conn 65536 in
+  let unused = tcp_close conn in
+  response
+
+-- Perform an HTTP GET and parse the response.
+-- Returns (status_code, headers, body) as a Tuple.
+let http_get_parsed host port path : String -> Int -> String -> Tuple [cost: Unknown] =
+  let raw = http_get host port path in
+  parse_response raw
+
+-- Perform an HTTP POST and parse the response.
+-- Returns (status_code, headers, body) as a Tuple.
+let http_post_parsed host port path body : String -> Int -> String -> String -> Tuple [cost: Unknown] =
+  let raw = http_post host port path body in
+  parse_response raw
+
+-- Extract just the body from an HTTP GET response.
+let http_get_body host port path : String -> Int -> String -> String [cost: Unknown] =
+  let result = http_get_parsed host port path in
+  list_nth result 2
+
+-- Extract just the status code from an HTTP response.
+let http_status raw_response : String -> Int [cost: Unknown] =
+  let result = parse_response raw_response in
+  list_nth result 0
+
+-- Extract a specific header value from a raw response.
+-- Returns the header value or empty string if not found.
+let http_get_header raw_response header_name : String -> String -> String [cost: Unknown] =
+  let result = parse_response raw_response in
+  let header_block = list_nth result 1 in
+  let lines = str_split header_block "\n" in
+  let prefix = str_concat header_name ": " in
+  let result = fold (0, "") (\state line ->
+    if state.0 == 1 then state
+    else
+      if str_starts_with line prefix
+        then (1, str_slice line (str_len prefix) (str_len line))
+        else state)
+    lines in
+  result.1

@@ -1,0 +1,104 @@
+-- Compute behavioral novelty score for an individual
+-- Novelty = average behavioral distance to k nearest neighbors
+--
+-- Behavioral distance is measured as the sum of absolute output
+-- differences across test cases. This rewards programs that produce
+-- unique outputs, regardless of correctness.
+--
+-- behavior: tuple of outputs for this individual across test cases
+-- archive: collection of behavior tuples from the population/archive
+--
+-- For each archived behavior, compute Manhattan distance:
+--   dist(a, b) = fold(0, |acc pair| acc + max(pair.0 - pair.1, pair.1 - pair.0), zip(a, b))
+-- Then find k nearest and average their distances.
+
+-- Manhattan distance between two behavior vectors
+let behavior_distance a b : Int -> Int -> Int [cost: Linear(a)] =
+  let pairs = zip a b in
+  fold 0
+    (\acc pair -> acc + max (pair.0 - pair.1) (pair.1 - pair.0))
+    pairs
+
+-- Sum of distances from this behavior to every archived behavior
+let total_distance behavior archive : Int -> Int -> Int [cost: Linear(archive)] =
+  fold 0
+    (\acc other -> acc + behavior_distance behavior other)
+    archive
+
+-- Count entries in the archive
+let archive_size archive : Int -> Int [cost: Linear(archive)] =
+  fold 0 (\acc x -> acc + 1) archive
+
+-- Compute k-NN novelty score
+-- Finds the k smallest distances and averages them
+-- Since sorting is expensive in IRIS, we use a fold that tracks the k
+-- smallest distances seen so far using a running sum approach.
+-- For efficiency, when archive is small (< k), average all distances.
+let novelty_score behavior archive k : Int -> Int -> Int -> Int [cost: Linear(archive)] =
+  let n = archive_size archive in
+  if n == 0 then 0
+  else if k == 0 then 0
+  else
+    let total = total_distance behavior archive in
+    let effective_k = min k n in
+    -- Approximate k-NN: total_distance / n gives mean distance
+    -- True k-NN would use only k nearest, which is lower.
+    -- Approximate by scaling: knn_avg ~= total / n * (n / effective_k) * discount
+    -- For simplicity, use total / effective_k as an upper bound
+    total / effective_k
+
+-- Check if a behavior is novel enough to be added to the archive
+-- novelty: the novelty score
+-- threshold: minimum novelty required for archive insertion
+-- Returns: 1 if should add, 0 if too similar to existing archive members
+let should_add_to_archive novelty threshold : Int -> Int -> Int [cost: Const(1)] =
+  if novelty >= threshold then 1 else 0
+
+-- Archive management: limit archive size to max_size
+-- If archive is too large, keep the most novel entries
+-- Returns: number of entries to prune
+let entries_to_prune archive_sz max_size : Int -> Int -> Int [cost: Const(1)] =
+  if archive_sz > max_size then archive_sz - max_size
+  else 0
+
+-- Compute novelty for all individuals in a population against the archive
+-- population_behaviors: list of behavior vectors
+-- archive: list of archived behavior vectors
+-- k: number of nearest neighbors
+-- Returns: list of novelty scores
+let batch_novelty population_behaviors archive k : Int -> Int -> Int -> Int [cost: Unknown] =
+  map (\behavior -> novelty_score behavior archive k)
+    population_behaviors
+
+-- Adaptive novelty threshold: increase when archive grows too fast,
+-- decrease when archive grows too slowly
+-- current_threshold: current novelty threshold
+-- recent_additions: number of additions in last N generations
+-- target_additions: desired additions per N generations
+-- Returns: adjusted threshold
+let adaptive_threshold current_threshold recent_additions target_additions : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if recent_additions > target_additions * 2 then
+    -- Too many additions, raise threshold
+    current_threshold + current_threshold / 10
+  else if recent_additions < target_additions / 2 then
+    -- Too few additions, lower threshold
+    let reduced = current_threshold - current_threshold / 10 in
+    if reduced < 1 then 1 else reduced
+  else
+    current_threshold
+
+-- Compute behavioral diversity of a population
+-- Returns: average pairwise distance (higher = more diverse)
+let population_diversity behaviors : Int -> Int [cost: Unknown] =
+  let n = fold 0 (\acc x -> acc + 1) behaviors in
+  if n <= 1 then 0
+  else
+    let total = fold 0
+      (\acc b ->
+        let dist_sum = fold 0
+          (\inner other -> inner + behavior_distance b other)
+          behaviors in
+        acc + dist_sum)
+      behaviors in
+    -- total counts each pair twice (a->b and b->a), so divide by 2n
+    total / (n * 2)

@@ -1,0 +1,39 @@
+-- Reverse Complement (Benchmarks Game)
+-- Take a DNA string, reverse it, and replace each nucleotide with its
+-- complement: A<->T, C<->G.
+--
+-- This benchmark stresses string manipulation: character-by-character
+-- traversal, lookup/replacement, and string building via fold.
+
+-- Complement a single nucleotide character
+-- str_eq returns Int(0/1), so we compare with == 1 to get Bool for if/then
+let complement c =
+  if str_eq c "A" == 1 then "T"
+  else if str_eq c "T" == 1 then "A"
+  else if str_eq c "C" == 1 then "G"
+  else if str_eq c "G" == 1 then "C"
+  else if str_eq c "a" == 1 then "t"
+  else if str_eq c "t" == 1 then "a"
+  else if str_eq c "c" == 1 then "g"
+  else if str_eq c "g" == 1 then "c"
+  else c
+
+-- Reverse complement of a DNA string
+-- Traverse from end to start, complementing each character
+let reverse_complement dna =
+  let n = str_len dna in
+  fold "" (\acc i ->
+    let pos = n - 1 - i in
+    let ch = str_slice dna pos (pos + 1) in
+    str_concat acc (complement ch)
+  ) (list_range 0 n)
+
+-- Process a multi-line FASTA input (simplified: single DNA string)
+let process_dna dna =
+  reverse_complement dna
+
+-- Verify: reverse_complement of reverse_complement should be identity
+let verify dna =
+  let rc = reverse_complement dna in
+  let rcrc = reverse_complement rc in
+  str_eq dna rcrc

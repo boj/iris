@@ -1,0 +1,168 @@
+-- Fragment ecosystem with birth/death dynamics
+--
+-- Tracks which program fragments reference others. Frequently-referenced
+-- fragments are "keystone species" in the ecosystem. Unused fragments
+-- decay and are eventually pruned.
+--
+-- Phase Transition 2: Individual -> Ecology
+--
+-- Fragment interaction tracking:
+--   - Reference counting: how many programs import each fragment
+--   - Keystone detection: fragments referenced >= threshold times
+--   - Decay detection: fragments not used in max_age generations
+--   - Pruning: remove decaying non-keystone fragments
+--   - Interaction matrix: pairwise co-occurrence of fragments
+
+-- =========================================================================
+-- Reference counting
+-- =========================================================================
+
+-- Count how many programs in the population reference a given fragment
+-- population_imports: list of import-id lists (flattened: each entry is a fragment id)
+-- target_id: the fragment id to count references for
+let reference_count population_imports target_id : Int -> Int -> Int [cost: Linear(population_imports)] =
+  fold 0
+    (\acc import_id -> if import_id == target_id then acc + 1 else acc)
+    population_imports
+
+-- Count references for all known fragments
+-- Returns list of (fragment_id, ref_count) pairs
+let all_reference_counts population_imports fragment_ids : Int -> Int -> Int [cost: Unknown] =
+  map (\fid -> (fid, reference_count population_imports fid))
+    fragment_ids
+
+-- =========================================================================
+-- Keystone and decay detection
+-- =========================================================================
+
+-- Check if a fragment is a keystone (reference count >= threshold)
+-- Returns 1 if keystone, 0 otherwise
+let is_keystone ref_count threshold : Int -> Int -> Int [cost: Const(1)] =
+  if ref_count >= threshold then 1 else 0
+
+-- Check if a fragment is decaying (not used in max_age generations)
+-- last_used: generation when fragment was last referenced
+-- current_gen: current generation number
+-- max_age: maximum generations without use before decay
+-- Returns 1 if decaying, 0 otherwise
+let is_decaying last_used current_gen max_age : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let age = current_gen - last_used in
+  if age > max_age then 1 else 0
+
+-- Decide whether a fragment should be pruned
+-- A fragment is pruned if it is decaying AND not a keystone
+-- Returns 1 if should prune, 0 otherwise
+let should_prune ref_count threshold last_used current_gen max_age : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  let keystone = is_keystone ref_count threshold in
+  let decaying = is_decaying last_used current_gen max_age in
+  if decaying == 1 then
+    if keystone == 1 then 0 else 1
+  else 0
+
+-- Count keystone fragments in a list of reference counts
+let count_keystones ref_counts threshold : Int -> Int -> Int [cost: Linear(ref_counts)] =
+  fold 0
+    (\acc count -> if count >= threshold then acc + 1 else acc)
+    ref_counts
+
+-- Count decaying fragments in a list of (last_used, current_gen) pairs
+let count_decaying ages max_age : Int -> Int -> Int [cost: Linear(ages)] =
+  fold 0
+    (\acc age -> if age > max_age then acc + 1 else acc)
+    ages
+
+-- =========================================================================
+-- Fragment interaction tracking
+-- =========================================================================
+
+-- Compute co-occurrence: how often two fragments appear together in the same program
+-- population_imports: list of (program_id, list_of_fragment_ids) pairs
+-- fid_a, fid_b: the two fragments to check
+-- Returns: number of programs that import both
+let co_occurrence imports fid_a fid_b : Int -> Int -> Int -> Int [cost: Linear(imports)] =
+  fold 0
+    (\count program_imports ->
+      let has_a = fold 0
+        (\found fid -> if fid == fid_a then 1 else found)
+        program_imports in
+      let has_b = fold 0
+        (\found fid -> if fid == fid_b then 1 else found)
+        program_imports in
+      if has_a == 1 then
+        if has_b == 1 then count + 1
+        else count
+      else count)
+    imports
+
+-- Compute mutual dependence score between two fragments
+-- Higher score = more frequently co-occurring
+-- Normalized by total programs (scaled by 100)
+let mutual_dependence imports fid_a fid_b total_programs : Int -> Int -> Int -> Int -> Int [cost: Linear(imports)] =
+  let co = co_occurrence imports fid_a fid_b in
+  if total_programs == 0 then 0
+  else (co * 100) / total_programs
+
+-- =========================================================================
+-- Ecosystem dynamics
+-- =========================================================================
+
+-- Compute ecosystem health metrics
+-- Returns: (total_fragments, keystones, decaying, diversity_index)
+let ecosystem_health ref_counts ages threshold max_age : Int -> Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Linear(ref_counts)] =
+  let total = fold 0 (\acc x -> acc + 1) ref_counts in
+  let keystones = count_keystones ref_counts threshold in
+  let decaying = count_decaying ages max_age in
+  -- Diversity index: number of non-decaying fragments / total
+  let active = total - decaying in
+  let diversity = if total == 0 then 0 else (active * 100) / total in
+  (total, keystones, decaying, diversity)
+
+-- Fragment birth: create a new fragment entry
+-- Returns: (fragment_id, birth_generation, initial_ref_count)
+let fragment_birth fragment_id generation : Int -> Int -> (Int, Int, Int) [cost: Const(1)] =
+  (fragment_id, generation, 0)
+
+-- Fragment death: mark a fragment for removal
+-- Returns: 1 if successfully marked for death, 0 if protected (keystone)
+let fragment_death ref_count threshold : Int -> Int -> Int [cost: Const(1)] =
+  if ref_count >= threshold then 0
+  else 1
+
+-- Compute ecosystem turnover rate: births + deaths / total per generation
+-- Returns: turnover rate scaled by 100
+let turnover_rate births deaths total : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if total == 0 then 0
+  else ((births + deaths) * 100) / total
+
+-- =========================================================================
+-- Ecological interactions
+-- =========================================================================
+
+-- Competition: two fragments competing for the same niche
+-- The fragment with higher fitness in the niche survives
+-- Returns: 0 if a wins, 1 if b wins
+let competition a_fitness b_fitness : Int -> Int -> Int [cost: Const(1)] =
+  if a_fitness >= b_fitness then 0 else 1
+
+-- Symbiosis: check if two fragments benefit from co-occurrence
+-- mutual_dep > threshold indicates symbiosis
+let is_symbiotic mutual_dep threshold : Int -> Int -> Int [cost: Const(1)] =
+  if mutual_dep > threshold then 1 else 0
+
+-- Parasitism: check if one fragment benefits at the other's expense
+-- a benefits (high ref count) while b suffers (decreasing ref count)
+let is_parasitic a_ref_trend b_ref_trend : Int -> Int -> Int [cost: Const(2)] =
+  if a_ref_trend > 0 then
+    if b_ref_trend < 0 then 1 else 0
+  else 0
+
+-- Ecosystem summary
+-- Returns: (health_diversity, keystones, turnover, interaction_density)
+let ecosystem_summary ref_counts ages threshold max_age births deaths total : Int -> Int -> Int -> Int -> Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Linear(ref_counts)] =
+  let health = ecosystem_health ref_counts ages threshold max_age in
+  let diversity = health.3 in
+  let keystones = health.1 in
+  let turnover = turnover_rate births deaths total in
+  -- Interaction density: keystones / total (higher = more connected)
+  let density = if total == 0 then 0 else (keystones * 100) / total in
+  (diversity, keystones, turnover, density)

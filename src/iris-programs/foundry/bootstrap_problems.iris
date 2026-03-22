@@ -1,0 +1,95 @@
+-- Standard benchmark problems as test case sets
+--
+-- Mirrors the Rust bootstrap module: defines test cases for ~20 standard
+-- problems so the foundry can pre-evolve solutions and populate the
+-- library for Instant-tier lookups.
+--
+-- Each problem is defined as a tuple of (input, expected_output) pairs.
+-- Problem categories: arithmetic, reductions, iteration, predicates.
+
+-- Arithmetic: add two integers
+-- Test cases: (1+2=3), (0+0=0), (-1+1=0), (100+200=300)
+let add_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((1, 2, 3), (0, 0, 0), (-1, 1, 0), (100, 200, 300))
+
+-- Arithmetic: subtract two integers
+let sub_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((5, 3, 2), (0, 0, 0), (1, 5, -4), (100, 50, 50))
+
+-- Arithmetic: multiply two integers
+let mul_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((2, 3, 6), (0, 5, 0), (-1, 7, -7), (4, 4, 16))
+
+-- Arithmetic: absolute value
+let abs_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((5, 5), (-5, 5), (0, 0), (-100, 100))
+
+-- Arithmetic: maximum of two integers
+let max_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((3, 5, 5), (5, 3, 5), (0, 0, 0), (-1, -5, -1))
+
+-- Arithmetic: minimum of two integers
+let min_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((3, 5, 3), (5, 3, 3), (0, 0, 0), (-1, -5, -5))
+
+-- Arithmetic: double
+let double_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((0, 0), (1, 2), (5, 10), (-3, -6))
+
+-- Reduction: sum of a list
+-- Each test case: (input_list, expected_sum)
+let sum_tests : (Int, Int, Int, Int) [cost: Zero] =
+  (((1, 2, 3), 6), ((10), 10), ((), 0), ((1, 1, 1, 1, 1), 5))
+
+-- Reduction: product of a list
+let product_tests : (Int, Int, Int) [cost: Zero] =
+  (((1, 2, 3), 6), ((5), 5), ((2, 3, 4), 24))
+
+-- Reduction: count elements in a list
+let count_tests : (Int, Int, Int) [cost: Zero] =
+  (((1, 2, 3), 3), ((), 0), ((7), 1))
+
+-- Iteration: factorial
+let factorial_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((0, 1), (1, 1), (5, 120), (3, 6))
+
+-- Iteration: fibonacci
+let fibonacci_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((0, 0), (1, 1), (5, 5), (7, 13))
+
+-- Iteration: greatest common divisor
+let gcd_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((12, 8, 4), (7, 3, 1), (15, 5, 5), (0, 5, 5))
+
+-- Iteration: integer exponentiation
+let power_tests : (Int, Int, Int, Int) [cost: Zero] =
+  ((2, 3, 8), (5, 0, 1), (3, 2, 9), (2, 10, 1024))
+
+-- Predicate: all elements positive (1=true, 0=false)
+let all_pos_tests : (Int, Int, Int) [cost: Zero] =
+  (((1, 2, 3), 1), ((1, -1), 0), ((), 1))
+
+-- Predicate: any element negative (1=true, 0=false)
+let any_neg_tests : (Int, Int, Int) [cost: Zero] =
+  (((1, -1), 1), ((1, 2), 0), ((), 0))
+
+-- Evaluate a candidate against a problem's test cases
+-- Returns the number of passing test cases
+let eval_on_problem candidate tests : Int -> Int -> Int [cost: Linear(tests)] =
+  fold 0
+    (\correct tc ->
+      let inputs = tc.0 in
+      let expected = tc.1 in
+      let result = graph_eval candidate inputs in
+      if result == expected then correct + 1 else correct)
+    tests
+
+-- Run all benchmark problems against a candidate, return total score
+let benchmark_score candidate : Int -> Int [cost: Unknown] =
+  let s1 = eval_on_problem candidate add_tests in
+  let s2 = eval_on_problem candidate sub_tests in
+  let s3 = eval_on_problem candidate mul_tests in
+  let s4 = eval_on_problem candidate abs_tests in
+  let s5 = eval_on_problem candidate max_tests in
+  let s6 = eval_on_problem candidate min_tests in
+  s1 + s2 + s3 + s4 + s5 + s6

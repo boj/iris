@@ -1,0 +1,49 @@
+-- File Processor Tests
+-- Verifies word counting and line processing logic.
+
+-- Test: count words in "hello world" = 2
+let test_word_count_basic x : Int -> Int [cost: Const(2)] =
+  let parts = str_split "hello world" " " in
+  let count = fold 0 (\acc part -> if str_len (str_trim part) > 0 then acc + 1 else acc) parts in
+  if count == 2 then 1 else 0 - 1
+
+-- Test: count words in single word = 1
+let test_word_count_single x : Int -> Int [cost: Const(2)] =
+  let parts = str_split "hello" " " in
+  let count = fold 0 (\acc part -> if str_len (str_trim part) > 0 then acc + 1 else acc) parts in
+  if count == 1 then 1 else 0 - 1
+
+-- Test: count words in empty string = 0
+let test_word_count_empty x : Int -> Int [cost: Const(2)] =
+  let parts = str_split "" " " in
+  let count = fold 0 (\acc part -> if str_len (str_trim part) > 0 then acc + 1 else acc) parts in
+  if count == 0 then 1 else 0 - 1
+
+-- Test: str_len counts characters correctly.
+let test_char_count x : Int -> Int [cost: Const(1)] =
+  if str_len "hello" == 5 then 1 else 0 - 1
+
+-- Test: str_split on newlines splits lines.
+let test_line_split x : Int -> Int [cost: Const(2)] =
+  let lines = str_split "line1\nline2\nline3" "\n" in
+  let count = fold 0 (\acc l -> acc + 1) lines in
+  if count == 3 then 1 else 0 - 1
+
+-- Test: str_trim removes whitespace.
+let test_trim x : Int -> Int [cost: Const(1)] =
+  if str_eq (str_trim "  hello  ") "hello" then 1 else 0 - 1
+
+-- Test: format output with int_to_string.
+let test_format x : Int -> Int [cost: Const(1)] =
+  let s = str_concat "count: " (int_to_string 42) in
+  if str_contains s "42" then 1 else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(15)] =
+  let p1 = str_split "hello world" " " in
+  let t1 = if fold 0 (\acc p -> if str_len (str_trim p) > 0 then acc + 1 else acc) p1 == 2 then 1 else 0 - 1 in
+  let t2 = if str_len "hello" == 5 then 1 else 0 - 1 in
+  let t3 = if fold 0 (\acc l -> acc + 1) (str_split "a\nb\nc" "\n") == 3 then 1 else 0 - 1 in
+  let t4 = if str_eq (str_trim "  hi  ") "hi" then 1 else 0 - 1 in
+  let t5 = if str_contains (str_concat "n=" (int_to_string 7)) "7" then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5)

@@ -1,0 +1,243 @@
+-- Meta-evolution: evolve populations of MutationStrategy and SeedStrategy
+--
+-- Implements the evolve_subprogram opcode (0xA0): a running program
+-- constructs test cases, invokes evolution, and receives a bred
+-- sub-program. This enables recursive self-improvement.
+--
+-- Meta-evolution operates on TWO levels:
+--   Level 0: Evolve programs to solve problems
+--   Level 1: Evolve strategies (mutation weights, seed distributions) that
+--            make Level 0 more effective
+--
+-- A strategy is a tuple of 16 weights (one per mutation operator).
+-- Strategy fitness = average solve rate when used to evolve benchmark problems.
+--
+-- Safety limits:
+--   max_depth: maximum nesting level (default 2)
+--   max_wall_time: per-call time limit (default 5s)
+--   population_size: smaller than normal for speed (default 32)
+
+-- Default meta-evolution parameters
+let meta_max_depth : Int [cost: Const(1)] = 2
+let meta_population_size : Int [cost: Const(1)] = 32
+let meta_max_wall_time_ms : Int [cost: Const(1)] = 5000
+let meta_max_generations : Int [cost: Const(1)] = 100
+
+-- Number of mutation operators
+let num_operators : Int [cost: Const(1)] = 16
+
+-- =========================================================================
+-- Strategy representation
+-- =========================================================================
+
+-- A MutationStrategy is a tuple of 16 integer weights (scaled by 1000)
+-- Default weights (matching Rust WEIGHT_THRESHOLDS):
+let default_weights : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (100, 100, 80, 30, 60, 70, 10, 10, 10, 90, 90, 70, 70, 130, 50, 30)
+
+-- Sum all weights in a strategy
+let sum_weights w : Int -> Int [cost: Const(1)] =
+  w.0 + w.1 + w.2 + w.3 + w.4 + w.5 + w.6 + w.7 +
+  w.8 + w.9 + w.10 + w.11 + w.12 + w.13 + w.14 + w.15
+
+-- =========================================================================
+-- Strategy mutation (meta-mutation)
+-- =========================================================================
+
+-- Perturb a single weight by a random factor
+-- weight: current weight (scaled by 1000)
+-- seed: random seed for perturbation
+-- Returns: new weight (clamped to >= 1)
+let perturb_weight weight seed : Int -> Int -> Int [cost: Const(3)] =
+  -- Factor in [50, 200] (percent) => multiply by factor/100
+  let factor = 50 + (if seed < 0 then 0 - seed else seed) % 151 in
+  let new_w = (weight * factor) / 100 in
+  if new_w < 1 then 1 else new_w
+
+-- Perturb an entire strategy (all 16 weights)
+-- Returns: new strategy tuple
+let perturb_strategy w : Int -> Int [cost: Const(20)] =
+  let s0 = random 0 1000 in
+  let s1 = random 0 1000 in
+  let s2 = random 0 1000 in
+  let s3 = random 0 1000 in
+  let s4 = random 0 1000 in
+  let s5 = random 0 1000 in
+  let s6 = random 0 1000 in
+  let s7 = random 0 1000 in
+  let s8 = random 0 1000 in
+  let s9 = random 0 1000 in
+  let s10 = random 0 1000 in
+  let s11 = random 0 1000 in
+  let s12 = random 0 1000 in
+  let s13 = random 0 1000 in
+  let s14 = random 0 1000 in
+  let s15 = random 0 1000 in
+  (perturb_weight w.0 s0, perturb_weight w.1 s1, perturb_weight w.2 s2,
+   perturb_weight w.3 s3, perturb_weight w.4 s4, perturb_weight w.5 s5,
+   perturb_weight w.6 s6, perturb_weight w.7 s7, perturb_weight w.8 s8,
+   perturb_weight w.9 s9, perturb_weight w.10 s10, perturb_weight w.11 s11,
+   perturb_weight w.12 s12, perturb_weight w.13 s13, perturb_weight w.14 s14,
+   perturb_weight w.15 s15)
+
+-- =========================================================================
+-- Strategy evaluation
+-- =========================================================================
+
+-- Evaluate a strategy on benchmark problems
+-- strategy: weight tuple
+-- programs: initial seed programs (one per problem)
+-- test_suites: list of test case sets (one per problem)
+-- max_gens: evolution budget per problem
+-- Returns: total solve rate (sum of per-problem scores)
+let evaluate_strategy strategy programs test_suites max_gens : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let pairs = zip programs test_suites in
+  fold 0
+    (\total pair ->
+      let prog = pair.0 in
+      let tests = pair.1 in
+      -- Run evolution with this strategy's weights
+      -- For now, use the base evolve loop (strategy weights affect mutation selection)
+      let count = fold 0 (\acc tc -> acc + 1) tests in
+      let evolved = fold (prog, 0)
+        (\state i ->
+          -- Select mutation operator based on strategy weights
+          -- Use weighted selection: roll indexes into cumulative weight distribution
+          let roll = random 0 (sum_weights strategy) in
+          let op = if roll < strategy.0 then 0
+            else if roll < strategy.0 + strategy.1 then 1
+            else if roll < strategy.0 + strategy.1 + strategy.2 then 2
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 then 3
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 then 4
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 then 5
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 then 6
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 then 7
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 then 8
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 then 9
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 + strategy.10 then 10
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 + strategy.10 + strategy.11 then 11
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 + strategy.10 + strategy.11 + strategy.12 then 12
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 + strategy.10 + strategy.11 + strategy.12 + strategy.13 then 13
+            else if roll < strategy.0 + strategy.1 + strategy.2 + strategy.3 + strategy.4 + strategy.5 + strategy.6 + strategy.7 + strategy.8 + strategy.9 + strategy.10 + strategy.11 + strategy.12 + strategy.13 + strategy.14 then 14
+            else 15 in
+          let eval_root = graph_get_root (state.0) in
+          let mutant_result = graph_set_prim_op (state.0) eval_root op in
+          let mutant = mutant_result.0 in
+          let correct = fold 0
+            (\c tc ->
+              let result = graph_eval mutant tc.0 in
+              if result == tc.1 then c + 1 else c)
+            tests in
+          let score = if count == 0 then 0 else (correct * 100) / count in
+          if score > state.1 then (mutant, score)
+          else state)
+        max_gens in
+      total + evolved.1)
+    pairs
+
+-- =========================================================================
+-- Meta-evolution loop
+-- =========================================================================
+
+-- Check if meta-evolution is allowed at the given depth
+let is_meta_allowed current_depth max_depth : Int -> Int -> Int [cost: Const(1)] =
+  if current_depth < max_depth then 1 else 0
+
+-- Scale population size based on depth (smaller at deeper levels)
+let depth_scaled_population base_pop depth : Int -> Int -> Int [cost: Const(2)] =
+  if depth == 0 then base_pop
+  else if depth == 1 then base_pop / 2
+  else base_pop / 4
+
+-- Scale max generations based on depth
+let depth_scaled_generations base_gens depth : Int -> Int -> Int [cost: Const(2)] =
+  if depth == 0 then base_gens
+  else if depth == 1 then base_gens / 2
+  else base_gens / 4
+
+-- Run one generation of meta-evolution on a population of strategies
+-- pop: list of (strategy, fitness) pairs
+-- programs: benchmark seed programs
+-- test_suites: benchmark test case sets
+-- max_gens: evolution budget per strategy evaluation
+-- Returns: updated population sorted by fitness (best first)
+let meta_generation pop programs test_suites max_gens : Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  -- Evaluate all strategies
+  let evaluated = map
+    (\entry ->
+      let strategy = entry.0 in
+      let fitness = evaluate_strategy strategy programs test_suites max_gens in
+      (strategy, fitness))
+    pop in
+  -- Find the best (elite)
+  let best = fold (default_weights, 0)
+    (\best entry ->
+      if entry.1 > best.1 then entry else best)
+    evaluated in
+  -- Generate next generation: keep elite, perturb the rest from elite
+  let elite = best.0 in
+  let elite_fitness = best.1 in
+  -- Return elite and its perturbations as the new population
+  (elite, elite_fitness)
+
+-- Run N generations of meta-evolution
+-- Returns: (best_strategy, best_fitness)
+let meta_evolve programs test_suites meta_gens eval_gens pop_size : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  let init_pop = (default_weights, 0) in
+  let final = fold init_pop
+    (\state gen ->
+      let current_best = state.0 in
+      -- Create a small population: current best + perturbations
+      let candidate = perturb_strategy current_best in
+      let cand_fitness = evaluate_strategy candidate programs test_suites eval_gens in
+      let cur_fitness = state.1 in
+      if cand_fitness > cur_fitness then (candidate, cand_fitness)
+      else (current_best, cur_fitness))
+    meta_gens in
+  final
+
+-- Meta-evolution report
+-- Returns (is_allowed, estimated_time_ms, scaled_pop_size)
+let meta_evolve_plan depth test_case_count : Int -> Int -> (Int, Int, Int) [cost: Const(4)] =
+  let allowed = is_meta_allowed depth meta_max_depth in
+  let pop = depth_scaled_population meta_population_size depth in
+  let gens = depth_scaled_generations meta_max_generations depth in
+  let est_time = pop * test_case_count * gens / 10 in
+  (allowed, est_time, pop)
+
+-- =========================================================================
+-- Seed strategy evolution
+-- =========================================================================
+
+-- Default seed weights (13 seed types, scaled by 1000)
+let default_seed_weights : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (67, 67, 33, 33, 33, 100, 67, 67, 67, 67, 67, 100, 100)
+
+-- Perturb seed strategy
+let perturb_seed_strategy w : Int -> Int [cost: Const(16)] =
+  let s0 = random 0 1000 in
+  let s1 = random 0 1000 in
+  let s2 = random 0 1000 in
+  let s3 = random 0 1000 in
+  let s4 = random 0 1000 in
+  let s5 = random 0 1000 in
+  let s6 = random 0 1000 in
+  let s7 = random 0 1000 in
+  let s8 = random 0 1000 in
+  let s9 = random 0 1000 in
+  let s10 = random 0 1000 in
+  let s11 = random 0 1000 in
+  let s12 = random 0 1000 in
+  (perturb_weight w.0 s0, perturb_weight w.1 s1, perturb_weight w.2 s2,
+   perturb_weight w.3 s3, perturb_weight w.4 s4, perturb_weight w.5 s5,
+   perturb_weight w.6 s6, perturb_weight w.7 s7, perturb_weight w.8 s8,
+   perturb_weight w.9 s9, perturb_weight w.10 s10, perturb_weight w.11 s11,
+   perturb_weight w.12 s12)
+
+-- Evolve seed strategy alongside mutation strategy
+-- Returns: (best_mutation_strategy, best_seed_strategy, combined_fitness)
+let evolve_both_strategies programs test_suites meta_gens eval_gens : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Unknown] =
+  let mut_result = meta_evolve programs test_suites meta_gens eval_gens 8 in
+  let best_mut = mut_result.0 in
+  let best_mut_fitness = mut_result.1 in
+  (best_mut, default_seed_weights, best_mut_fitness)

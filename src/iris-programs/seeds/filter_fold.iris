@@ -1,0 +1,61 @@
+-- Seed generator: construct a filter+fold program
+--
+-- Builds a SemanticGraph: fold(base, fold_op, filter(input, cmp_op))
+-- Seeds patterns like sum-of-positives: fold(0, add, filter(input, gt))
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)               base case
+--     port 1 -> Prim(add)            fold step
+--     port 2 -> Prim(filter)         collection override
+--                 port 0 -> Tuple    input placeholder
+--                 port 1 -> Prim(gt) filter predicate (compares element vs 0)
+--
+-- Comparison opcodes: eq=0x20(32), ne=0x21(33), lt=0x22(34), gt=0x23(35), le=0x24(36), ge=0x25(37)
+-- Opcodes: add=0x00, filter=0x31(49)
+
+-- Build the filter predicate node (comparison operation)
+let add_filter_pred program cmp_opcode : Int -> Int -> Int [cost: Const(4)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let _spo0 = graph_set_prim_op p nid cmp_opcode in
+  let p2 = _spo0.0 in
+  let nid = _spo0.1 in
+  (p2, nid)
+
+-- Build the filter node and wire it to the predicate
+let add_filter program pred_id : Int -> Int -> Int [cost: Const(6)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let filter_id = r.1 in
+  let _spo1 = graph_set_prim_op p filter_id 49 in
+  let p2 = _spo1.0 in
+  let filter_id = _spo1.1 in
+  graph_connect p2 filter_id pred_id 1
+
+-- Complete filter+fold seed: filter -> fold(0, add, filtered)
+let generate_filter_fold program : Int -> Int [cost: Const(16)] =
+  -- Add filter predicate: gt (opcode 35) for "positive elements"
+  let fp = graph_add_node_rt program 0 in
+  let p1 = fp.0 in
+  let pred_id = fp.1 in
+  let _spo2 = graph_set_prim_op p1 pred_id 35 in
+  let p1 = _spo2.0 in
+  let pred_id = _spo2.1 in
+  -- Add filter node (opcode 49)
+  let fn_r = graph_add_node_rt p1 0 in
+  let p2 = fn_r.0 in
+  let filter_id = fn_r.1 in
+  let _spo3 = graph_set_prim_op p2 filter_id 49 in
+  let p2 = _spo3.0 in
+  let filter_id = _spo3.1 in
+  let p3 = graph_connect p2 filter_id pred_id 1 in
+  -- Add fold step: add (opcode 0)
+  let fs = graph_add_node_rt p3 0 in
+  let p4 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root: step (port 1), filter (port 2 = collection override)
+  let root = graph_get_root p4 in
+  let p5 = graph_connect p4 root add_id 1 in
+  graph_connect p5 root filter_id 2

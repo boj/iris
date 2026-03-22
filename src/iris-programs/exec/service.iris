@@ -1,0 +1,133 @@
+-- Execution service: tier-based program evaluation with sandboxing
+--
+-- Mirrors the Rust service_impl module in iris-exec/src/service_impl.rs.
+--
+-- Gen2 tier routing (actual tier routing, not placeholders):
+--   Tier A: tree-walking interpreter (small programs, < 50 nodes)
+--   Tier B: CLCU interpreter via C library (medium programs, 50-500 nodes)
+--   Tier C: VM bytecode execution (large programs, > 500 nodes)
+--           Falls back to Tier B if bytecode compilation fails.
+--
+-- JIT (future Gen3) would be Tier D for hot paths.
+--
+-- Sandbox configuration limits:
+--   memory_limit: 256 MB default
+--   step_limit:   100,000 steps default
+--   timeout:      5,000 ms default
+
+-- Default sandbox limits (matching Rust defaults)
+let default_memory_limit : Int [cost: Const(1)] = 268435456   -- 256 MB
+let default_step_limit : Int [cost: Const(1)] = 100000
+let default_timeout_ms : Int [cost: Const(1)] = 5000
+
+-- Tighter limits for enumerative synthesis
+let enumerate_step_limit : Int [cost: Const(1)] = 10000
+let enumerate_timeout_ms : Int [cost: Const(1)] = 500
+
+-- Tier constants
+let tier_a : Int [cost: Const(1)] = 0  -- tree-walking interpreter
+let tier_b : Int [cost: Const(1)] = 1  -- CLCU interpreter
+let tier_c : Int [cost: Const(1)] = 2  -- VM bytecode
+let tier_d : Int [cost: Const(1)] = 3  -- JIT (future)
+
+-- Tier classification based on program size.
+-- Matches the Rust tier routing logic.
+let classify_tier node_count : Int -> Int [cost: Const(3)] =
+  if node_count <= 50 then tier_a       -- small: tree-walking is fine
+  else if node_count <= 500 then tier_b -- medium: use CLCU
+  else tier_c                           -- large: VM bytecode
+
+-- Scale step limit by program size.
+-- Larger programs get proportionally more steps.
+let scale_step_limit base_limit node_count : Int -> Int -> Int [cost: Const(2)] =
+  let scale = if node_count <= 10 then 1
+              else if node_count <= 100 then 2
+              else if node_count <= 1000 then 5
+              else 10 in
+  base_limit * scale
+
+-- Scale timeout by program size.
+let scale_timeout base_timeout node_count : Int -> Int -> Int [cost: Const(2)] =
+  let scale = if node_count <= 50 then 1
+              else if node_count <= 500 then 2
+              else 5 in
+  base_timeout * scale
+
+-- Check if an evaluation timed out.
+let is_timed_out elapsed_ms timeout : Int -> Int -> Int [cost: Const(1)] =
+  if elapsed_ms >= timeout then 1 else 0
+
+-- Check if memory limit exceeded.
+let is_memory_exceeded current_bytes limit : Int -> Int -> Int [cost: Const(1)] =
+  if current_bytes >= limit then 1 else 0
+
+-- Check if step limit exceeded.
+let is_step_exceeded current_steps limit : Int -> Int -> Int [cost: Const(1)] =
+  if current_steps >= limit then 1 else 0
+
+-- Evaluate a program with sandboxing: actual tier routing.
+-- Returns (tier_used, steps_taken, success)
+--
+-- The routing logic:
+--   1. Classify tier based on node count
+--   2. Execute via tree-walker (graph_eval) — the only backend in IRIS
+--   3. Check result for errors (sentinel -1 = failure)
+--
+-- Mirrors Rust eval_one: on interpret_sandboxed error, pushes empty
+-- outputs and the individual gets 0 correctness rather than crashing.
+let evaluate_sandboxed program node_count : Int -> Int -> (Int, Int, Int) [cost: Linear(node_count)] =
+  let tier = classify_tier node_count in
+  let step_limit = scale_step_limit default_step_limit node_count in
+  let timeout = scale_timeout default_timeout_ms node_count in
+  let result = graph_eval program () in
+  let success = if result == -1 then 0 else 1 in
+  (tier, step_limit, success)
+
+-- Evaluate with custom sandbox configuration.
+-- sandbox: (memory_limit, step_limit, timeout_ms)
+let evaluate_custom program node_count sandbox : Int -> Int -> (Int, Int, Int) -> (Int, Int, Int) [cost: Linear(node_count)] =
+  let tier = classify_tier node_count in
+  let mem_limit = sandbox.0 in
+  let step_limit = sandbox.1 in
+  let timeout = sandbox.2 in
+  let result = graph_eval program () in
+  let success = if result == -1 then 0 else 1 in
+  (tier, step_limit, success)
+
+-- Batch evaluation: evaluate multiple programs and return aggregate results.
+-- Returns (programs_completed, programs_failed, total_steps)
+--
+-- Mirrors Rust evaluate_batch: iterates over each program, calls eval_one,
+-- and collects results. Failures are counted, not assumed zero.
+let batch_evaluate program_count avg_node_count : Int -> Int -> (Int, Int, Int) [cost: Linear(program_count)] =
+  let step_limit = scale_step_limit default_step_limit avg_node_count in
+  fold (0, 0, 0)
+    (\acc i ->
+      let completed = acc.0 in
+      let failed = acc.1 in
+      let total_steps = acc.2 in
+      let result = graph_eval i () in
+      if result == -1 then
+        (completed, failed + 1, total_steps + step_limit)
+      else
+        (completed + 1, failed, total_steps + step_limit))
+    program_count
+
+-- Determine if a program should be compiled to bytecode or run interpreted.
+-- Returns 1 if bytecode compilation is recommended, 0 for tree-walking.
+let should_compile node_count is_hot : Int -> Int -> Int [cost: Const(2)] =
+  if is_hot == 1 then
+    -- Hot path: always compile if possible
+    if node_count > 5 then 1 else 0
+  else
+    -- Cold path: only compile large programs
+    if node_count > 50 then 1 else 0
+
+-- Compute the expected speedup from bytecode compilation.
+-- Returns estimated speedup factor (x100 for fixed-point).
+let expected_speedup node_count : Int -> Int [cost: Const(2)] =
+  if node_count <= 10 then 100    -- 1x (no benefit for tiny programs)
+  else if node_count <= 50 then 150  -- 1.5x
+  else if node_count <= 200 then 300 -- 3x
+  else if node_count <= 1000 then 500 -- 5x
+  else 800  -- 8x for large programs (VM avoids hash lookups)

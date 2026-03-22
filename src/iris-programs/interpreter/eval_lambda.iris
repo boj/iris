@@ -1,0 +1,61 @@
+-- Evaluate Lambda/Apply nodes: create closures and apply them.
+--
+-- Mirrors the lambda/apply handling from iris-exec interpreter.rs
+-- eval_lambda and eval_apply.
+--
+-- In the Rust interpreter:
+--   Lambda: captures environment + binder + body → Closure
+--   Apply:  evaluates function position, evaluates arguments,
+--           binds args to closure's binder, evaluates body
+--
+-- In IRIS surface syntax, lambdas are written as: \x -> body
+-- Application is: f x
+--
+-- Since the surface language does not have first-class closures yet,
+-- we model the lambda/apply pattern as:
+--   1. A function that takes a "code selector" and an argument
+--   2. Dispatches to the appropriate body based on the selector
+--
+-- Inputs for apply:
+--   func_id : Int (identifies which function to apply)
+--   arg     : Int (the argument value)
+--
+-- Output: Int (result of applying the function to the argument)
+
+-- Apply a named function (by id) to an argument.
+-- func_id 0 = identity, 1 = double, 2 = square, 3 = negate, 4 = increment
+let eval_apply func_id arg : Int -> Int -> Int [cost: Const(3)] =
+  if func_id == 0 then arg
+  else if func_id == 1 then arg + arg
+  else if func_id == 2 then arg * arg
+  else if func_id == 3 then 0 - arg
+  else if func_id == 4 then arg + 1
+  else -9999
+
+-- Compose two functions: apply g first, then f.
+-- compose f g x = f(g(x))
+let eval_compose f_id g_id arg : Int -> Int -> Int -> Int [cost: Const(6)] =
+  let inner = if g_id == 0 then arg
+              else if g_id == 1 then arg + arg
+              else if g_id == 2 then arg * arg
+              else if g_id == 3 then 0 - arg
+              else if g_id == 4 then arg + 1
+              else arg in
+  if f_id == 0 then inner
+  else if f_id == 1 then inner + inner
+  else if f_id == 2 then inner * inner
+  else if f_id == 3 then 0 - inner
+  else if f_id == 4 then inner + 1
+  else inner
+
+-- Apply a binary operation as a curried function.
+-- Simulates: \x -> op(x, partial_arg)
+-- op: 0=add, 1=sub, 2=mul, 3=div
+let eval_partial_apply op partial_arg x : Int -> Int -> Int -> Int [cost: Const(3)] =
+  if op == 0 then x + partial_arg
+  else if op == 1 then x - partial_arg
+  else if op == 2 then x * partial_arg
+  else if op == 3 then
+    if partial_arg == 0 then 0
+    else x / partial_arg
+  else x

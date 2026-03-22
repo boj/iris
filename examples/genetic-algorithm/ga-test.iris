@@ -1,0 +1,77 @@
+-- Genetic Algorithm Tests
+-- Verifies GA components: fitness, crossover, selection.
+
+-- Test: fitness of [5, 5, 5] with target 15 is 0 (perfect).
+let test_fitness_perfect x : Int -> Int [cost: Const(3)] =
+  let individual = (5, 5, 5) in
+  let actual_sum = fold 0 (+) individual in
+  let diff = actual_sum - 15 in
+  let f = if diff < 0 then 0 - diff else diff in
+  if f == 0 then 1 else 0 - 1
+
+-- Test: fitness of [1, 2, 3] with target 10 is 4.
+let test_fitness_off x : Int -> Int [cost: Const(3)] =
+  let individual = (1, 2, 3) in
+  let actual_sum = fold 0 (+) individual in
+  let diff = actual_sum - 10 in
+  let f = if diff < 0 then 0 - diff else diff in
+  if f == 4 then 1 else 0 - 1
+
+-- Test: fitness of [10, 10] with target 5 is 15.
+let test_fitness_over x : Int -> Int [cost: Const(3)] =
+  let individual = (10, 10) in
+  let actual_sum = fold 0 (+) individual in
+  let diff = actual_sum - 5 in
+  let f = if diff < 0 then 0 - diff else diff in
+  if f == 15 then 1 else 0 - 1
+
+-- Test: crossover preserves length.
+let test_crossover_length x : Int -> Int [cost: Const(5)] =
+  let p1 = (1, 2, 3, 4) in
+  let p2 = (5, 6, 7, 8) in
+  let mid = 2 in
+  let child = list_concat (list_take p1 mid) (list_drop p2 mid) in
+  let len = fold 0 (\acc v -> acc + 1) child in
+  if len == 4 then 1 else 0 - 1
+
+-- Test: crossover takes first half from parent1.
+let test_crossover_content x : Int -> Int [cost: Const(5)] =
+  let p1 = (10, 20, 30, 40) in
+  let p2 = (50, 60, 70, 80) in
+  let mid = 2 in
+  let child = list_concat (list_take p1 mid) (list_drop p2 mid) in
+  let first = list_nth child 0 in
+  let third = list_nth child 2 in
+  if first == 10 then
+    if third == 70 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: fold sum works on tuples.
+let test_fold_sum x : Int -> Int [cost: Const(3)] =
+  let xs = (3, 7, 11) in
+  let s = fold 0 (+) xs in
+  if s == 21 then 1 else 0 - 1
+
+-- Test: list_take and list_drop partition correctly.
+let test_take_drop x : Int -> Int [cost: Const(4)] =
+  let xs = (1, 2, 3, 4, 5) in
+  let first3 = list_take xs 3 in
+  let last2 = list_drop xs 3 in
+  let first_len = fold 0 (\acc v -> acc + 1) first3 in
+  let last_len = fold 0 (\acc v -> acc + 1) last2 in
+  if first_len == 3 then
+    if last_len == 2 then 1 else 0 - 1
+  else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(30)] =
+  let t1 = if fold 0 (+) (5, 5, 5) == 15 then 1 else 0 - 1 in
+  let sum123 = fold 0 (+) (1, 2, 3) in
+  let d = sum123 - 10 in
+  let t2 = if (if d < 0 then 0 - d else d) == 4 then 1 else 0 - 1 in
+  let child = list_concat (list_take (10, 20, 30, 40) 2) (list_drop (50, 60, 70, 80) 2) in
+  let t3 = if fold 0 (\acc v -> acc + 1) child == 4 then 1 else 0 - 1 in
+  let t4 = if list_nth child 0 == 10 then 1 else 0 - 1 in
+  let t5 = if list_nth child 2 == 70 then 1 else 0 - 1 in
+  let t6 = if fold 0 (+) (3, 7, 11) == 21 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5, t6)

@@ -1,0 +1,43 @@
+-- Thread Ring (Benchmarks Game)
+-- Pass a token around a ring of N threads/workers.
+--
+-- The classic benchmark creates 503 threads in a ring and passes an integer
+-- token around the ring, decrementing it each time. The program outputs the
+-- ID of the thread that sees the token reach 0.
+--
+-- Since IRIS threading primitives (thread_spawn, atomic_swap) operate through
+-- the effect system and require a daemon context, we implement the thread ring
+-- logic using purely functional simulation via fold.
+--
+-- The token starts at value M and passes through N workers in round-robin.
+-- Each worker decrements the token. When the token reaches 0, we record
+-- which worker ID saw it.
+--
+-- Uses: fold, list_range, mod (%)
+
+-- Simulate a thread ring with n_threads workers and initial token value.
+-- Returns the ID (1-indexed) of the thread that sees token reach 0.
+let thread_ring n_threads token =
+  -- Each iteration passes the token to the next thread
+  -- Thread IDs are 1..n_threads (1-indexed as in the benchmark spec)
+  -- state: (current_token, winner_id)
+  let res = fold (token, 0) (\state step ->
+    let cur_token = state.0 in
+    let winner = state.1 in
+    if winner > 0 then state
+    else if cur_token == 0 then
+      let thread_id = step % n_threads + 1 in
+      (0, thread_id)
+    else
+      (cur_token - 1, 0)
+  ) (list_range 0 (token + 1)) in
+  res.1
+
+-- Benchmark entry with standard parameters.
+-- N=503 threads, M=1000 token passes.
+let bench n_threads token =
+  thread_ring n_threads token
+
+-- Standard benchmark: 503 threads, configurable token
+let bench_standard token =
+  thread_ring 503 token

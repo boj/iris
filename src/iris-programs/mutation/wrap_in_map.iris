@@ -1,0 +1,21 @@
+-- Insert a Map node between a Fold and its collection input
+-- Rewires: fold.port2 → map(collection, step_op) instead of fold.port2 → collection
+let wrap_in_map program fold_id collection_id step_opcode =
+  -- Create the map step function (Prim node)
+  let s1 = graph_add_node_rt program 0 in
+  let p1 = s1.0 in
+  let step_id = s1.1 in
+  let p2_t = graph_set_prim_op p1 step_id step_opcode in
+  let p2 = p2_t.0 in
+  -- Create Map node (opcode 0x30)
+  let s2 = graph_add_node_rt p2 0 in
+  let p3 = s2.0 in
+  let map_id = s2.1 in
+  let p4_t = graph_set_prim_op p3 map_id 48 in
+  let p4 = p4_t.0 in
+  -- Disconnect fold from collection
+  let p5 = graph_disconnect p4 fold_id collection_id in
+  -- Wire: map(collection, step) and fold → map
+  let p6 = graph_connect p5 map_id collection_id 0 in
+  let p7 = graph_connect p6 map_id step_id 1 in
+  graph_connect p7 fold_id map_id 2

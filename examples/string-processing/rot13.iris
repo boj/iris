@@ -1,0 +1,36 @@
+-- ROT13 Cipher
+-- Rotate each letter by 13 positions in the alphabet.
+-- a-m -> n-z, n-z -> a-m (same for uppercase).
+-- Non-letter characters pass through unchanged.
+
+-- Rotate a single character code by 13.
+-- ASCII: A=65..Z=90, a=97..z=122
+let rot13_char code : Int -> Int [cost: Const(5)] =
+  if code >= 65 then
+    if code <= 90 then
+      -- Uppercase: rotate within 65..90
+      65 + (code - 65 + 13) % 26
+    else if code >= 97 then
+      if code <= 122 then
+        -- Lowercase: rotate within 97..122
+        97 + (code - 97 + 13) % 26
+      else code
+    else code
+  else code
+
+-- Apply ROT13 to a string, returning a new string.
+let rot13 s : String -> String [cost: Linear(s)] =
+  let codes = map (\c -> char_at c 0) (str_chars s) in
+  let rotated = map rot13_char codes in
+  str_from_chars rotated
+
+-- ROT13 is its own inverse: applying it twice yields the original.
+let rot13_roundtrip s : String -> String [cost: Linear(s)] =
+  rot13 (rot13 s)
+
+-- Test
+let test_rot13 x : Int -> Tuple =
+  let original = "Hello, World!" in
+  let encrypted = rot13 original in
+  let decrypted = rot13 encrypted in
+  (original, encrypted, decrypted)

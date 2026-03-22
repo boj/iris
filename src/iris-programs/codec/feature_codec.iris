@@ -1,0 +1,461 @@
+-- Feature codec: 64-dimensional deterministic feature extraction
+--
+-- Mirrors the Rust FeatureCodec in iris-codec/src/feature_codec.rs.
+-- Extracts hand-crafted features from a SemanticGraph, producing a
+-- 64-dim embedding vector. Feature layout:
+--   dims  0-19: node kind histogram (20 bins, normalized)
+--   dims 20-35: prim opcode histogram (16 bins, normalized)
+--   dims 36-40: graph shape features (node_count, edge_count, max_depth,
+--               avg_fan_out, avg_fan_in)
+--   dims 41-44: type features (distinct_types, has_arrow+product, has_sum,
+--               has_recursive)
+--   dims 45-47: cost features (has_cost, complexity_class, has_node_cost)
+--   dims 48-51: structural features (fold_count, letrec_count, match_count,
+--               guard_count)
+--   dims 52-56: edge label histogram (5 bins: Argument, Scrutinee, Binding,
+--               Continuation, Decrease)
+--   dims 57-59: resolution depth distribution (3 bins: depth 0, 1, 2+)
+--   dims 60-63: connectivity features (components, diameter, density,
+--               leaf_ratio)
+
+-- ===================================================================
+-- Node kind histogram (20 bins, dims 0-19)
+-- ===================================================================
+
+-- Count nodes of a specific kind in a program
+-- kind_target: NodeKind as int (0=Prim, 1=Apply, 2=Lambda, 3=Let,
+--   4=Match, 5=Lit, 6=Ref, 7=Neural, 8=Fold, 9=Unfold, 10=Effect,
+--   11=Tuple, 12=Inject, 13=Project, 14=TypeAbst, 15=TypeApp,
+--   16=LetRec, 17=Guard, 18=Rewrite, 19=Extern)
+
+
+let count_node_kind program kind_target : Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == kind_target then acc + 1 else acc) nodes
+
+-- Total node count in a program
+let node_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc x -> acc + 1) nodes
+
+-- Count edges in a program (sum of outgoing edge counts per node)
+let edge_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n ->
+    let ch = graph_outgoing program n in
+    let cc = fold 0 (\a c -> a + 1) ch in
+    acc + cc) nodes
+
+-- Compute normalized node kind histogram entry (scaled by 1000)
+let kind_ratio program kind_target : Int -> Int -> Int [cost: Linear(program)] =
+  let total = node_count program in
+  let count = count_node_kind program kind_target in
+  if total == 0 then 0
+  else count * 1000 / total
+
+-- Full 20-bin node kind histogram (scaled by 1000, normalized)
+let kind_histogram_20 program : Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Linear(program)] =
+  let r0 = kind_ratio program 0 in
+  let r1 = kind_ratio program 1 in
+  let r2 = kind_ratio program 2 in
+  let r3 = kind_ratio program 3 in
+  let r4 = kind_ratio program 4 in
+  let r5 = kind_ratio program 5 in
+  let r6 = kind_ratio program 6 in
+  let r7 = kind_ratio program 7 in
+  let r8 = kind_ratio program 8 in
+  let r9 = kind_ratio program 9 in
+  let r10 = kind_ratio program 10 in
+  let r11 = kind_ratio program 11 in
+  let r12 = kind_ratio program 12 in
+  let r13 = kind_ratio program 13 in
+  let r14 = kind_ratio program 14 in
+  let r15 = kind_ratio program 15 in
+  let r16 = kind_ratio program 16 in
+  let r17 = kind_ratio program 17 in
+  let r18 = kind_ratio program 18 in
+  let r19 = kind_ratio program 19 in
+  (r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18, r19)
+
+-- ===================================================================
+-- Prim opcode histogram (16 bins, dims 20-35)
+-- ===================================================================
+
+-- Count Prim nodes with opcode in a given range [lo, hi)
+let count_opcode_range program lo hi : Int -> Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 0 then
+      let op = graph_get_prim_op program n in
+      if op >= lo then
+        if op < hi then acc + 1 else acc
+      else acc
+    else acc) nodes
+
+-- Total Prim node count
+let prim_count program : Int -> Int [cost: Linear(program)] =
+  count_node_kind program 0
+
+-- Opcode histogram entry (normalized by total prims, scaled by 1000)
+let opcode_bin_ratio program lo hi : Int -> Int -> Int -> Int [cost: Linear(program)] =
+  let total = prim_count program in
+  let count = count_opcode_range program lo hi in
+  if total == 0 then 0
+  else count * 1000 / total
+
+-- Full 16-bin opcode histogram (scaled by 1000)
+let opcode_histogram_16 program : Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Linear(program)] =
+  let b0 = opcode_bin_ratio program 0 1 in
+  let b1 = opcode_bin_ratio program 1 2 in
+  let b2 = opcode_bin_ratio program 2 3 in
+  let b3 = opcode_bin_ratio program 3 4 in
+  let b4 = opcode_bin_ratio program 4 5 in
+  let b5 = opcode_bin_ratio program 5 6 in
+  let b6 = opcode_bin_ratio program 6 7 in
+  let b7 = opcode_bin_ratio program 7 8 in
+  let b8 = opcode_bin_ratio program 8 9 in
+  let b9 = opcode_bin_ratio program 9 10 in
+  let b10 = opcode_bin_ratio program 10 16 in
+  let b11 = opcode_bin_ratio program 16 32 in
+  let b12 = opcode_bin_ratio program 32 40 in
+  let b13 = opcode_bin_ratio program 40 48 in
+  let b14 = opcode_bin_ratio program 48 64 in
+  let b15 = opcode_bin_ratio program 64 256 in
+  (b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15)
+
+-- ===================================================================
+-- Shape features (5 dims, dims 36-40)
+-- ===================================================================
+
+-- Max depth via iterating all nodes
+-- Max depth estimate via outgoing chain counting
+let max_depth program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let nc = fold 0 (\a x -> a + 1) nodes in
+  let leaf_ct = fold 0 (\acc n ->
+    let ch = graph_outgoing program n in
+    let cc = fold 0 (\a c -> a + 1) ch in
+    if cc == 0 then acc + 1 else acc) nodes in
+  let non_leaves = nc - leaf_ct in
+  if non_leaves > 0 then
+    if nc > 1 then nc / non_leaves else 1
+  else 1
+
+-- Average fan-out: edge_count / node_count (scaled by 1000)
+let avg_fan_out program : Int -> Int [cost: Linear(program)] =
+  let nc = node_count program in
+  let ec = edge_count program in
+  if nc == 0 then 0
+  else ec * 1000 / nc
+
+-- Shape features tuple: (node_count_norm, edge_count_norm, max_depth_norm,
+--                         avg_fan_out_norm, avg_fan_in_norm)
+-- Each normalized to [0, 1000]
+let shape_features program : Int -> (Int, Int, Int, Int, Int) [cost: Linear(program)] =
+  let nc = node_count program in
+  let ec = edge_count program in
+  let depth = max_depth program in
+  let fan = avg_fan_out program in
+  let nc_norm = min (nc * 1000 / 8192) 1000 in
+  let ec_norm = min (ec * 1000 / 16384) 1000 in
+  let depth_norm = min (depth * 1000 / 20) 1000 in
+  let fan_out_norm = min (fan / 4) 1000 in
+  let fan_in_norm = fan_out_norm in
+  (nc_norm, ec_norm, depth_norm, fan_out_norm, fan_in_norm)
+
+-- ===================================================================
+-- Type features (4 dims, dims 41-44)
+-- ===================================================================
+
+-- Count distinct types in the type environment
+let distinct_type_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let base = 1 in
+  let has_variety = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 2 then 1
+    else if k == 1 then 1
+    else if k == 11 then 1
+    else if k == 12 then 1
+    else acc) nodes in
+  base + has_variety
+
+-- Type features: (distinct_types_norm, has_arrow_product, has_sum, has_recursive)
+let type_features program : Int -> (Int, Int, Int, Int) [cost: Linear(program)] =
+  let dtc = distinct_type_count program in
+  let distinct_norm = min (dtc * 1000 / 20) 1000 in
+  let nodes = graph_nodes program in
+  let has_arrow = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 2 then 1 else if k == 1 then 1 else acc) nodes in
+  let has_product = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 11 then 1 else acc) nodes in
+  let has_sum = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 12 then 1 else acc) nodes in
+  let has_recursive = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 8 then 1 else if k == 16 then 1 else acc) nodes in
+  let arrow_product = has_arrow * 500 + has_product * 500 in
+  (distinct_norm, arrow_product, has_sum * 1000, has_recursive * 1000)
+
+-- ===================================================================
+-- Cost features (3 dims, dims 45-47)
+-- ===================================================================
+
+let cost_features program : Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let has_annotated = fold 0 (\acc n ->
+    let k = graph_get_kind program n in
+    if k == 8 then 1 else if k == 16 then 1 else acc) nodes in
+  let has_cost = if has_annotated > 0 then 1000 else 0 in
+  let nc = node_count program in
+  let has_fold = count_node_kind program 8 in
+  let has_letrec = count_node_kind program 16 in
+  let complexity = if has_letrec > 0 then 500
+    else if has_fold > 0 then 300
+    else if nc > 10 then 100
+    else 0 in
+  let has_node_cost = has_annotated * 1000 in
+  (has_cost, complexity, has_node_cost)
+
+-- ===================================================================
+-- Structural features (4 dims, dims 48-51)
+-- ===================================================================
+
+let structural_features program : Int -> (Int, Int, Int, Int) [cost: Linear(program)] =
+  let fold_c = min (count_node_kind program 8 * 1000 / 10) 1000 in
+  let letrec_c = min (count_node_kind program 16 * 1000 / 10) 1000 in
+  let match_c = min (count_node_kind program 4 * 1000 / 10) 1000 in
+  let guard_c = min (count_node_kind program 17 * 1000 / 10) 1000 in
+  (fold_c, letrec_c, match_c, guard_c)
+
+-- ===================================================================
+-- Edge label histogram (5 bins, dims 52-56)
+-- ===================================================================
+
+-- Approximate edge label histogram using node kinds as proxies
+let edge_label_histogram program : Int -> (Int, Int, Int, Int, Int) [cost: Linear(program)] =
+  let ec = edge_count program in
+  if ec == 0 then (0, 0, 0, 0, 0)
+  else
+    let match_edges = count_node_kind program 4 in
+    let lambda_edges = count_node_kind program 2 in
+    let fold_edges = count_node_kind program 8 in
+    let argument_edges = ec - match_edges - lambda_edges - fold_edges in
+    let arg_ratio = max 0 (argument_edges * 1000 / ec) in
+    let scrut_ratio = match_edges * 1000 / ec in
+    let bind_ratio = lambda_edges * 1000 / ec in
+    let cont_ratio = fold_edges * 500 / ec in
+    let decr_ratio = fold_edges * 500 / ec in
+    (arg_ratio, scrut_ratio, bind_ratio, cont_ratio, decr_ratio)
+
+-- ===================================================================
+-- Resolution depth distribution (3 bins, dims 57-59)
+-- ===================================================================
+
+-- Resolution depth distribution approximated via outgoing structure
+let resolution_bins program : Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let total = node_count program in
+  if total == 0 then (0, 0, 0)
+  else
+    -- Bin0: root node (nodes reachable in 0 hops = just root)
+    let root = graph_get_root program in
+    let bin0 = 1 in
+    -- Bin1: direct children of root
+    let root_ch = graph_outgoing program root in
+    let bin1 = fold 0 (\a c -> a + 1) root_ch in
+    let bin2 = total - bin0 - bin1 in
+    let bin2_safe = if bin2 > 0 then bin2 else 0 in
+    (bin0 * 1000 / total, bin1 * 1000 / total, bin2_safe * 1000 / total)
+
+-- ===================================================================
+-- Connectivity features (4 dims, dims 60-63)
+-- ===================================================================
+
+-- Count leaf nodes (nodes with 0 outgoing edges)
+let leaf_count program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\acc n ->
+    let ch = graph_outgoing program n in
+    let cc = fold 0 (\a c -> a + 1) ch in
+    if cc == 0 then acc + 1 else acc) nodes
+
+-- Connectivity features: (components, diameter, density, leaf_ratio)
+let connectivity_features program : Int -> (Int, Int, Int, Int) [cost: Linear(program)] =
+  let nc = node_count program in
+  let ec = edge_count program in
+  let components_norm = min (1 * 1000 / 5) 1000 in
+  let depth = max_depth program in
+  let diam_raw = depth * 2 * 1000 / 20 in
+  let diameter_norm = if diam_raw < 1000 then diam_raw else 1000 in
+  let density_raw = if nc > 1 then ec * 1000 / (nc * (nc - 1)) else 0 in
+  let density = if density_raw < 1000 then density_raw else 1000 in
+  let leaves = leaf_count program in
+  let leaf_ratio = if nc > 0 then leaves * 1000 / nc else 0 in
+  (components_norm, diameter_norm, density, leaf_ratio)
+
+-- ===================================================================
+-- Full 64-dim feature extraction
+-- ===================================================================
+
+-- Full 64-dim feature vector extraction
+-- Concatenates all sub-feature groups into a single 64-element tuple:
+--   20 node kind + 16 opcode + 5 shape + 4 type + 3 cost + 4 structural
+--   + 5 edge label + 3 resolution + 4 connectivity = 64
+-- Each value is scaled to [0, 1000]
+let extract_features_64 program : Int -> Int [cost: Linear(program)] =
+  let kh = kind_histogram_20 program in
+  let oh = opcode_histogram_16 program in
+  let sf = shape_features program in
+  let tf = type_features program in
+  let cf = cost_features program in
+  let st = structural_features program in
+  let el = edge_label_histogram program in
+  let rb = resolution_bins program in
+  let cn = connectivity_features program in
+  let raw = (kh.0, kh.1, kh.2, kh.3, kh.4, kh.5, kh.6, kh.7, kh.8, kh.9,
+   kh.10, kh.11, kh.12, kh.13, kh.14, kh.15, kh.16, kh.17, kh.18, kh.19,
+   oh.0, oh.1, oh.2, oh.3, oh.4, oh.5, oh.6, oh.7, oh.8, oh.9,
+   oh.10, oh.11, oh.12, oh.13, oh.14, oh.15,
+   sf.0, sf.1, sf.2, sf.3, sf.4,
+   tf.0, tf.1, tf.2, tf.3,
+   cf.0, cf.1, cf.2,
+   st.0, st.1, st.2, st.3,
+   el.0, el.1, el.2, el.3, el.4,
+   rb.0, rb.1, rb.2,
+   cn.0, cn.1, cn.2, cn.3) in
+  -- L2 normalization: compute squared norm then scale
+  let norm_sq = fold 0 (\acc x -> acc + x * x / 1000) raw in
+  if norm_sq == 0 then raw
+  else map (\x -> x * 1000 / (norm_sq + 1)) raw
+
+-- L2 normalization (approximate): returns the squared norm
+let feature_vector_norm_sq features : Int -> Int [cost: Linear(features)] =
+  let pairs = zip features features in
+  fold 0 (\acc p -> acc + p.0 * p.1) pairs
+
+-- ===================================================================
+-- Tests (using self_graph for graph access, pure-function tests otherwise)
+-- ===================================================================
+
+-- Test: count_node_kind on self_graph returns non-negative
+let test_count_node_kind : Int [cost: Const(1)] =
+  let g = self_graph in
+  let cnt = count_node_kind g 0 in
+  if cnt >= 0 then 1 else 0 - 1
+
+-- Test: node_count on self_graph returns positive (this program has nodes)
+let test_node_count_self : Int [cost: Const(1)] =
+  let g = self_graph in
+  let nc = node_count g in
+  if nc > 0 then 1 else 0 - 1
+
+-- Test: edge_count on self_graph returns non-negative
+let test_edge_count_self : Int [cost: Const(1)] =
+  let g = self_graph in
+  let ec = edge_count g in
+  if ec >= 0 then 1 else 0 - 1
+
+-- Test: kind_ratio returns values in [0, 1000]
+let test_kind_ratio_bounds : Int [cost: Const(1)] =
+  let g = self_graph in
+  let ratio = kind_ratio g 5 in
+  if ratio >= 0 then
+    if ratio <= 1000 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: shape features produce 5 non-negative dimensions
+let test_shape_features_dims : Int [cost: Const(1)] =
+  let g = self_graph in
+  let sf = shape_features g in
+  if sf.0 >= 0 then
+    if sf.1 >= 0 then
+      if sf.2 >= 0 then
+        if sf.3 >= 0 then
+          if sf.4 >= 0 then 1 else 0 - 1
+        else 0 - 1
+      else 0 - 1
+    else 0 - 1
+  else 0 - 1
+
+-- Test: structural features are non-negative
+let test_structural_nonneg : Int [cost: Const(1)] =
+  let g = self_graph in
+  let st = structural_features g in
+  if st.0 >= 0 then
+    if st.1 >= 0 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: resolution bins sum to ~1000 for non-empty graph
+let test_resolution_bin_sum : Int [cost: Const(1)] =
+  let g = self_graph in
+  let rb = resolution_bins g in
+  let total = rb.0 + rb.1 + rb.2 in
+  if total >= 900 then
+    if total <= 1100 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: connectivity features within bounds
+let test_connectivity_bounds : Int [cost: Const(1)] =
+  let g = self_graph in
+  let cn = connectivity_features g in
+  if cn.0 >= 0 then
+    if cn.0 <= 1000 then
+      if cn.3 >= 0 then
+        if cn.3 <= 1000 then 1 else 0 - 1
+      else 0 - 1
+    else 0 - 1
+  else 0 - 1
+
+-- Test: leaf_count on self_graph is non-negative
+let test_leaf_count : Int [cost: Const(1)] =
+  let g = self_graph in
+  let lc = leaf_count g in
+  if lc >= 0 then 1 else 0 - 1
+
+-- Test: max_depth on self_graph is non-negative
+let test_max_depth_self : Int [cost: Const(1)] =
+  let g = self_graph in
+  let d = max_depth g in
+  if d >= 0 then 1 else 0 - 1
+
+-- Test: type features are non-negative
+let test_type_features : Int [cost: Const(1)] =
+  let g = self_graph in
+  let tf = type_features g in
+  if tf.0 >= 0 then
+    if tf.1 >= 0 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: cost features are non-negative
+let test_cost_features : Int [cost: Const(1)] =
+  let g = self_graph in
+  let cf = cost_features g in
+  if cf.0 >= 0 then
+    if cf.1 >= 0 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: kind_histogram produces non-negative 20-bin vector
+let test_extract_full : Int [cost: Const(1)] =
+  let g = self_graph in
+  let kh = kind_histogram_20 g in
+  if kh.0 >= 0 then
+    if kh.19 >= 0 then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: edge_label_histogram is non-negative
+let test_edge_labels : Int [cost: Const(1)] =
+  let g = self_graph in
+  let el = edge_label_histogram g in
+  if el.0 >= 0 then 1 else 0 - 1
+
+-- Test: feature_vector_norm_sq computes correctly
+let test_norm_sq_nonneg : Int [cost: Const(1)] =
+  let nrm = feature_vector_norm_sq (10, 20, 30) in
+  if nrm == 1400 then 1 else 0 - 1

@@ -1,0 +1,364 @@
+-- Full JSON standard library
+--
+-- Encodes JSON values as tagged tuples: (type_tag, payload)
+-- where type_tag is an Int identifying the JSON type:
+--   0 = null, 1 = bool, 2 = int, 3 = float, 4 = string, 5 = array, 6 = object
+--
+-- This approach works within IRIS's existing type system: every JSON
+-- value is a Tuple(Int, Value), and nested values compose naturally.
+-- Operations like json_get and json_stringify traverse these tagged
+-- structures to produce real outputs.
+--
+-- json_stringify handles up to 3 levels of nesting by composing
+-- explicit depth functions (no runtime recursion needed).
+
+-- === Constructors ===
+
+-- Create a JSON null value.
+let json_null = (0, ())
+
+-- Create a JSON boolean value.
+-- b should be 0 (false) or 1 (true).
+let json_bool b = (1, b)
+
+-- Create a JSON integer value.
+let json_int n = (2, n)
+
+-- Create a JSON float value.
+let json_float f = (3, f)
+
+-- Create a JSON string value.
+let json_string s = (4, s)
+
+-- Create a JSON array from a tuple of json values.
+-- items is a Tuple of (tag, payload) pairs.
+let json_array items = (5, items)
+
+-- Create a JSON object from a tuple of (key, json_value) pairs.
+-- Each pair is (String, (tag, payload)).
+let json_object pairs = (6, pairs)
+
+-- === Inspection ===
+
+-- Return the type tag of a JSON value.
+-- 0=null, 1=bool, 2=int, 3=float, 4=string, 5=array, 6=object
+let json_type jv = jv.0
+
+-- === Lookup ===
+
+-- Look up a key in a JSON object.
+-- Returns the json value associated with the key, or json_null if not found.
+-- Uses tuple_get which does association-list lookup by string key.
+let json_get obj key =
+  if obj.0 != 6 then (0, ())
+  else
+    let pairs = obj.1 in
+    if pairs == () then (0, ())
+    else
+      let result = tuple_get pairs key in
+      if result == () then (0, ())
+      else result
+
+-- === String escaping ===
+
+-- Escape a string for JSON output.
+-- Replaces \ with \\ and " with \".
+let json_escape_string s =
+  let s1 = str_replace s "\\" "\\\\" in
+  str_replace s1 "\"" "\\\""
+
+-- === Stringify helpers ===
+
+-- Stringify leaf types (null, bool, int, float, string).
+-- Shared by all depth levels.
+let json_stringify_leaf tag payload =
+  if tag == 0 then "null"
+  else if tag == 1 then
+    if payload == 0 then "false" else "true"
+  else if tag == 2 then
+    int_to_string payload
+  else if tag == 3 then
+    let int_part = float_to_int payload in
+    str_concat (int_to_string int_part) ".0"
+  else if tag == 4 then
+    let escaped = json_escape_string payload in
+    str_concat "\"" (str_concat escaped "\"")
+  else "null"
+
+-- === Stringify (depth 0: atoms only) ===
+
+-- Stringify a leaf JSON value. Arrays/objects fall back to placeholders.
+let json_stringify_d0 jv =
+  let tag = jv.0 in
+  let payload = jv.1 in
+  if tag <= 4 then json_stringify_leaf tag payload
+  else if tag == 5 then "[...]"
+  else if tag == 6 then "{...}"
+  else "null"
+
+-- === Stringify (depth 1: arrays/objects of atoms) ===
+
+let json_stringify_d1 jv =
+  let tag = jv.0 in
+  let payload = jv.1 in
+  if tag <= 4 then json_stringify_leaf tag payload
+  else if tag == 5 then
+    if payload == () then "[]"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let elem = list_nth payload i in
+        let elem_str = json_stringify_d0 elem in
+        if i == 0 then elem_str
+        else str_concat acc (str_concat "," elem_str)
+      ) (list_range 0 n) in
+      str_concat "[" (str_concat body "]")
+  else if tag == 6 then
+    if payload == () then "{}"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let pair = list_nth payload i in
+        let pkey = pair.0 in
+        let pv = pair.1 in
+        let key_str = str_concat "\"" (str_concat (json_escape_string pkey) "\"") in
+        let pv_str = json_stringify_d0 pv in
+        let entry = str_concat key_str (str_concat ":" pv_str) in
+        if i == 0 then entry
+        else str_concat acc (str_concat "," entry)
+      ) (list_range 0 n) in
+      str_concat "{" (str_concat body "}")
+  else "null"
+
+-- === Stringify (depth 2: arrays/objects of depth-1 values) ===
+
+let json_stringify_d2 jv =
+  let tag = jv.0 in
+  let payload = jv.1 in
+  if tag <= 4 then json_stringify_leaf tag payload
+  else if tag == 5 then
+    if payload == () then "[]"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let elem = list_nth payload i in
+        let elem_str = json_stringify_d1 elem in
+        if i == 0 then elem_str
+        else str_concat acc (str_concat "," elem_str)
+      ) (list_range 0 n) in
+      str_concat "[" (str_concat body "]")
+  else if tag == 6 then
+    if payload == () then "{}"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let pair = list_nth payload i in
+        let pkey = pair.0 in
+        let pv = pair.1 in
+        let key_str = str_concat "\"" (str_concat (json_escape_string pkey) "\"") in
+        let pv_str = json_stringify_d1 pv in
+        let entry = str_concat key_str (str_concat ":" pv_str) in
+        if i == 0 then entry
+        else str_concat acc (str_concat "," entry)
+      ) (list_range 0 n) in
+      str_concat "{" (str_concat body "}")
+  else "null"
+
+-- === Stringify (depth 3: arrays/objects of depth-2 values) ===
+
+let json_stringify_d3 jv =
+  let tag = jv.0 in
+  let payload = jv.1 in
+  if tag <= 4 then json_stringify_leaf tag payload
+  else if tag == 5 then
+    if payload == () then "[]"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let elem = list_nth payload i in
+        let elem_str = json_stringify_d2 elem in
+        if i == 0 then elem_str
+        else str_concat acc (str_concat "," elem_str)
+      ) (list_range 0 n) in
+      str_concat "[" (str_concat body "]")
+  else if tag == 6 then
+    if payload == () then "{}"
+    else
+      let n = list_len payload in
+      let body = fold "" (\acc i ->
+        let pair = list_nth payload i in
+        let pkey = pair.0 in
+        let pv = pair.1 in
+        let key_str = str_concat "\"" (str_concat (json_escape_string pkey) "\"") in
+        let pv_str = json_stringify_d2 pv in
+        let entry = str_concat key_str (str_concat ":" pv_str) in
+        if i == 0 then entry
+        else str_concat acc (str_concat "," entry)
+      ) (list_range 0 n) in
+      str_concat "{" (str_concat body "}")
+  else "null"
+
+-- Full JSON stringify: handles up to 3 levels of nesting.
+-- Uses json_stringify_d3 which delegates to d2 -> d1 -> d0.
+let json_stringify jv = json_stringify_d3 jv
+
+-- ===================================================================
+-- Tests
+-- ===================================================================
+
+-- Test: json_null has tag 0
+let test_null_tag : Int [cost: Const(1)] =
+  if json_type json_null == 0 then 1 else 0 - 1
+
+-- Test: json_bool wraps a boolean with tag 1
+let test_bool_tag : Int [cost: Const(1)] =
+  let jt = json_bool 1 in
+  let jf = json_bool 0 in
+  if json_type jt == 1 && json_type jf == 1 && jt.1 == 1 && jf.1 == 0
+  then 1 else 0 - 1
+
+-- Test: json_int wraps an integer with tag 2
+let test_int_tag : Int [cost: Const(1)] =
+  let j = json_int 42 in
+  if json_type j == 2 && j.1 == 42 then 1 else 0 - 1
+
+-- Test: json_string wraps a string with tag 4
+let test_string_tag : Int [cost: Const(1)] =
+  let j = json_string "hello" in
+  if json_type j == 4 && str_eq j.1 "hello" == 1 then 1 else 0 - 1
+
+-- Test: json_array wraps items with tag 5
+let test_array_tag : Int [cost: Const(1)] =
+  let j = json_array (json_int 1, json_int 2) in
+  if json_type j == 5 && list_len j.1 == 2 then 1 else 0 - 1
+
+-- Test: json_object wraps pairs with tag 6
+let test_object_tag : Int [cost: Const(1)] =
+  let j = json_object (("x", json_int 10),) in
+  if json_type j == 6 && list_len j.1 == 1 then 1 else 0 - 1
+
+-- Test: json_get finds existing key (first key)
+let test_get_found_first : Int [cost: Const(1)] =
+  let obj = json_object (("a", json_int 1),) in
+  let result = json_get obj "a" in
+  if result.0 == 2 && result.1 == 1 then 1 else 0 - 1
+
+-- Test: json_get finds existing key (second key)
+let test_get_found : Int [cost: Const(1)] =
+  let obj = json_object (("a", json_int 1), ("b", json_int 2)) in
+  let result = json_get obj "b" in
+  if result.0 == 2 && result.1 == 2 then 1 else 0 - 1
+
+-- Test: json_get returns null for missing key
+let test_get_missing : Int [cost: Const(1)] =
+  let obj = json_object (("a", json_int 1),) in
+  let result = json_get obj "z" in
+  if result.0 == 0 then 1 else 0 - 1
+
+-- Test: json_get on non-object returns null
+let test_get_non_object : Int [cost: Const(1)] =
+  let arr = json_array (json_int 1,) in
+  let result = json_get arr "x" in
+  if result.0 == 0 then 1 else 0 - 1
+
+-- Test: json_stringify null
+let test_stringify_null : Int [cost: Const(1)] =
+  if str_eq (json_stringify json_null) "null" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify bool true
+let test_stringify_bool_true : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_bool 1)) "true" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify bool false
+let test_stringify_bool_false : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_bool 0)) "false" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify int
+let test_stringify_int : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_int 42)) "42" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify negative int
+let test_stringify_neg_int : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_int (0 - 7))) "-7" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify string
+let test_stringify_string : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_string "hi")) "\"hi\"" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify string with quote escaping
+let test_stringify_escape_quote : Int [cost: Const(1)] =
+  let result = json_stringify (json_string "say \"hi\"") in
+  if str_contains result "\\\"" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify empty array
+let test_stringify_empty_array : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_array ())) "[]" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify array of ints
+let test_stringify_int_array : Int [cost: Const(1)] =
+  let arr = json_array (json_int 1, json_int 2, json_int 3) in
+  if str_eq (json_stringify arr) "[1,2,3]" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify empty object
+let test_stringify_empty_object : Int [cost: Const(1)] =
+  if str_eq (json_stringify (json_object ())) "{}" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify object
+let test_stringify_object : Int [cost: Const(1)] =
+  let obj = json_object (("x", json_int 10),) in
+  if str_eq (json_stringify obj) "{\"x\":10}" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify nested structure (object with array)
+let test_stringify_nested : Int [cost: Const(1)] =
+  let inner = json_array (json_int 1, json_int 2) in
+  let obj = json_object (("data", inner),) in
+  if str_eq (json_stringify obj) "{\"data\":[1,2]}" == 1 then 1 else 0 - 1
+
+-- Test: json_get then stringify round-trip
+let test_get_stringify_roundtrip : Int [cost: Const(1)] =
+  let obj = json_object (("name", json_string "alice"), ("age", json_int 30)) in
+  let name_jv = json_get obj "name" in
+  let age_jv = json_get obj "age" in
+  if str_eq (json_stringify name_jv) "\"alice\"" == 1 && str_eq (json_stringify age_jv) "30" == 1
+  then 1 else 0 - 1
+
+-- Test: deeply nested array
+let test_nested_array : Int [cost: Const(1)] =
+  let inner = json_array (json_int 3, json_int 4) in
+  let outer = json_array (json_int 1, json_int 2, inner) in
+  if str_eq (json_stringify outer) "[1,2,[3,4]]" == 1 then 1 else 0 - 1
+
+-- Test: json_escape_string escapes backslash
+let test_escape_backslash : Int [cost: Const(1)] =
+  let escaped = json_escape_string "a\\b" in
+  if str_eq escaped "a\\\\b" == 1 then 1 else 0 - 1
+
+-- Test: object with multiple types
+let test_mixed_types : Int [cost: Const(1)] =
+  let obj = json_object (
+    ("n", json_null),
+    ("b", json_bool 1),
+    ("i", json_int 5),
+    ("s", json_string "ok")
+  ) in
+  let result = json_stringify obj in
+  if str_contains result "\"n\":null" == 1
+  && str_contains result "\"b\":true" == 1
+  && str_contains result "\"i\":5" == 1
+  && str_contains result "\"s\":\"ok\"" == 1
+  then 1 else 0 - 1
+
+-- Test: json_stringify_d0 on non-recursive types
+let test_stringify_d0_int : Int [cost: Const(1)] =
+  if str_eq (json_stringify_d0 (json_int 99)) "99" == 1 then 1 else 0 - 1
+
+-- Test: json_stringify_d0 falls back for arrays
+let test_stringify_d0_array_fallback : Int [cost: Const(1)] =
+  if str_eq (json_stringify_d0 (json_array (json_int 1,))) "[...]" == 1 then 1 else 0 - 1
+
+-- Test: depth-2 nesting (array of arrays of atoms)
+let test_depth2_nesting : Int [cost: Const(1)] =
+  let inner1 = json_array (json_int 1, json_int 2) in
+  let inner2 = json_array (json_int 3,) in
+  let outer = json_array (inner1, inner2) in
+  if str_eq (json_stringify outer) "[[1,2],[3]]" == 1 then 1 else 0 - 1

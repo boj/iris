@@ -1,0 +1,59 @@
+-- Inline small fragments: inline Ref nodes whose targets are small
+--
+-- Walks the program's nodes looking for Ref nodes (kind 6).
+-- For each Ref, examines the referenced fragment's size. If the fragment
+-- has fewer than the inline threshold number of nodes, replaces the Ref
+-- with the fragment's subtree using graph_replace_subtree.
+--
+-- Strategy:
+--   1. Walk all nodes in the program
+--   2. For each Ref node, get the referenced program
+--   3. Count nodes in the reference target
+--   4. If small enough (< threshold), replace Ref with target's subtree
+--   5. Otherwise, leave the Ref intact
+--
+-- Returns the transformed program
+
+-- Threshold for inlining: fragments with fewer than this many nodes
+let inline_threshold : Int [cost: Zero] = 5
+
+-- Check if a node is a Ref node (NodeKind::Ref = 6)
+let is_ref program node_id : Int -> Int -> Int [cost: Const(1)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 6 then 1 else 0
+
+-- Check if a program is small enough to inline
+let is_small_program program : Int -> Int [cost: Const(2)] =
+  let nodes = graph_nodes program in
+  let count = fold 0 (\acc x -> acc + 1) nodes in
+  if count < inline_threshold then 1 else 0
+
+-- Attempt to inline a single Ref node
+-- If the referenced program is small enough, replace the Ref with the target subtree
+-- program: the program being transformed
+-- ref_program: the referenced fragment
+-- ref_node_id: the Ref node to potentially inline
+-- Returns the transformed program
+let inline_ref program ref_program ref_node_id : Int -> Int -> Int -> Int [cost: Const(8)] =
+  let kind = graph_get_kind program ref_node_id in
+  if kind == 6 then
+    let ref_nodes = graph_nodes ref_program in
+    let ref_count = fold 0 (\acc x -> acc + 1) ref_nodes in
+    if ref_count < inline_threshold then
+      let ref_root = graph_get_root ref_program in
+      graph_replace_subtree program ref_node_id ref_program ref_root
+    else program
+  else program
+
+-- Inline all small Ref nodes in a program
+-- ref_program: the fragment library to inline from
+-- Returns the transformed program with small Refs inlined
+let inline_small program ref_program : Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold program
+    (\g nid ->
+      let kind = graph_get_kind g nid in
+      if kind == 6 then
+        inline_ref g ref_program nid
+      else g)
+    nodes

@@ -1,0 +1,185 @@
+-- I/O primitives: IRIS-native file, network, and console I/O
+--
+-- Built on the bootstrap's effect dispatch (Effect nodes with tags).
+-- Each function here is a thin wrapper around an Effect builtin that
+-- the lowerer maps to Effect nodes, which the bootstrap dispatches
+-- through the EffectHandler.
+--
+-- This replaces the Rust orchestration in iris-exec effects.rs.
+-- The actual syscalls happen in the EffectHandler (permanent substrate).
+-- Everything above this layer is pure IRIS.
+
+-- External stubs (effect primitives provided by the runtime)
+let file_write h content : Int -> Int -> Int [cost: Const(1)] = 0
+let perform_effect tag arg : Int -> Int -> Int [cost: Const(1)] = 0
+--
+-- Effect tags (from iris-repr EffectTag):
+--   Console: 0x00=Print, 0x01=ReadLine
+--   File:    0x04=FileRead, 0x05=FileWrite,
+--            0x16=FileOpen, 0x17=FileReadBytes, 0x18=FileWriteBytes,
+--            0x19=FileClose, 0x1A=FileStat, 0x1B=DirList
+--   Network: 0x10=TcpConnect, 0x11=TcpRead, 0x12=TcpWrite,
+--            0x13=TcpClose, 0x14=TcpListen, 0x15=TcpAccept
+--   Env:     0x1C=EnvGet, 0x1D=ClockNs, 0x1E=RandomBytes, 0x1F=SleepMs
+
+-- File mode constants
+let file_mode_read : Int [cost: Const(1)] = 0
+let file_mode_write : Int [cost: Const(1)] = 1
+let file_mode_append : Int [cost: Const(1)] = 2
+
+-- Max read size (16 MB)
+let max_read_size : Int [cost: Const(1)] = 16777216
+
+-- =========================================================================
+-- Console I/O
+-- =========================================================================
+
+-- Print a string to stdout/stderr. Returns Unit.
+let io_print msg : String -> Int [cost: Const(1)] =
+  print msg
+
+-- Read a line from stdin. Returns the line as a String.
+let io_read_line unused : Int -> String [cost: Const(1)] =
+  read_line unused
+
+-- =========================================================================
+-- High-level file I/O (convenience wrappers)
+-- =========================================================================
+
+-- Read entire file contents as a string.
+-- Uses the simple FileRead effect (0x04).
+let io_read_file path : String -> String [cost: Const(2)] =
+  file_read path
+
+-- Write string contents to a file (creates or overwrites).
+-- Uses the simple FileWrite effect (0x05).
+let io_write_file path contents : String -> String -> Int [cost: Const(2)] =
+  file_write path contents
+
+-- =========================================================================
+-- Low-level file I/O (handle-based)
+-- =========================================================================
+
+-- Open a file. mode: 0=read, 1=write, 2=append. Returns handle (Int).
+let io_file_open path mode : String -> Int -> Int [cost: Const(2)] =
+  file_open path mode
+
+-- Read up to max_bytes from a file handle. Returns Bytes.
+let io_file_read handle max_bytes : Int -> Int -> Int [cost: Const(2)] =
+  file_read_bytes handle max_bytes
+
+-- Write bytes to a file handle. Returns bytes written (Int).
+let io_file_write handle data : Int -> Int -> Int [cost: Const(2)] =
+  file_write_bytes handle data
+
+-- Close a file handle. Returns Unit.
+let io_file_close handle : Int -> Int [cost: Const(1)] =
+  file_close handle
+
+-- Stat a file. Returns (size, modified_ns, is_dir).
+let io_file_stat path : String -> (Int, Int, Int) [cost: Const(2)] =
+  file_stat path
+
+-- List directory entries. Returns tuple of Strings.
+let io_dir_list path : String -> Int [cost: Const(2)] =
+  dir_list path
+
+-- =========================================================================
+-- Network I/O (TCP)
+-- =========================================================================
+
+-- Connect to a TCP endpoint. Returns connection handle (Int).
+let io_tcp_connect host port : String -> Int -> Int [cost: Const(2)] =
+  tcp_connect host port
+
+-- Read up to max_bytes from a TCP connection. Returns Bytes.
+let io_tcp_read conn max_bytes : Int -> Int -> Int [cost: Const(2)] =
+  tcp_read conn max_bytes
+
+-- Write bytes to a TCP connection. Returns bytes written (Int).
+let io_tcp_write conn data : Int -> Int -> Int [cost: Const(2)] =
+  tcp_write conn data
+
+-- Close a TCP connection. Returns Unit.
+let io_tcp_close conn : Int -> Int [cost: Const(1)] =
+  tcp_close conn
+
+-- Listen on a TCP port. Returns listener handle (Int).
+let io_tcp_listen port : Int -> Int [cost: Const(1)] =
+  tcp_listen port
+
+-- Accept a connection on a listener. Returns connection handle (Int).
+let io_tcp_accept listener : Int -> Int [cost: Const(1)] =
+  tcp_accept listener
+
+-- =========================================================================
+-- Environment & time
+-- =========================================================================
+
+-- Get an environment variable. Returns String or Unit if not set.
+let io_env_get name : String -> Int [cost: Const(1)] =
+  env_get name
+
+-- Get current nanosecond timestamp.
+let io_clock_ns unused : Int -> Int [cost: Const(1)] =
+  clock_ns unused
+
+-- Generate random bytes. Returns Bytes.
+let io_random_bytes count : Int -> Int [cost: Const(1)] =
+  random_bytes count
+
+-- Sleep for N milliseconds. Returns Unit.
+let io_sleep_ms ms : Int -> Int [cost: Const(1)] =
+  sleep_ms ms
+
+-- =========================================================================
+-- Compound I/O operations (pure IRIS logic on top of primitives)
+-- =========================================================================
+
+-- Read a file as bytes (binary). Opens, reads, closes.
+let io_read_file_bytes path : String -> Int [cost: Const(6)] =
+  let h = file_open path 0 in
+  let contents = file_read_bytes h max_read_size in
+  let unused = file_close h in
+  contents
+
+-- Write bytes to a file. Opens, writes, closes.
+let io_write_file_bytes path data : String -> Int -> Int [cost: Const(6)] =
+  let h = file_open path 1 in
+  let n = file_write_bytes h data in
+  let unused = file_close h in
+  n
+
+-- Append bytes to a file. Opens in append mode, writes, closes.
+let io_append_file path data : String -> Int -> Int [cost: Const(6)] =
+  let h = file_open path 2 in
+  let n = file_write_bytes h data in
+  let unused = file_close h in
+  n
+
+-- Check if a path is a directory.
+let io_is_dir path : String -> Int [cost: Const(3)] =
+  let stat = file_stat path in
+  stat.2
+
+-- Get file size in bytes.
+let io_file_size path : String -> Int [cost: Const(3)] =
+  let stat = file_stat path in
+  stat.0
+
+-- Simple TCP request: connect, write, read response, close.
+let io_tcp_request host port request max_response : String -> Int -> Int -> Int -> Int [cost: Const(8)] =
+  let conn = tcp_connect host port in
+  let unused = tcp_write conn request in
+  let response = tcp_read conn max_response in
+  let unused = tcp_close conn in
+  response
+
+-- =========================================================================
+-- Entry point: dispatch I/O operation by tag
+-- =========================================================================
+
+-- Generic I/O dispatch for programs that build effect requests dynamically.
+-- tag: effect tag (0x00-0x1F), arg1/arg2: operation-specific arguments.
+let io_dispatch tag arg1 arg2 : Int -> Int -> Int -> Int [cost: Const(4)] =
+  perform_effect tag arg1

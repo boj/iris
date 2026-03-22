@@ -1,0 +1,124 @@
+-- Seed generator: construct a conditional fold program
+--
+-- Builds a fold with conditional logic: filter+fold or map+filter+fold
+-- Seeds predicate-based computation patterns:
+--   - count positives: fold(0, add, map(filter(input, gt), div))
+--   - sum of filtered: fold(0, add, filter(input, cmp))
+--   - transform and sum: fold(0, add, map(input, abs))
+--
+-- Pattern 0: Filter + map to 1s + fold(0, add) = count matching predicate
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)                 base case
+--     port 1 -> Prim(add)              fold step
+--     port 2 -> Map                    mapped values
+--                 port 0 -> Filter     filtered input
+--                             port 0 -> Tuple (input)
+--                             port 1 -> Prim(gt)
+--                 port 1 -> Prim(div)  map each to 1 via div(x,x)
+--
+-- Pattern 1: Filter + fold = sum of filtered elements
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)                base case
+--     port 1 -> Prim(add)             fold step
+--     port 2 -> Filter                filtered input
+--
+-- Pattern 2: Map + fold(0, add) = transform and sum
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)               base case
+--     port 1 -> Prim(add)            fold step
+--     port 2 -> Map(input, abs)      absolute values
+
+-- Generate count-matching-predicate pattern
+-- Counts elements where cmp_opcode(element, 0) is true
+let generate_count_matching program cmp_opcode : Int -> Int -> Int [cost: Const(20)] =
+  -- Add filter predicate (Prim node, then set opcode)
+  let fp = graph_add_node_rt program 0 in
+  let p1 = fp.0 in
+  let pred_id = fp.1 in
+  let _spo0 = graph_set_prim_op p1 pred_id cmp_opcode in
+  let p1 = _spo0.0 in
+  let pred_id = _spo0.1 in
+  -- Add filter node (Prim with opcode 49)
+  let fn_r = graph_add_node_rt p1 0 in
+  let p2 = fn_r.0 in
+  let filter_id = fn_r.1 in
+  let _spo1 = graph_set_prim_op p2 filter_id 49 in
+  let p2 = _spo1.0 in
+  let filter_id = _spo1.1 in
+  let p3 = graph_connect p2 filter_id pred_id 1 in
+  -- Add map step: div(x,x) = 1 for each filtered element
+  let ms = graph_add_node_rt p3 0 in
+  let p4 = ms.0 in
+  let div_id = ms.1 in
+  let _spo2 = graph_set_prim_op p4 div_id 3 in
+  let p4 = _spo2.0 in
+  let div_id = _spo2.1 in
+  -- Add map node (Prim with opcode 48)
+  let mp = graph_add_node_rt p4 0 in
+  let p5 = mp.0 in
+  let map_id = mp.1 in
+  let _spo3 = graph_set_prim_op p5 map_id 48 in
+  let p5 = _spo3.0 in
+  let map_id = _spo3.1 in
+  let p6 = graph_connect p5 map_id filter_id 0 in
+  let p7 = graph_connect p6 map_id div_id 1 in
+  -- Add fold step: add (opcode 0, default)
+  let fs = graph_add_node_rt p7 0 in
+  let p8 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root
+  let root = graph_get_root p8 in
+  let p9 = graph_connect p8 root add_id 1 in
+  graph_connect p9 root map_id 2
+
+-- Generate sum-of-filtered pattern
+let generate_sum_filtered program cmp_opcode : Int -> Int -> Int [cost: Const(14)] =
+  -- Add filter predicate
+  let fp = graph_add_node_rt program 0 in
+  let p1 = fp.0 in
+  let pred_id = fp.1 in
+  let _spo4 = graph_set_prim_op p1 pred_id cmp_opcode in
+  let p1 = _spo4.0 in
+  let pred_id = _spo4.1 in
+  -- Add filter node
+  let fn_r = graph_add_node_rt p1 0 in
+  let p2 = fn_r.0 in
+  let filter_id = fn_r.1 in
+  let _spo5 = graph_set_prim_op p2 filter_id 49 in
+  let p2 = _spo5.0 in
+  let filter_id = _spo5.1 in
+  let p3 = graph_connect p2 filter_id pred_id 1 in
+  -- Add fold step: add
+  let fs = graph_add_node_rt p3 0 in
+  let p4 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root
+  let root = graph_get_root p4 in
+  let p5 = graph_connect p4 root add_id 1 in
+  graph_connect p5 root filter_id 2
+
+-- Generate transform-and-sum pattern (map + fold)
+let generate_transform_sum program map_opcode : Int -> Int -> Int [cost: Const(14)] =
+  -- Add map step function
+  let ms = graph_add_node_rt program 0 in
+  let p1 = ms.0 in
+  let map_step_id = ms.1 in
+  let _spo6 = graph_set_prim_op p1 map_step_id map_opcode in
+  let p1 = _spo6.0 in
+  let map_step_id = _spo6.1 in
+  -- Add map node (Prim with opcode 48)
+  let mp = graph_add_node_rt p1 0 in
+  let p2 = mp.0 in
+  let map_id = mp.1 in
+  let _spo7 = graph_set_prim_op p2 map_id 48 in
+  let p2 = _spo7.0 in
+  let map_id = _spo7.1 in
+  let p3 = graph_connect p2 map_id map_step_id 1 in
+  -- Add fold step: add
+  let fs = graph_add_node_rt p3 0 in
+  let p4 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root
+  let root = graph_get_root p4 in
+  let p5 = graph_connect p4 root add_id 1 in
+  graph_connect p5 root map_id 2

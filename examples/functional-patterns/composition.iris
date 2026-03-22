@@ -1,0 +1,51 @@
+-- Function Composition
+-- Demonstrates composing functions in IRIS using higher-order functions.
+
+-- Compose two functions: (f . g)(x) = f(g(x))
+let compose f g x : (Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
+  f (g x)
+
+-- Compose a list of functions (right to left).
+let compose_all fs x : Tuple -> Int -> Int [cost: Unknown] =
+  fold x (\acc f -> f acc) fs
+
+-- Pipe: apply functions left to right (reverse of compose).
+let pipe x fs : Int -> Tuple -> Int [cost: Unknown] =
+  fold x (\acc f -> f acc) fs
+
+-- Apply a function n times: f^n(x).
+let rec apply_n f n x : (Int -> Int) -> Int -> Int -> Int [cost: Linear(n)] =
+  if n <= 0 then x
+  else apply_n f (n - 1) (f x)
+
+-- Same using fold.
+let apply_n_fold f n x : (Int -> Int) -> Int -> Int -> Int [cost: Linear(n)] =
+  fold x (\acc step -> f acc) (list_range 0 n)
+
+-- Flip: swap the arguments of a binary function.
+let flip f a b : (Int -> Int -> Int) -> Int -> Int -> Int [cost: Const(1)] =
+  f b a
+
+-- Constant function: always returns the same value.
+let const_fn val x : Int -> Int -> Int [cost: Const(1)] = val
+
+-- Identity function.
+let id x : Int -> Int [cost: Const(1)] = x
+
+-- On: apply a unary function to both arguments of a binary function.
+-- (op `on` f) a b = op (f a) (f b)
+let on op f a b : (Int -> Int -> Int) -> (Int -> Int) -> Int -> Int -> Int [cost: Unknown] =
+  op (f a) (f b)
+
+-- Test: build a pipeline
+let test_composition x : Int -> Tuple =
+  let double = \x -> x * 2 in
+  let inc = \x -> x + 1 in
+  let square = \x -> x * x in
+  -- (square . inc . double)(3) = square(inc(double(3))) = square(inc(6)) = square(7) = 49
+  let composed = compose square (compose inc double) 3 in
+  -- pipe: 3 -> double -> inc -> square = 49
+  let piped = pipe 3 (double, inc, square) in
+  -- apply double 4 times to 1: 1 -> 2 -> 4 -> 8 -> 16
+  let repeated = apply_n double 4 1 in
+  (composed, piped, repeated)

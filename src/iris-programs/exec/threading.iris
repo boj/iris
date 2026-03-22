@@ -1,0 +1,148 @@
+-- Threading primitives: IRIS-native concurrency built on effect opcodes
+--
+-- Replaces the Rust threading orchestration in iris-exec effects.rs.
+-- Each function maps to an Effect node that the bootstrap dispatches
+-- to the EffectHandler. The handler performs the actual OS thread
+-- operations (pthread_create, mutex, rwlock, etc.).
+--
+-- Effect tags:
+--   0x20 = ThreadSpawn    0x21 = ThreadJoin
+--   0x22 = AtomicRead     0x23 = AtomicWrite
+--   0x24 = AtomicSwap     0x25 = AtomicAdd
+--   0x26 = RwLockRead     0x27 = RwLockWrite
+--   0x28 = RwLockRelease
+--
+-- Threading model:
+--   - ThreadSpawn takes a Program (SemanticGraph) and returns (handle, future)
+--   - ThreadJoin takes (handle, future) and blocks until completion
+--   - Atomics use string keys into a shared state map
+--   - RwLocks use string keys into a shared lock map
+
+-- =========================================================================
+-- External stubs (effect primitives provided by the runtime)
+-- =========================================================================
+let perform_effect tag arg : Int -> Int -> Int [cost: Const(1)] = 0
+
+-- =========================================================================
+-- Thread lifecycle
+-- =========================================================================
+
+-- Spawn a thread that executes the given program.
+-- Returns (handle_index: Int, future: Future).
+let thread_start program : Int -> (Int, Int) [cost: Const(2)] =
+  thread_spawn program 0
+
+-- Wait for a thread to complete and return its result.
+-- Takes the (handle, future) tuple from thread_start.
+let thread_wait handle_future : (Int, Int) -> Int [cost: Unknown] =
+  thread_join handle_future
+
+-- =========================================================================
+-- Atomic state (lock-free shared memory)
+-- =========================================================================
+
+-- Read a value from shared atomic state by key.
+-- Returns the current value, or Int(0) if key doesn't exist.
+let atomic_load key : String -> Int [cost: Const(2)] =
+  atomic_read key 0
+
+-- Write a value to shared atomic state by key. Returns Unit.
+let atomic_store key value : String -> Int -> Int [cost: Const(2)] =
+  atomic_write key value
+
+-- Atomically swap a value, returning the old value.
+let atomic_exchange key new_value : String -> Int -> Int [cost: Const(2)] =
+  atomic_swap key new_value
+
+-- Atomically add delta to a counter, returning the old value.
+let atomic_fetch_add key delta : String -> Int -> Int [cost: Const(2)] =
+  atomic_add key delta
+
+-- =========================================================================
+-- Reader-writer locks
+-- =========================================================================
+
+-- Acquire a read lock and return the protected value.
+let lock_read key : String -> Int [cost: Const(2)] =
+  rwlock_read key 0
+
+-- Acquire a write lock and set the protected value. Returns Unit.
+let lock_write key value : String -> Int -> Int [cost: Const(2)] =
+  rwlock_write key value
+
+-- Release a lock (removes the lock entry). Returns Unit.
+let lock_release key : String -> Int [cost: Const(1)] =
+  rwlock_release key 0
+
+-- =========================================================================
+-- Compound threading patterns (pure IRIS logic)
+-- =========================================================================
+
+-- Spawn N threads running the same program, return list of handles.
+-- Uses fold to spawn threads sequentially (they run in parallel once spawned).
+let thread_spawn_n program n : Int -> Int -> Int [cost: Linear(n)] =
+  fold 0 (\handles i ->
+    let h = thread_start program in
+    (h, handles))
+  n
+
+-- Join all threads in a handle list (nested pairs), collect results.
+let thread_join_all handles n : Int -> Int -> Int [cost: Linear(n)] =
+  fold 0 (\results i ->
+    let h = handles in
+    let r = thread_wait h in
+    (r, results))
+  n
+
+-- Parallel map: spawn a thread per element, join all, collect results.
+-- `make_program` takes an element and returns a program to run.
+-- Elements are Int-indexed (0..n-1).
+let parallel_map_n make_program n : (Int -> Int) -> Int -> Int [cost: Linear(n)] =
+  let handles = fold 0 (\hs i ->
+    let prog = make_program i in
+    let h = thread_start prog in
+    (h, hs))
+    n
+  in
+  fold 0 (\results i ->
+    let h = handles in
+    let r = thread_wait h in
+    (r, results))
+  n
+
+-- Atomic counter: increment and return new value.
+let counter_increment key : String -> Int [cost: Const(3)] =
+  let old = atomic_fetch_add key 1 in
+  old + 1
+
+-- Atomic counter: read current value.
+let counter_read key : String -> Int [cost: Const(2)] =
+  atomic_load key
+
+-- =========================================================================
+-- Barrier: simple spin-wait barrier using atomic counter
+-- =========================================================================
+
+-- Signal that this thread has reached the barrier.
+-- Returns the number of threads that have arrived (including this one).
+let barrier_arrive key : String -> Int [cost: Const(3)] =
+  counter_increment key
+
+-- Wait until N threads have arrived at the barrier.
+-- Spins with 1ms sleeps to avoid busy-waiting.
+let barrier_wait key n : String -> Int -> Int [cost: Linear(n)] =
+  fold 0 (\unused attempt ->
+    let count = counter_read key in
+    if count >= n then 1
+    else
+      let unused = sleep_ms 1 in
+      0)
+  1000
+
+-- =========================================================================
+-- Entry point: thread operation dispatch
+-- =========================================================================
+
+-- Generic threading dispatch for dynamic effect construction.
+let threading_dispatch tag arg1 arg2 : Int -> Int -> Int -> Int [cost: Const(4)] =
+  perform_effect tag arg1

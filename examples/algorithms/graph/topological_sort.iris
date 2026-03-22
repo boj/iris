@@ -1,0 +1,64 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Topological Sort (Kahn's Algorithm)
+-- Given a DAG, produce a linear ordering of nodes such that
+-- for every edge u -> v, u appears before v.
+-- Uses in-degree counting and iterative removal of zero-in-degree nodes.
+
+-- Check if a value exists in a tuple.
+let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =
+  fold false (\found x -> if x == val then true else found) xs
+
+-- Compute in-degrees for all nodes.
+let compute_in_degrees graph n : Tuple -> Int -> Tuple [cost: Unknown] =
+  let init = map (\i -> 0) (list_range 0 n) in
+  fold init (\degrees node_idx ->
+    let neighbors = list_nth graph node_idx in
+    fold degrees (\deg nb ->
+      list_set deg nb (list_nth deg nb + 1)
+    ) neighbors
+  ) (list_range 0 n)
+
+-- Find all nodes with in-degree 0.
+let find_zeros degrees : Tuple -> Tuple [cost: Linear(degrees)] =
+  let indices = list_range 0 (list_len degrees) in
+  filter (\i -> list_nth degrees i == 0) indices
+
+-- Kahn's algorithm: repeatedly remove zero-in-degree nodes.
+let rec kahn_aux graph degrees result remaining : Tuple -> Tuple -> Tuple -> Int -> Tuple [cost: Unknown] =
+  if remaining <= 0 then result
+  else
+    let zeros = find_zeros degrees in
+    let nz = list_len zeros in
+    if nz == 0 then result  -- cycle detected, return partial result
+    else
+      -- Process all zero-in-degree nodes
+      let new_state = fold (degrees, result) (\state node ->
+        let deg = state.0 in
+        let res = state.1 in
+        -- Mark this node as processed (set in-degree to -1)
+        let deg2 = list_set deg node -1 in
+        -- Decrease in-degree of neighbors
+        let neighbors = list_nth graph node in
+        let deg3 = fold deg2 (\d nb ->
+          list_set d nb (list_nth d nb - 1)
+        ) neighbors in
+        (deg3, list_append res node)
+      ) zeros in
+      kahn_aux graph new_state.0 new_state.1 (remaining - nz)
+
+let topological_sort graph : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len graph in
+  let degrees = compute_in_degrees graph n in
+  kahn_aux graph degrees () n
+
+-- Test: DAG with 6 nodes
+--   5 -> 0, 5 -> 2
+--   4 -> 0, 4 -> 1
+--   2 -> 3
+--   3 -> 1
+let test_topo_sort x : Int -> Tuple =
+  let graph = ((), (), (3,), (1,), (0, 1), (0, 2)) in
+  topological_sort graph

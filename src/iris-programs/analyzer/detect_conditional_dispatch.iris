@@ -1,0 +1,82 @@
+-- Detect conditional dispatch pattern: output depends on a dispatch input
+--
+-- Takes a list of (inputs_tuple, expected_output) pairs and count n.
+-- One of the inputs is a "dispatch" value that selects the operation:
+--   e.g., input[1] == 0 → add(input[0], input[2])
+--         input[1] == 1 → sub(input[0], input[2])
+-- Returns: (confidence, dispatch_input_index)
+
+-- Group test cases by the value of a dispatch input
+-- Checks if splitting on input[dispatch_idx] produces groups where
+-- each group follows a consistent binary arithmetic pattern.
+
+-- Check if a group of test cases (all sharing same dispatch value) follows
+-- a single binary arithmetic pattern
+-- pairs: list of (inputs, expected) where dispatch input has been removed
+-- Returns: confidence 0-100
+let group_follows_pattern pairs dispatch_idx n : Int -> Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    -- Try all binary ops on remaining inputs
+    let ops = (0, 1, 2, 3, 7, 8) in
+    fold 0
+      (\best_conf op ->
+        -- Count matches with this op on non-dispatch inputs
+        let matches = fold 0
+          (\acc pair ->
+            let inputs = pair.0 in
+            let expected = pair.1 in
+            -- Get first two non-dispatch inputs
+            let a = if dispatch_idx == 0 then inputs.1 else inputs.0 in
+            let b = if dispatch_idx <= 1 then inputs.2
+                    else inputs.1 in
+            let result = if op == 0 then a + b
+                        else if op == 1 then a - b
+                        else if op == 2 then a * b
+                        else if op == 3 then
+                          if b == 0 then 0 else a / b
+                        else if op == 7 then min a b
+                        else max a b in
+            if result == expected then acc + 1 else acc)
+          pairs in
+        let conf = (matches * 100) / n in
+        max best_conf conf)
+      ops
+
+-- Count distinct dispatch values
+let count_distinct_values pairs dispatch_idx : Int -> Int -> Int [cost: Linear(pairs)] =
+  fold (0, ())
+    (\state pair ->
+      let inputs = pair.0 in
+      let v = if dispatch_idx == 0 then inputs.0
+                else if dispatch_idx == 1 then inputs.1
+                else inputs.2 in
+      let is_dup = fold 0
+        (\found prev -> if prev == v then 1 else found)
+        (state.1) in
+      if is_dup == 1 then state
+      else (state.0 + 1, v))
+    pairs
+
+-- Detect conditional dispatch pattern
+-- Requires: 3+ inputs, at least 2 distinct values for one input,
+-- and each group follows a binary arithmetic pattern.
+-- Returns: (confidence, dispatch_input_index)
+let detect_conditional_dispatch pairs n num_inputs : Int -> Int -> Int -> (Int, Int) [cost: Unknown] =
+  if n == 0 then (0, 0)
+  else if num_inputs < 3 then (0, 0)
+  else
+    -- Try each input as the dispatch
+    fold (0, 0)
+      (\best dispatch_idx ->
+        if dispatch_idx >= num_inputs then best
+        else
+          -- Count distinct dispatch values
+          let distinct = count_distinct_values pairs dispatch_idx in
+          if distinct.0 < 2 then best
+          else
+            -- Check if each group follows a pattern
+            let conf = group_follows_pattern pairs dispatch_idx n in
+            if conf > best.0 then (conf, dispatch_idx)
+            else best)
+      num_inputs

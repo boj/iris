@@ -1,0 +1,39 @@
+-- Evaluate a Ref node: cross-fragment call (inter-program composition).
+--
+-- Mirrors the ref handling from iris-exec interpreter.rs eval_ref.
+--
+-- A Ref node has:
+--   - fragment_id: FragmentId in the payload (which fragment to call)
+--   - Argument edges: values to pass as inputs to the referenced fragment
+--
+-- The Rust interpreter:
+--   1. Looks up the fragment_id in the FragmentRegistry
+--   2. Evaluates all argument edges to get input values
+--   3. Calls interpret() on the referenced fragment with those inputs
+--   4. Returns the result
+--
+-- Without a registry, returns Unsupported error.
+--
+-- In the surface language, Ref is the mechanism for modular composition:
+-- programs call other programs by reference, enabling code reuse and
+-- separate compilation.
+
+-- Simulate a ref call: call a function by id with an argument.
+-- func 0 = identity, 1 = double, 2 = square
+let eval_ref_call func_id arg : Int -> Int -> Int [cost: Const(3)] =
+  if func_id == 0 then arg
+  else if func_id == 1 then arg + arg
+  else if func_id == 2 then arg * arg
+  else -1
+
+-- Simulate chained ref calls: f(g(x)).
+-- Both f and g are identified by function id.
+let eval_ref_compose f_id g_id arg : Int -> Int -> Int -> Int [cost: Const(6)] =
+  let inner = if g_id == 0 then arg
+              else if g_id == 1 then arg + arg
+              else if g_id == 2 then arg * arg
+              else arg in
+  if f_id == 0 then inner
+  else if f_id == 1 then inner + inner
+  else if f_id == 2 then inner * inner
+  else inner

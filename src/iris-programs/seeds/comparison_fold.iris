@@ -1,0 +1,51 @@
+-- Seed generator: construct a comparison-based fold program
+--
+-- Builds a fold that computes min or max over a list using extreme base values.
+-- Uses extreme base values so min/max fold works correctly on first element.
+--
+-- Max pattern:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(MIN_INT)     base case (start from smallest possible)
+--     port 1 -> Prim(max)        step function (keep the larger value)
+--
+-- Min pattern:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(MAX_INT)     base case (start from largest possible)
+--     port 1 -> Prim(min)        step function (keep the smaller value)
+--
+-- Opcodes: min=0x07, max=0x08
+
+-- Generate max-finding fold: fold(MIN_INT, max, input)
+let generate_fold_max_extreme program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let max_id = step.1 in
+  let spo = graph_set_prim_op prog max_id 8 in
+  let prog = spo.0 in
+  let max_id = spo.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root max_id 1
+
+-- Generate min-finding fold: fold(MAX_INT, min, input)
+let generate_fold_min_extreme program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let min_id = step.1 in
+  let spo = graph_set_prim_op prog min_id 7 in
+  let prog = spo.0 in
+  let min_id = spo.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root min_id 1
+
+-- Generate comparison fold with selectable operation
+-- is_max: 1 for max-finding, 0 for min-finding
+let generate_comparison_fold program is_max : Int -> Int -> Int [cost: Const(6)] =
+  let opcode = if is_max == 1 then 8 else 7 in
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let cmp_id = step.1 in
+  let spo = graph_set_prim_op prog cmp_id opcode in
+  let prog = spo.0 in
+  let cmp_id = spo.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root cmp_id 1

@@ -1,0 +1,11 @@
+-- Estimate the serialized size of a fragment in bytes
+-- Formula: node_count * 38 + 14
+--   Each node is ~20 bytes, each edge ~18 bytes (tree: n-1 edges),
+--   plus 32-byte hash overhead minus constants.
+-- Returns estimated byte count as Int.
+-- Note: uses sub(x, neg(14)) instead of x+14 to avoid content-addressed
+-- node collision between the fold step and outer arithmetic.
+let fragment_size program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  node_count * 38 - (neg 14)

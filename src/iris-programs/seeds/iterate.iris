@@ -1,0 +1,92 @@
+-- Seed generator: construct an iterative computation program
+--
+-- Builds programs based on Unfold for iterative patterns that can't be
+-- expressed as fold-over-collection:
+--   - Fibonacci: unfold((0,1), add, n) produces [fib(0), fib(1), ...]
+--   - GCD: unfold((a,b), mod, term=b==0), project first element of final state
+--   - Generic iteration: unfold(seed, step_op, bound)
+--
+-- NodeKind::Unfold = 0x09 (from iris-repr/src/graph.rs)
+-- Portable Prim creation: graph_add_node_rt pg 0 creates Prim(opcode=0),
+-- then graph_set_prim_op sets the actual opcode.
+-- graph_set_prim_op returns Tuple(Program, new_node_id).
+
+-- Generate Fibonacci seed: fold(0, max, unfold((1,1), add, n))
+let generate_fibonacci program : Int -> Int [cost: Const(20)] =
+  -- Add unfold step: add (opcode 0x00) - default Prim opcode is already 0
+  let s1 = graph_add_node_rt program 0 in
+  let p1 = s1.0 in
+  let step_id = s1.1 in
+  -- Add unfold node with correct NodeKind (Unfold = 0x09 = 9)
+  let s2 = graph_add_node_rt p1 9 in
+  let p2 = s2.0 in
+  let unfold_id = s2.1 in
+  let p3 = graph_connect p2 unfold_id step_id 1 in
+  -- Add fold step for reduction: max (opcode 0x08)
+  -- Create Prim(0) then set opcode to max(8)
+  let s4 = graph_add_node_rt p3 0 in
+  let p4 = s4.0 in
+  let max_id_orig = s4.1 in
+  let set_result = graph_set_prim_op p4 max_id_orig 8 in
+  let p5 = set_result.0 in
+  let max_id = set_result.1 in
+  -- Wire fold root: step (port 1), unfold output (port 2)
+  let root = graph_get_root p5 in
+  let p6 = graph_connect p5 root max_id 1 in
+  graph_connect p6 root unfold_id 2
+
+-- Generate GCD seed: project(0, unfold(input, mod, eq_term))
+let generate_gcd program : Int -> Int [cost: Const(16)] =
+  -- Add unfold step: mod (opcode 0x04)
+  let s1 = graph_add_node_rt program 0 in
+  let p1 = s1.0 in
+  let step_id_orig = s1.1 in
+  let sr1 = graph_set_prim_op p1 step_id_orig 4 in
+  let p1b = sr1.0 in
+  let step_id = sr1.1 in
+  -- Add termination predicate: eq (opcode 0x20 = 32)
+  let s2 = graph_add_node_rt p1b 0 in
+  let p2 = s2.0 in
+  let term_id_orig = s2.1 in
+  let sr2 = graph_set_prim_op p2 term_id_orig 32 in
+  let p2b = sr2.0 in
+  let term_id = sr2.1 in
+  -- Add unfold node with correct NodeKind (Unfold = 0x09 = 9)
+  let s3 = graph_add_node_rt p2b 9 in
+  let p3 = s3.0 in
+  let unfold_id = s3.1 in
+  let p4 = graph_connect p3 unfold_id step_id 1 in
+  let p5 = graph_connect p4 unfold_id term_id 2 in
+  -- The unfold result is then reduced: use fold(0, add) as projector
+  let s6 = graph_add_node_rt p5 0 in
+  let p6 = s6.0 in
+  let add_id = s6.1 in
+  let root = graph_get_root p6 in
+  let p7 = graph_connect p6 root add_id 1 in
+  graph_connect p7 root unfold_id 2
+
+-- Generate generic bounded iteration seed
+let generate_iterate program step_opcode fold_opcode : Int -> Int -> Int -> Int [cost: Const(20)] =
+  -- Add unfold step operation with specified opcode
+  let s1 = graph_add_node_rt program 0 in
+  let p1 = s1.0 in
+  let step_id_orig = s1.1 in
+  let sr1 = graph_set_prim_op p1 step_id_orig step_opcode in
+  let p1b = sr1.0 in
+  let step_id = sr1.1 in
+  -- Add unfold node with correct NodeKind (Unfold = 0x09 = 9)
+  let s2 = graph_add_node_rt p1b 9 in
+  let p2 = s2.0 in
+  let unfold_id = s2.1 in
+  let p3 = graph_connect p2 unfold_id step_id 1 in
+  -- Add fold step for reduction with specified opcode
+  let s4 = graph_add_node_rt p3 0 in
+  let p4 = s4.0 in
+  let fold_step_id_orig = s4.1 in
+  let sr4 = graph_set_prim_op p4 fold_step_id_orig fold_opcode in
+  let p4b = sr4.0 in
+  let fold_step_id = sr4.1 in
+  -- Wire fold root
+  let root = graph_get_root p4b in
+  let p5 = graph_connect p4b root fold_step_id 1 in
+  graph_connect p5 root unfold_id 2

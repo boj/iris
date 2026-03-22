@@ -1,0 +1,55 @@
+-- Evaluation cache: hash program+inputs, store results, check before
+-- re-evaluating.
+--
+-- Mirrors the LRU compilation cache from iris-exec cache.rs.
+--
+-- The Rust CompilationCache:
+--   - Keyed by FragmentId (BLAKE3 hash of the graph)
+--   - LRU eviction when at capacity
+--   - Tracks hits, misses, evictions
+--   - get_or_compile: look up or compile+insert
+--
+-- In IRIS surface syntax we model the cache as a stateless function
+-- that simulates the cache lookup decision: given a key and a stored
+-- key, determine hit/miss and return the appropriate result.
+--
+-- Inputs:
+--   query_key  : Int (hash of program being looked up)
+--   stored_key : Int (hash of program currently in cache)
+--   cached_val : Int (stored result for the cached program)
+--   fresh_val  : Int (newly computed result on cache miss)
+--
+-- Output: (Int, Int) tuple of (result, cache_hit)
+--   result    : cached_val on hit, fresh_val on miss
+--   cache_hit : 1 on hit, 0 on miss
+
+let cache_lookup query_key stored_key cached_val fresh_val : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(2)] =
+  if query_key == stored_key then (cached_val, 1)
+  else (fresh_val, 0)
+
+-- LRU eviction decision: given two entries with access times,
+-- determine which one to evict (the one with the lower access time).
+--
+-- Mirrors CompilationCache::evict_lru: find entry with min last_access.
+--
+-- Inputs:
+--   access_a : Int (last access time of entry A)
+--   access_b : Int (last access time of entry B)
+--
+-- Output: Int (0 = evict A, 1 = evict B)
+let cache_evict_lru access_a access_b : Int -> Int -> Int [cost: Const(2)] =
+  if access_a <= access_b then 0
+  else 1
+
+-- Cache statistics: compute hit rate from hits and misses.
+-- Returns hit rate as percentage (0-100).
+let cache_hit_rate hits misses : Int -> Int -> Int [cost: Const(3)] =
+  let total = hits + misses in
+  if total == 0 then 0
+  else hits * 100 / total
+
+-- Check if cache is at capacity and needs eviction.
+-- Returns 1 if eviction needed, 0 otherwise.
+let cache_needs_eviction current_entries max_entries : Int -> Int -> Int [cost: Const(2)] =
+  if current_entries >= max_entries then 1
+  else 0

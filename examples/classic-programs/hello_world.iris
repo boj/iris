@@ -1,0 +1,20 @@
+-- Hello World
+-- The simplest IRIS program: return a greeting string.
+
+let hello x : Int -> String [cost: Const(1)] =
+  "Hello, World!"
+
+-- Greet a named person.
+let greet name : String -> String [cost: Const(1)] =
+  str_concat "Hello, " (str_concat name "!")
+
+-- Greet multiple people.
+let greet_all names : Tuple -> Tuple [cost: Linear(names)] =
+  map (\name -> str_concat "Hello, " (str_concat name "!")) names
+
+-- Test
+let test_hello x : Int -> Tuple =
+  let h = hello 0 in
+  let g = greet "IRIS" in
+  let all = greet_all ("Alice", "Bob", "Charlie") in
+  (h, g, all)

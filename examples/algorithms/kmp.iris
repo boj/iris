@@ -1,0 +1,84 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Inline helper: fold with early termination via (continue?, acc) pairs.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    if state.0 then step_fn state.1 elem else state
+  ) xs in
+  result.1
+
+-- Knuth-Morris-Pratt String Matching
+-- Find all occurrences of a pattern in a text.
+-- O(n + m) time using a failure function for efficient backtracking.
+-- Works on integer sequences (character codes).
+
+-- Build the KMP failure function (also called "prefix function" or "lps array").
+-- failure[i] = length of longest proper prefix of pattern[0..i] that is also a suffix.
+let build_failure pattern : Tuple -> Tuple [cost: Linear(pattern)] =
+  let m = list_len pattern in
+  if m == 0 then ()
+  else
+    -- failure[0] = 0 always
+    let init = list_set (map (\i -> 0) (list_range 0 m)) 0 0 in
+    -- Fill failure table
+    fold (init, 0) (\state i ->
+      let failure = state.0 in
+      let k = state.1 in
+      -- Follow failure links until match or k = 0
+      let new_k = fold_while k (\pair ->
+        let kk = pair.0 in
+        let step = pair.1 in
+        if kk > 0 && list_nth pattern kk != list_nth pattern i then
+          (true, list_nth failure (kk - 1))
+        else (false, kk)
+      ) (list_range 0 m) in
+      let final_k = if list_nth pattern new_k == list_nth pattern i then new_k + 1 else new_k in
+      (list_set failure i final_k, final_k)
+    ) (list_range 1 m)
+    |> (\pair -> pair.0)
+
+-- KMP search: find all occurrences of pattern in text.
+-- Returns a tuple of starting indices where pattern occurs.
+let kmp_search text pattern : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let n = list_len text in
+  let m = list_len pattern in
+  if m == 0 then list_range 0 (n + 1)  -- empty pattern matches everywhere
+  else if m > n then ()
+  else
+    let failure = build_failure pattern in
+    -- Scan text with pattern index j
+    let result = fold ((), 0) (\state i ->
+      let matches = state.0 in
+      let j = state.1 in
+      -- Follow failure links until match or j = 0
+      let new_j = fold_while j (\pair ->
+        let jj = pair.0 in
+        let step = pair.1 in
+        if jj > 0 && list_nth pattern jj != list_nth text i then
+          (true, list_nth failure (jj - 1))
+        else (false, jj)
+      ) (list_range 0 m) in
+      let final_j = if list_nth pattern new_j == list_nth text i then new_j + 1 else new_j in
+      if final_j == m then
+        -- Found a match at position i - m + 1
+        (list_append matches (i - m + 1), list_nth failure (final_j - 1))
+      else (matches, final_j)
+    ) (list_range 0 n) in
+    result.0
+
+-- Count occurrences.
+let kmp_count text pattern : Tuple -> Tuple -> Int [cost: Unknown] =
+  list_len (kmp_search text pattern)
+
+-- Test
+let test_kmp x : Int -> Tuple =
+  -- Find "aba" in "ababababcaba"
+  let text = (97, 98, 97, 98, 97, 98, 97, 98, 99, 97, 98, 97) in
+  let pattern = (97, 98, 97) in
+  let matches = kmp_search text pattern in
+  let count = kmp_count text pattern in
+  -- Find "aa" in "aaaa" (overlapping matches)
+  let m2 = kmp_search (97, 97, 97, 97) (97, 97) in
+  (matches, count, m2)

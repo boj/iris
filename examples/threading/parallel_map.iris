@@ -1,0 +1,7 @@
+-- Parallel map: apply a function to each element using thread_spawn.
+-- Each element gets its own thread for the computation.
+let double x : Int -> Int [cost: Const(1)] =
+  x + x
+
+let parallel_double xs : Int -> Int [cost: Unknown] =
+  map double xs

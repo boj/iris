@@ -1,0 +1,94 @@
+-- Maze Solver
+-- Find a path from start to end in a 2D grid maze.
+-- Grid: 0 = open, 1 = wall
+-- Uses DFS with backtracking.
+
+-- Check if a position is valid (in bounds and not a wall or visited).
+let is_valid_pos maze rows cols r c visited : Tuple -> Int -> Int -> Int -> Int -> Tuple -> Bool [cost: Unknown] =
+  if r < 0 then false
+  else if r >= rows then false
+  else if c < 0 then false
+  else if c >= cols then false
+  else if list_nth maze (r * cols + c) == 1 then false  -- wall
+  else
+    -- Check if already visited
+    let pos = r * cols + c in
+    fold true (\ok v -> if v == pos then false else ok) visited
+
+-- Encode (row, col) as a single integer for the visited set and path.
+let encode_pos r c cols : Int -> Int -> Int -> Int [cost: Const(2)] =
+  r * cols + c
+
+-- DFS maze solver. Returns the path as a tuple of encoded positions, or () if no path.
+let rec maze_dfs maze rows cols r c end_r end_c visited path : Tuple -> Int -> Int -> Int -> Int -> Int -> Int -> Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let pos = encode_pos r c cols in
+  if r == end_r then
+    if c == end_c then list_append path pos  -- found the exit!
+    else
+      let new_visited = list_append visited pos in
+      let new_path = list_append path pos in
+      -- Try all four directions: up, down, left, right
+      let up = if is_valid_pos maze rows cols (r - 1) c new_visited then
+        maze_dfs maze rows cols (r - 1) c end_r end_c new_visited new_path
+      else () in
+      if list_len up > 0 then up
+      else
+        let down = if is_valid_pos maze rows cols (r + 1) c new_visited then
+          maze_dfs maze rows cols (r + 1) c end_r end_c new_visited new_path
+        else () in
+        if list_len down > 0 then down
+        else
+          let left = if is_valid_pos maze rows cols r (c - 1) new_visited then
+            maze_dfs maze rows cols r (c - 1) end_r end_c new_visited new_path
+          else () in
+          if list_len left > 0 then left
+          else if is_valid_pos maze rows cols r (c + 1) new_visited then
+            maze_dfs maze rows cols r (c + 1) end_r end_c new_visited new_path
+          else ()
+  else
+    if is_valid_pos maze rows cols r c visited == false then ()
+    else
+      let new_visited = list_append visited pos in
+      let new_path = list_append path pos in
+      let up = if is_valid_pos maze rows cols (r - 1) c new_visited then
+        maze_dfs maze rows cols (r - 1) c end_r end_c new_visited new_path
+      else () in
+      if list_len up > 0 then up
+      else
+        let down = if is_valid_pos maze rows cols (r + 1) c new_visited then
+          maze_dfs maze rows cols (r + 1) c end_r end_c new_visited new_path
+        else () in
+        if list_len down > 0 then down
+        else
+          let left = if is_valid_pos maze rows cols r (c - 1) new_visited then
+            maze_dfs maze rows cols r (c - 1) end_r end_c new_visited new_path
+          else () in
+          if list_len left > 0 then left
+          else if is_valid_pos maze rows cols r (c + 1) new_visited then
+            maze_dfs maze rows cols r (c + 1) end_r end_c new_visited new_path
+          else ()
+
+-- Solve a maze from (0,0) to (rows-1, cols-1).
+let solve_maze maze rows cols : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  maze_dfs maze rows cols 0 0 (rows - 1) (cols - 1) () ()
+
+-- Path length.
+let path_length path : Tuple -> Int [cost: Const(1)] = list_len path
+
+-- Test: 5x5 maze
+-- 0 0 1 0 0
+-- 0 1 0 0 1
+-- 0 0 0 1 0
+-- 1 1 0 0 0
+-- 0 0 0 1 0
+let test_maze x : Int -> Tuple =
+  let maze = (
+    0, 0, 1, 0, 0,
+    0, 1, 0, 0, 1,
+    0, 0, 0, 1, 0,
+    1, 1, 0, 0, 0,
+    0, 0, 0, 1, 0
+  ) in
+  let path = solve_maze maze 5 5 in
+  let len = path_length path in
+  (path, len)

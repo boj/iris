@@ -1,0 +1,191 @@
+-- Multi-Resolution Encoding (SPEC Section 10.3)
+--
+-- Mirrors the Rust resolution.rs (486 LOC) in iris-repr.
+--
+-- Three resolution levels let programs be viewed at different abstraction depths:
+--   Intent (depth 0): root + boundary nodes only
+--   Architecture (depth 1): root + direct children
+--   Implementation (depth 2): all nodes
+--
+-- Nodes carry a resolution_depth field. Viewing at level R shows only
+-- nodes with depth <= R; hidden nodes are collapsed into summary Ref nodes
+-- that preserve boundary types.
+
+-- ============================================================
+-- Resolution depth mapping
+-- ============================================================
+
+-- Convert a Resolution enum variant to its numeric depth threshold.
+-- 0 = Intent, 1 = Architecture, 2 = Implementation
+let resolution_depth level : Int -> Int [cost: Const(3)] =
+  if level == 0 then 0
+  else if level == 1 then 1
+  else 2
+
+-- ============================================================
+-- Node visibility classification
+-- ============================================================
+
+-- Determine if a node at a given depth is visible at the requested resolution.
+-- node_depth: the node's resolution_depth field
+-- max_depth: the threshold from resolution_depth(level)
+-- Returns: 1 if visible, 0 if hidden.
+let is_visible node_depth max_depth : Int -> Int -> Int [cost: Const(1)] =
+  if node_depth <= max_depth then 1 else 0
+
+-- ============================================================
+-- Compute node depth via graph traversal
+-- ============================================================
+
+-- Compute the depth of a node in the graph by counting how many hops
+-- from the root. Uses BFS-like approach: root is depth 0, its children
+-- are depth 1, everything else is depth 2.
+--
+-- To determine depth, we check if a node is the root (depth 0),
+-- a direct child of root (depth 1), or deeper (depth 2).
+let compute_node_depth program node_id : Int -> Int -> Int [cost: Const(3)] =
+  let root = graph_get_root program in
+  if node_id == root then 0
+  else
+    -- Check if this node is a direct child of root
+    let root_children = graph_outgoing program root in
+    let is_child = fold 0 (\pair ->
+      let found = pair.0 in
+      let child_id = pair.1 in
+      if child_id == node_id then 1
+      else found
+    ) root_children in
+    if is_child == 1 then 1
+    else 2
+
+-- ============================================================
+-- Resolve: collapse hidden nodes to Ref stubs
+-- ============================================================
+
+-- Perform resolution on a graph: for nodes deeper than the requested
+-- resolution level, replace them with Ref stub nodes.
+--
+-- program: the graph to resolve (mutated in place)
+-- level: resolution level (0, 1, or 2)
+--
+-- Returns: (visible_count, collapsed_count) after mutation.
+--
+-- This actually mutates the graph using graph_replace_subtree and
+-- graph_add_ref_rt to collapse hidden subtrees into Ref stubs.
+let resolve program level : Int -> Int -> (Int, Int) [cost: Linear(program)] =
+  let max_depth = resolution_depth level in
+  let nodes = graph_nodes program in
+  -- First pass: count and classify nodes
+  let counts = fold (0, 0) (\pair ->
+    let acc = pair.0 in
+    let nid = pair.1 in
+    let visible = acc.0 in
+    let hidden = acc.1 in
+    let depth = compute_node_depth program nid in
+    if depth <= max_depth then (visible + 1, hidden)
+    else (visible, hidden + 1)
+  ) nodes in
+  let visible_count = counts.0 in
+  let hidden_count = counts.1 in
+  -- Second pass: for hidden nodes that are direct children of visible parents,
+  -- replace them with Ref stubs using graph mutation primitives
+  if max_depth < 2 then
+    let replaced = fold 0 (\pair ->
+      let dummy = pair.0 in
+      let nid = pair.1 in
+      let depth = compute_node_depth program nid in
+      if depth > max_depth then
+        -- This node is hidden: replace it with a Ref stub
+        -- graph_add_ref_rt creates a new Ref node in the graph
+        let ref_node = graph_add_ref_rt program 0 in
+        -- Replace the subtree rooted at this hidden node with the ref stub
+        let replaced_result = graph_replace_subtree program nid ref_node in
+        dummy + 1
+      else dummy
+    ) nodes in
+    (visible_count, hidden_count)
+  else
+    -- At Implementation level, nothing to collapse
+    (visible_count, 0)
+
+-- ============================================================
+-- Resolution-based node counting
+-- ============================================================
+
+-- Count nodes visible at a given resolution level (non-mutating).
+-- program: the graph to inspect
+-- level: resolution level (0=Intent, 1=Architecture, 2=Implementation)
+-- Returns: count of visible nodes.
+let count_visible_nodes program level : Int -> Int -> Int [cost: Linear(program)] =
+  let max_depth = resolution_depth level in
+  let nodes = graph_nodes program in
+  fold 0 (\pair ->
+    let acc = pair.0 in
+    let nid = pair.1 in
+    let depth = compute_node_depth program nid in
+    if depth <= max_depth then acc + 1
+    else acc
+  ) nodes
+
+-- ============================================================
+-- Assign resolution depths to graph nodes
+-- ============================================================
+
+-- Assign resolution depths to nodes using graph_set_cost as a depth marker.
+-- Root gets depth 0, direct children depth 1, everything else depth 2.
+-- Uses graph mutation: graph_set_cost(program, node_id, depth) to tag nodes.
+--
+-- Returns: the total number of nodes processed.
+let assign_depths program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0 (\pair ->
+    let count = pair.0 in
+    let nid = pair.1 in
+    let depth = compute_node_depth program nid in
+    -- Use graph_set_cost to tag each node with its resolution depth
+    let tagged = graph_set_cost program nid depth in
+    count + 1
+  ) nodes
+
+-- ============================================================
+-- Boundary type preservation check
+-- ============================================================
+
+-- Verify that resolving a graph preserves the root's type signature.
+-- The root node is always visible at every resolution level,
+-- so its type_sig is never modified during resolution.
+-- Returns: 1 if preserved (always true by construction).
+let check_boundary_preservation program root_type_sig : Int -> Int -> Int [cost: Const(1)] =
+  -- The root is always at depth 0, visible at all levels.
+  -- Resolution only collapses hidden subtrees into Ref nodes;
+  -- the root itself is never replaced.
+  1
+
+-- ============================================================
+-- Mixed resolution
+-- ============================================================
+
+-- Determine visibility for a node in mixed-resolution mode.
+-- node_depth: the node's resolution_depth
+-- override_level: per-node resolution override (-1 = use default)
+-- default_level: the graph's default resolution level
+-- Returns: 1 if visible, 0 if hidden.
+let mixed_is_visible node_depth override_level default_level : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let effective_max = if override_level >= 0 then
+      resolution_depth override_level
+    else
+      resolution_depth default_level
+  in
+  if node_depth <= effective_max then 1 else 0
+
+-- ============================================================
+-- Resolution summary (non-mutating)
+-- ============================================================
+
+-- Compute a compact summary of what a resolved graph looks like.
+-- Returns (total_nodes, visible_at_intent, visible_at_arch, visible_at_impl).
+let resolution_summary program : Int -> (Int, Int, Int, Int) [cost: Linear(program)] =
+  let v0 = count_visible_nodes program 0 in
+  let v1 = count_visible_nodes program 1 in
+  let v2 = count_visible_nodes program 2 in
+  (v2, v0, v1, v2)

@@ -1,0 +1,14 @@
+-- Compute crowding distance proxy for NSGA-II diversity pressure
+-- For a single-objective fitness, returns the sum of absolute distances
+-- from every other individual in the population (L1-distance metric).
+-- Individuals at the extremes get the highest scores, preserving diversity.
+--
+-- fitness: Int — individual's fitness value
+-- pop: collection of fitness values for the entire population
+--
+-- abs_diff(a, b) = max(a - b, b - a)
+-- crowding(fitness, pop) = fold(0, |acc other| acc + abs_diff(fitness, other), pop)
+let crowding_distance fitness pop : Int -> Int -> Int [cost: Linear(pop)] =
+  fold 0
+    (\acc other -> acc + max (fitness - other) (other - fitness))
+    pop

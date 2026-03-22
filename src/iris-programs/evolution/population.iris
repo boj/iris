@@ -1,0 +1,193 @@
+-- Population management: deme structure and phase transitions
+--
+-- Population is organized into demes (sub-populations) that evolve
+-- semi-independently with periodic migration.
+--
+-- Phase progression:
+--   Phase 0: Exploration (high mutation, broad search)
+--   Phase 1: Exploitation (lower mutation, focused search)
+--   Phase 2: Refinement (fine-tuning, constant perturbation)
+--
+-- Selection pressure increases through phases.
+
+-- Default population parameters
+let default_population_size : Int [cost: Const(1)] = 256
+let default_deme_count : Int [cost: Const(1)] = 4
+let deme_size : Int [cost: Const(1)] = 64  -- 256 / 4
+
+-- Phase thresholds (generations to advance)
+let exploration_threshold : Int [cost: Const(1)] = 50
+let exploitation_threshold : Int [cost: Const(1)] = 150
+
+-- Determine current phase from generation count
+-- Returns: phase (0=exploration, 1=exploitation, 2=refinement)
+let current_phase generation : Int -> Int [cost: Const(2)] =
+  if generation < exploration_threshold then 0
+  else if generation < exploitation_threshold then 1
+  else 2
+
+-- Compute deme index for an individual
+-- individual_index: 0-based index in population
+-- Returns: 0-based deme index
+let deme_index individual_index deme_count : Int -> Int -> Int [cost: Const(2)] =
+  individual_index / (default_population_size / deme_count)
+
+-- Compute selection pressure for current phase
+-- Higher values = more selective (fewer survive)
+-- Returns: top-K count (how many survive from each deme)
+let selection_top_k phase deme_sz : Int -> Int -> Int [cost: Const(2)] =
+  if phase == 0 then deme_sz * 3 / 4     -- 75% survive (exploration)
+  else if phase == 1 then deme_sz / 2     -- 50% survive (exploitation)
+  else deme_sz / 4                         -- 25% survive (refinement)
+
+-- Check if migration should occur (every N generations)
+-- Migration interval: 10 generations
+let should_migrate generation : Int -> Int [cost: Const(2)] =
+  let interval = 10 in
+  if generation - (generation / interval) * interval == 0 then 1 else 0
+
+-- Compute offspring count for next generation
+-- survivors: individuals that passed selection
+-- target: target population size
+-- Returns: number of new individuals to generate
+let offspring_count survivors target : Int -> Int -> Int [cost: Const(1)] =
+  target - survivors
+
+-- Population statistics
+-- Returns (phase, selection_k, should_migrate, offspring_needed)
+let population_stats generation : Int -> (Int, Int, Int, Int) [cost: Const(4)] =
+  let phase = current_phase generation in
+  let top_k = selection_top_k phase deme_size in
+  let migrate = should_migrate generation in
+  let survivors = default_deme_count * top_k in
+  let offspring = offspring_count survivors default_population_size in
+  (phase, top_k, migrate, offspring)
+
+-- =========================================================================
+-- Elitism: preserve top individuals across generations
+-- =========================================================================
+
+-- Number of elites to preserve: max(2, pop_size / 20), capped at 16
+let num_elites pop_size : Int -> Int [cost: Const(2)] =
+  let raw = pop_size / 20 in
+  let clamped_low = if raw < 2 then 2 else raw in
+  if clamped_low > 16 then 16 else clamped_low
+
+-- =========================================================================
+-- Phase-aware mutation rate
+-- =========================================================================
+
+-- Compute mutation rate (in parts per 10000) based on phase
+-- Phase 0 (Exploration): base_rate * 2 (aggressive mutation)
+-- Phase 1 (Steady State): base_rate (standard mutation)
+-- Phase 2 (Exploitation): base_rate / 2 (conservative mutation)
+let phase_mutation_rate base_rate phase : Int -> Int -> Int [cost: Const(2)] =
+  if phase == 0 then base_rate * 2
+  else if phase == 1 then base_rate
+  else base_rate / 2
+
+-- Compute crossover probability based on phase (scaled by 100)
+-- Phase 0: 70% crossover
+-- Phase 1: 80% crossover
+-- Phase 2: 50% crossover (more mutation, less crossover in refinement)
+let phase_crossover_rate phase : Int -> Int [cost: Const(2)] =
+  if phase == 0 then 70
+  else if phase == 1 then 80
+  else 50
+
+-- =========================================================================
+-- Step: one generation of evolution (orchestration function)
+-- =========================================================================
+
+-- step() orchestrates a single generation:
+--   1. Evaluate all individuals (fitness computation)
+--   2. NSGA-II ranking: non-dominated sort + crowding distance
+--   3. Phase detection from fitness improvement dynamics
+--   4. Reproduce: selection + crossover + mutation
+--   5. Elitism: preserve top elites
+--   6. Death: cull low-fitness/aged/overcrowded individuals
+--   7. Compression: dead code elimination every 50 generations
+--
+-- This function computes the parameters needed for each substep
+-- and returns them as a control tuple for the runtime to execute.
+--
+-- generation: current generation number
+-- best_fitness: best fitness value from previous generation (scaled 1000)
+-- prev_best_fitness: best fitness from two generations ago (scaled 1000)
+-- pop_size: current population size
+--
+-- Returns: (phase, mutation_rate, crossover_rate, elites_count,
+--           should_cull, should_compress, offspring_needed, migrate)
+
+let step generation best_fitness prev_best_fitness pop_size : Int -> Int -> Int -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(12)] =
+  -- 1. Detect phase from fitness improvement rate
+  let improvement = best_fitness - prev_best_fitness in
+  let phase = current_phase generation in
+
+  -- 2. Compute phase-aware mutation/crossover rates
+  let base_mutation = 100 in  -- 1% base
+  let stagnant = if improvement <= 0 then 1 else 0 in
+  let stagnant_boost = stagnant * 50 in  -- +0.5% when stagnant
+  let mut_rate = phase_mutation_rate (base_mutation + stagnant_boost) phase in
+
+  let xover_rate = phase_crossover_rate phase in
+
+  -- 3. Elitism count
+  let elites = num_elites pop_size in
+
+  -- 4. Selection and reproduction
+  let top_k = selection_top_k phase deme_size in
+  let survivors = default_deme_count * top_k in
+  let offspring = offspring_count survivors default_population_size in
+
+  -- 5. Death culling (every generation, but elites exempt)
+  let should_cull = 1 in  -- always check death conditions
+
+  -- 6. Compression check
+  let do_compress = if generation == 0 then 0
+    else
+      let rem = generation - (generation / 50) * 50 in
+      if rem == 0 then 1 else 0 in
+
+  -- 7. Migration check
+  let migrate = should_migrate generation in
+
+  (phase, mut_rate, xover_rate, elites, should_cull, do_compress, offspring, migrate)
+
+-- =========================================================================
+-- Resource competition parameters
+-- =========================================================================
+
+-- Compute evaluation budget for an individual based on its fitness tier
+-- rank_fraction: individual's position (0.0=best, 1.0=worst) scaled by 100
+-- total_tests: total number of test cases
+-- Returns: number of test cases to evaluate this individual on
+let evaluation_budget rank_fraction_pct total_tests : Int -> Int -> Int [cost: Const(3)] =
+  if rank_fraction_pct < 25 then
+    -- Top 25%: evaluate on ALL test cases
+    total_tests
+  else if rank_fraction_pct > 75 then
+    -- Bottom 25%: ~33% of test cases
+    let budget = (total_tests + 2) / 3 in
+    if budget < 1 then 1 else budget
+  else
+    -- Middle 50%: ~66% of test cases
+    (total_tests * 2 + 2) / 3
+
+-- =========================================================================
+-- Deme-level migration
+-- =========================================================================
+
+-- Number of individuals to migrate between demes
+-- Typically 1-2 individuals per migration event
+let migration_count deme_sz : Int -> Int [cost: Const(1)] =
+  if deme_sz > 32 then 2 else 1
+
+-- Check if two deme indices are neighbors (ring topology)
+-- In a ring of n demes, deme i's neighbors are (i-1) mod n and (i+1) mod n
+let are_neighbors deme_a deme_b n_demes : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let diff = deme_a - deme_b in
+  let abs_diff = if diff < 0 then 0 - diff else diff in
+  if abs_diff == 1 then 1
+  else if abs_diff == n_demes - 1 then 1  -- wrap-around
+  else 0

@@ -1,0 +1,392 @@
+-- Production IRIS tokenizer: String -> Tuple of token tuples
+--
+-- Mirrors the Rust Lexer in iris-syntax/src/lexer.rs.
+-- Takes a source string and produces a Tuple of tokens.
+--
+-- Each token is a 4-tuple: (kind, payload, start_pos, end_pos)
+-- where end_pos is exclusive.
+--
+-- Token kinds:
+--   0  = EOF
+--   1  = IntLit (payload = numeric value)
+--   2  = Ident  (payload = char-sum hash)
+--   3  = FloatLit (payload = integer part * 1000000 + fractional scaled)
+--   4  = StringLit
+--   5  = HexHash (payload = 0, raw hex digits in source)
+--   10 = let,  11 = rec,  12 = in,  13 = val,  14 = type
+--   15 = import, 16 = as
+--   17 = match, 18 = with
+--   20 = if,   21 = then,  22 = else
+--   23 = forall, 24 = true, 25 = false
+--   26 = requires, 27 = ensures
+--   28 = allow, 29 = deny
+--   30 = +,  31 = -,  32 = *,  33 = /,  34 = %
+--   35 = =,  36 = ==, 37 = !=, 38 = <,  39 = >
+--   40 = <=, 41 = >=, 42 = &&, 43 = ||
+--   50 = (,  51 = ),  52 = {,  53 = },  54 = [,  55 = ]
+--   56 = ,,  57 = :,  58 = .,  59 = \\
+--   60 = ->, 61 = |>, 62 = |,  63 = !
+--   64 = _
+--
+-- Uses a fold-based state machine since IRIS has no mutable state.
+-- State: (tokens, pos, mode, mode_start)
+--   mode 0 = scanning
+--   mode 1 = in identifier (started at mode_start)
+--   mode 2 = in number (started at mode_start)
+--   mode 3 = in string literal (started at mode_start)
+--   mode 4 = in line comment
+--   mode 5 = in float decimal part (started at mode_start, integer part ends before '.')
+--   mode 6 = in hex literal after '0x' (started at mode_start)
+--
+-- All helper logic is inlined because the bootstrap evaluator cannot
+-- resolve cross-fragment Ref nodes. Uses nested if-then-else instead
+-- of && since the bootstrap evaluator lowers && to bitwise AND
+-- (returns Int) but Guard nodes require Bool.
+
+-- Helper: classify identifier hash+len into keyword kind
+-- Returns token kind (2 = plain ident, >2 = keyword)
+-- Includes requires(26), ensures(27), allow(28), deny(29)
+
+-- Main tokenizer: takes a source String and returns a Tuple of token tuples
+
+let tokenize src : String -> Tuple [cost: Unknown] =
+  let len = str_len src in
+  let init_tokens = list_range 0 0 in
+  let result = fold (init_tokens, 0, 0, 0)
+    (\state _i ->
+      let tokens = state.0 in
+      let pos = state.1 in
+      let mode = state.2 in
+      let ms = state.3 in
+
+      -- Past end of source: flush any in-progress token
+      if pos >= len then
+        if mode == 1 then
+          -- Emit final identifier
+          let ident_len = pos - ms in
+          let ident_hash = fold 0 (\h j -> h + char_at src (ms + j)) ident_len in
+          let kind =
+            if ident_hash == 325 then if ident_len == 3 then 10 else 2
+            else if ident_hash == 314 then if ident_len == 3 then 11 else 2
+            else if ident_hash == 215 then if ident_len == 2 then 12 else 2
+            else if ident_hash == 323 then if ident_len == 3 then 13 else 2
+            else if ident_hash == 450 then if ident_len == 4 then 14 else 2
+            else if ident_hash == 667 then if ident_len == 6 then 15 else 2
+            else if ident_hash == 212 then if ident_len == 2 then 16 else 2
+            else if ident_hash == 525 then if ident_len == 5 then 17 else 2
+            else if ident_hash == 444 then if ident_len == 4 then 18 else 2
+            else if ident_hash == 207 then if ident_len == 2 then 20 else 2
+            else if ident_hash == 431 then if ident_len == 4 then 21 else 2
+            else if ident_hash == 425 then if ident_len == 4 then 22 else 2
+            else if ident_hash == 640 then if ident_len == 6 then 23 else 2
+            else if ident_hash == 448 then if ident_len == 4 then 24 else 2
+            else if ident_hash == 523 then if ident_len == 5 then 25 else 2
+            else if ident_hash == 880 then if ident_len == 8 then 26 else 2
+            else if ident_hash == 773 then if ident_len == 7 then 27 else 2
+            else if ident_hash == 543 then if ident_len == 5 then 28 else 2
+            else if ident_hash == 432 then if ident_len == 4 then 29 else 2
+            else 2 in
+          let payload = if kind == 2 then ident_hash else 0 in
+          let final_kind = if ident_hash == 95 then if ident_len == 1 then 64 else kind else kind in
+          let final_payload = if final_kind == 64 then 0 else payload in
+          (list_append tokens (final_kind, final_payload, ms, pos), pos, 0, 0)
+        else if mode == 2 then
+          -- Emit final integer
+          let num_len = pos - ms in
+          let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+          (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+        else if mode == 5 then
+          -- Emit final float: parse integer and decimal parts
+          -- Find the dot position by scanning from ms
+          let dot_scan = fold (ms, 0)
+            (\ds _j ->
+              if ds.1 == 1 then ds
+              else if ds.0 >= pos then (ds.0, 1)
+              else if (char_at src ds.0) == 46 then (ds.0, 1)
+              else (ds.0 + 1, 0))
+            len in
+          let dot_pos = dot_scan.0 in
+          let int_len = dot_pos - ms in
+          let int_part = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) int_len in
+          let dec_len = pos - dot_pos - 1 in
+          let dec_part = fold 0 (\acc j -> acc * 10 + (char_at src (dot_pos + 1 + j)) - 48) dec_len in
+          let scale = fold 1 (\acc _j -> acc * 10) dec_len in
+          let payload = int_part * 1000000 + (dec_part * 1000000) / scale in
+          (list_append tokens (3, payload, ms, pos), pos, 0, 0)
+        else if mode == 6 then
+          -- Emit final hex literal
+          let hex_len = pos - ms - 2 in
+          if hex_len >= 8 then
+            -- HexHash: long hex string
+            (list_append tokens (5, 0, ms, pos), pos, 0, 0)
+          else
+            -- Short hex: convert to integer
+            let hex_val = fold 0
+              (\acc j ->
+                let c = char_at src (ms + 2 + j) in
+                let dv = if c >= 97 then c - 87
+                         else if c >= 65 then c - 55
+                         else c - 48 in
+                acc * 16 + dv)
+              hex_len in
+            (list_append tokens (1, hex_val, ms, pos), pos, 0, 0)
+        else state
+
+      else
+        let ch = char_at src pos in
+
+        -- Mode 4: in comment, skip to newline
+        if mode == 4 then
+          if ch == 10 then (tokens, pos + 1, 0, 0)
+          else (tokens, pos + 1, 4, ms)
+
+        -- Mode 3: in string, scan to closing quote
+        else if mode == 3 then
+          if ch == 34 then
+            (list_append tokens (4, 0, ms, pos + 1), pos + 1, 0, 0)
+          else (tokens, pos + 1, 3, ms)
+
+        -- Mode 6: in hex literal (after 0x)
+        else if mode == 6 then
+          let is_hex =
+            if ch >= 48 then if ch <= 57 then 1 else
+              if ch >= 65 then if ch <= 70 then 1 else
+                if ch >= 97 then if ch <= 102 then 1 else 0
+                else 0
+              else 0
+            else 0 in
+          if is_hex == 1 then (tokens, pos + 1, 6, ms)
+          else
+            -- End of hex digits
+            let hex_len = pos - ms - 2 in
+            if hex_len >= 8 then
+              -- HexHash
+              (list_append tokens (5, 0, ms, pos), pos, 0, 0)
+            else
+              -- Short hex -> integer
+              let hex_val = fold 0
+                (\acc j ->
+                  let c = char_at src (ms + 2 + j) in
+                  let dv = if c >= 97 then c - 87
+                           else if c >= 65 then c - 55
+                           else c - 48 in
+                  acc * 16 + dv)
+                hex_len in
+              (list_append tokens (1, hex_val, ms, pos), pos, 0, 0)
+
+        -- Mode 5: in float decimal part
+        else if mode == 5 then
+          let is_d = if ch >= 48 then if ch <= 57 then 1 else 0 else 0 in
+          if is_d == 1 then (tokens, pos + 1, 5, ms)
+          else
+            -- Emit float
+            let dot_scan = fold (ms, 0)
+              (\ds _j ->
+                if ds.1 == 1 then ds
+                else if ds.0 >= pos then (ds.0, 1)
+                else if (char_at src ds.0) == 46 then (ds.0, 1)
+                else (ds.0 + 1, 0))
+              len in
+            let dot_pos = dot_scan.0 in
+            let int_len = dot_pos - ms in
+            let int_part = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) int_len in
+            let dec_len = pos - dot_pos - 1 in
+            let dec_part = fold 0 (\acc j -> acc * 10 + (char_at src (dot_pos + 1 + j)) - 48) dec_len in
+            let scale = fold 1 (\acc _j -> acc * 10) dec_len in
+            let payload = int_part * 1000000 + (dec_part * 1000000) / scale in
+            (list_append tokens (3, payload, ms, pos), pos, 0, 0)
+
+        -- Mode 1: in identifier
+        else if mode == 1 then
+          -- Inline is_alnum: check if ch is letter, digit, or underscore
+          let is_an =
+            if ch >= 97 then if ch <= 122 then 1 else 0
+            else if ch == 95 then 1
+            else if ch >= 65 then if ch <= 90 then 1 else 0
+            else if ch >= 48 then if ch <= 57 then 1 else 0
+            else 0 in
+          if is_an == 1 then (tokens, pos + 1, 1, ms)
+          else
+            -- Emit identifier
+            let ident_len = pos - ms in
+            let ident_hash = fold 0 (\h j -> h + char_at src (ms + j)) ident_len in
+            let kind =
+              if ident_hash == 325 then if ident_len == 3 then 10 else 2
+              else if ident_hash == 314 then if ident_len == 3 then 11 else 2
+              else if ident_hash == 215 then if ident_len == 2 then 12 else 2
+              else if ident_hash == 323 then if ident_len == 3 then 13 else 2
+              else if ident_hash == 450 then if ident_len == 4 then 14 else 2
+              else if ident_hash == 667 then if ident_len == 6 then 15 else 2
+              else if ident_hash == 212 then if ident_len == 2 then 16 else 2
+              else if ident_hash == 525 then if ident_len == 5 then 17 else 2
+              else if ident_hash == 444 then if ident_len == 4 then 18 else 2
+              else if ident_hash == 207 then if ident_len == 2 then 20 else 2
+              else if ident_hash == 431 then if ident_len == 4 then 21 else 2
+              else if ident_hash == 425 then if ident_len == 4 then 22 else 2
+              else if ident_hash == 640 then if ident_len == 6 then 23 else 2
+              else if ident_hash == 448 then if ident_len == 4 then 24 else 2
+              else if ident_hash == 523 then if ident_len == 5 then 25 else 2
+              else if ident_hash == 880 then if ident_len == 8 then 26 else 2
+              else if ident_hash == 773 then if ident_len == 7 then 27 else 2
+              else if ident_hash == 543 then if ident_len == 5 then 28 else 2
+              else if ident_hash == 432 then if ident_len == 4 then 29 else 2
+              else 2 in
+            let payload = if kind == 2 then ident_hash else 0 in
+            let final_kind = if ident_hash == 95 then if ident_len == 1 then 64 else kind else kind in
+            let final_payload = if final_kind == 64 then 0 else payload in
+            (list_append tokens (final_kind, final_payload, ms, pos), pos, 0, 0)
+
+        -- Mode 2: in number
+        else if mode == 2 then
+          let is_d = if ch >= 48 then if ch <= 57 then 1 else 0 else 0 in
+          if is_d == 1 then (tokens, pos + 1, 2, ms)
+          else if ch == 46 then
+            -- Check if next char is a digit (float literal)
+            if pos + 1 < len then
+              let next_ch = char_at src (pos + 1) in
+              let next_is_d = if next_ch >= 48 then if next_ch <= 57 then 1 else 0 else 0 in
+              if next_is_d == 1 then
+                -- Transition to float mode
+                (tokens, pos + 1, 5, ms)
+              else
+                -- Not a float, emit integer and stay in scan mode
+                let num_len = pos - ms in
+                let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+                (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+            else
+              -- End of input after dot, emit integer
+              let num_len = pos - ms in
+              let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+              (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+          else if ch == 120 then
+            -- 'x' after initial digit: check if this is '0x' hex prefix
+            -- Only valid if number started with '0' and we're at ms+1
+            if pos == ms + 1 then
+              let first_ch = char_at src ms in
+              if first_ch == 48 then
+                -- '0x' prefix: switch to hex mode
+                (tokens, pos + 1, 6, ms)
+              else
+                -- Not a valid hex prefix, emit number
+                let num_len = pos - ms in
+                let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+                (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+            else
+              -- 'x' in middle of number, emit
+              let num_len = pos - ms in
+              let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+              (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+          else
+            -- Emit number
+            let num_len = pos - ms in
+            let num_val = fold 0 (\acc j -> acc * 10 + (char_at src (ms + j)) - 48) num_len in
+            (list_append tokens (1, num_val, ms, pos), pos, 0, 0)
+
+        -- Mode 0: scanning
+        else
+          -- Whitespace: skip
+          if ch == 32 then (tokens, pos + 1, 0, 0)
+          else if ch == 9 then (tokens, pos + 1, 0, 0)
+          else if ch == 10 then (tokens, pos + 1, 0, 0)
+          else if ch == 13 then (tokens, pos + 1, 0, 0)
+
+          -- Dash (45): comment, arrow, or minus
+          else if ch == 45 then
+            let next = char_at src (pos + 1) in
+            if next == 45 then (tokens, pos + 2, 4, pos)
+            else if next == 62 then
+              (list_append tokens (60, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (31, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Equals (61): == or =
+          else if ch == 61 then
+            let next = char_at src (pos + 1) in
+            if next == 61 then
+              (list_append tokens (36, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (35, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Less-than (60): <= or <
+          else if ch == 60 then
+            let next = char_at src (pos + 1) in
+            if next == 61 then
+              (list_append tokens (40, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (38, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Greater-than (62): >= or >
+          else if ch == 62 then
+            let next = char_at src (pos + 1) in
+            if next == 61 then
+              (list_append tokens (41, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (39, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Bang (33): != or !
+          else if ch == 33 then
+            let next = char_at src (pos + 1) in
+            if next == 61 then
+              (list_append tokens (37, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (63, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Pipe (124): ||, |>, or |
+          else if ch == 124 then
+            let next = char_at src (pos + 1) in
+            if next == 124 then
+              (list_append tokens (43, 0, pos, pos + 2), pos + 2, 0, 0)
+            else if next == 62 then
+              (list_append tokens (61, 0, pos, pos + 2), pos + 2, 0, 0)
+            else
+              (list_append tokens (62, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Ampersand (38): must be &&
+          else if ch == 38 then
+            let next = char_at src (pos + 1) in
+            if next == 38 then
+              (list_append tokens (42, 0, pos, pos + 2), pos + 2, 0, 0)
+            else (tokens, pos + 1, 0, 0)
+
+          -- Double quote (34): start string literal
+          else if ch == 34 then (tokens, pos + 1, 3, pos)
+
+          -- Single-char operators and delimiters
+          else if ch == 43 then (list_append tokens (30, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 42 then (list_append tokens (32, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 47 then (list_append tokens (33, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 37 then (list_append tokens (34, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 40 then (list_append tokens (50, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 41 then (list_append tokens (51, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 123 then (list_append tokens (52, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 125 then (list_append tokens (53, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 44 then (list_append tokens (56, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 58 then (list_append tokens (57, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 46 then (list_append tokens (58, 0, pos, pos + 1), pos + 1, 0, 0)
+          else if ch == 92 then (list_append tokens (59, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Open bracket (91): emit as token kind 54 (for cost annotations)
+          else if ch == 91 then
+            (list_append tokens (54, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Close bracket (93): emit as token (for tuple access etc.)
+          else if ch == 93 then (list_append tokens (55, 0, pos, pos + 1), pos + 1, 0, 0)
+
+          -- Digits (48-57), letters (65-90, 97-122), underscore (95)
+          -- Check letter/digit ranges from high to low
+          else if ch >= 97 then
+            if ch <= 122 then (tokens, pos, 1, pos)
+            else (tokens, pos + 1, 0, 0)
+          else if ch == 95 then (tokens, pos, 1, pos)
+          else if ch >= 65 then
+            if ch <= 90 then (tokens, pos, 1, pos)
+            else (tokens, pos + 1, 0, 0)
+          else if ch >= 48 then
+            if ch <= 57 then (tokens, pos, 2, pos)
+            else (tokens, pos + 1, 0, 0)
+
+          -- Unknown character below 48: skip
+          else (tokens, pos + 1, 0, 0)
+    )
+    (len * 3) in
+  result.0

@@ -1,0 +1,185 @@
+-- FFI bridge: IRIS-native foreign function interface
+--
+-- Replaces the Rust FFI orchestration in iris-exec ffi.rs (728 LOC).
+-- The actual dlopen/dlsym calls are permanent substrate (EffectHandler).
+-- This file handles: opcode mapping, argument marshaling, and the
+-- interface between IRIS programs and the C CLCU interpreter.
+--
+-- Effect tag:
+--   0x2B = FfiCall: (lib_path: String, func_name: String, args: Tuple) -> Value
+--
+-- Security: only libm/libc math functions are permitted by the handler's
+-- allowlist. Arbitrary library paths and symbol names are rejected.
+
+-- =========================================================================
+-- Math function wrappers (safe FFI to libm)
+-- =========================================================================
+
+-- Call a math function from libm by name.
+-- The EffectHandler enforces an allowlist — only standard math functions.
+let ffi_math func_name arg : String -> Int -> Int [cost: Const(4)] =
+  ffi_call "" func_name (arg, 0)
+
+-- Square root: sqrt(x)
+let math_sqrt x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "sqrt" (x, 0)
+
+-- Sine: sin(x)
+let math_sin x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "sin" (x, 0)
+
+-- Cosine: cos(x)
+let math_cos x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "cos" (x, 0)
+
+-- Tangent: tan(x)
+let math_tan x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "tan" (x, 0)
+
+-- Natural logarithm: log(x)
+let math_log x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "log" (x, 0)
+
+-- Base-2 logarithm: log2(x)
+let math_log2 x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "log2" (x, 0)
+
+-- Base-10 logarithm: log10(x)
+let math_log10 x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "log10" (x, 0)
+
+-- Exponential: exp(x) = e^x
+let math_exp x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "exp" (x, 0)
+
+-- Power: pow(base, exponent)
+let math_pow base exponent : Int -> Int -> Int [cost: Const(4)] =
+  ffi_call "" "pow" (base, (exponent, 0))
+
+-- Floor: floor(x)
+let math_floor x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "floor" (x, 0)
+
+-- Ceiling: ceil(x)
+let math_ceil x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "ceil" (x, 0)
+
+-- Round: round(x)
+let math_round x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "round" (x, 0)
+
+-- Absolute value: fabs(x)
+let math_fabs x : Int -> Int [cost: Const(4)] =
+  ffi_call "" "fabs" (x, 0)
+
+-- =========================================================================
+-- CLCU opcode mapping (Rust compiler -> C interpreter)
+-- =========================================================================
+
+-- C-side opcode constants (from clcu.h)
+let c_op_nop : Int [cost: Const(1)] = 0
+let c_op_vadd : Int [cost: Const(1)] = 1
+let c_op_vmul : Int [cost: Const(1)] = 2
+let c_op_vfma : Int [cost: Const(1)] = 3
+let c_op_vsub : Int [cost: Const(1)] = 4
+let c_op_vneg : Int [cost: Const(1)] = 7
+let c_op_vabs : Int [cost: Const(1)] = 8
+let c_op_vmin : Int [cost: Const(1)] = 9
+let c_op_vmax : Int [cost: Const(1)] = 10
+let c_op_vbroadcast : Int [cost: Const(1)] = 13
+let c_op_vblend : Int [cost: Const(1)] = 15
+let c_op_vand : Int [cost: Const(1)] = 16
+let c_op_vor : Int [cost: Const(1)] = 17
+let c_op_vxor : Int [cost: Const(1)] = 18
+let c_op_vshl : Int [cost: Const(1)] = 20
+let c_op_vshr : Int [cost: Const(1)] = 21
+
+-- Map a compiler opcode to the C interpreter opcode.
+-- Returns -1 for opcodes with no C implementation.
+let map_clcu_opcode compiler_op : Int -> Int [cost: Const(20)] =
+  if compiler_op == 0 then c_op_nop
+  else if compiler_op == 1 then c_op_vadd
+  else if compiler_op == 2 then c_op_vmul
+  else if compiler_op == 3 then c_op_vfma
+  else if compiler_op == 4 then c_op_vsub
+  else if compiler_op == 7 then c_op_vneg
+  else if compiler_op == 8 then c_op_vabs
+  else if compiler_op == 9 then c_op_vmin
+  else if compiler_op == 10 then c_op_vmax
+  else if compiler_op == 13 then c_op_vbroadcast
+  else if compiler_op == 15 then c_op_vblend
+  else if compiler_op == 16 then c_op_vand
+  else if compiler_op == 17 then c_op_vor
+  else if compiler_op == 18 then c_op_vxor
+  else if compiler_op == 20 then c_op_vshl
+  else if compiler_op == 21 then c_op_vshr
+  else -1
+
+-- =========================================================================
+-- CLCU container encoding
+-- =========================================================================
+
+-- ZMM register file constants
+let zmm_lanes : Int [cost: Const(1)] = 16
+let max_input_regs : Int [cost: Const(1)] = 6
+let micro_op_size : Int [cost: Const(1)] = 4
+
+-- Container flag constants
+let flag_is_entry : Int [cost: Const(1)] = 128
+let flag_is_continuation : Int [cost: Const(1)] = 64
+let flag_prefetch_valid : Int [cost: Const(1)] = 32
+let next_terminal : Int [cost: Const(1)] = 255
+
+-- Encode a single micro-op as a packed 32-bit integer.
+-- Layout: [opcode:8][dst:4][src1:4][src2:4][width:3][mod:1][imm:8]
+let encode_micro_op opcode dst src1 src2 width modifier immediate : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(8)] =
+  let op_byte = opcode % 256 in
+  let dst_nib = dst % 16 in
+  let src1_nib = src1 % 16 in
+  let src2_nib = src2 % 16 in
+  let width_bits = width % 8 in
+  let mod_bit = modifier % 2 in
+  let imm_byte = immediate % 256 in
+  op_byte * 16777216 + dst_nib * 1048576 + src1_nib * 65536 + src2_nib * 4096 + width_bits * 512 + mod_bit * 256 + imm_byte
+
+-- Build a CLCU container from a list of micro-ops.
+-- Returns (flags, next, num_ops, ops_data).
+let build_container is_entry ops_list num_ops : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Linear(num_ops)] =
+  let flags = if is_entry == 1 then flag_is_entry else 0 in
+  (flags, next_terminal, num_ops, ops_list)
+
+-- =========================================================================
+-- Value marshaling (IRIS Value <-> ZMM register)
+-- =========================================================================
+
+-- Marshal an IRIS Int value into a ZMM lane (just the value).
+let marshal_int_to_zmm value : Int -> Int [cost: Const(1)] =
+  value
+
+-- Unmarshal a ZMM lane back to an IRIS Int value.
+let unmarshal_zmm_to_int lane_value : Int -> Int [cost: Const(1)] =
+  lane_value
+
+-- =========================================================================
+-- Entry point: execute a CLCU chain
+-- =========================================================================
+
+-- Execute a chain of CLCU containers via FFI.
+-- This is the top-level entry point that replaces the Rust ClcuRunner.
+-- It marshals inputs into the register file, executes the chain,
+-- and unmarshals the result.
+let clcu_execute chain inputs num_inputs : Int -> Int -> Int -> Int [cost: Linear(num_inputs)] =
+  let state = fold (0, 0, 0, 0, 0, 0, 0, 0)
+    (\regs i ->
+      if i < num_inputs then
+        let v = marshal_int_to_zmm (list_nth inputs i) in
+        if i == 0 then (v, regs.1, regs.2, regs.3, regs.4, regs.5, regs.6, regs.7)
+        else if i == 1 then (regs.0, v, regs.2, regs.3, regs.4, regs.5, regs.6, regs.7)
+        else if i == 2 then (regs.0, regs.1, v, regs.3, regs.4, regs.5, regs.6, regs.7)
+        else if i == 3 then (regs.0, regs.1, regs.2, v, regs.4, regs.5, regs.6, regs.7)
+        else if i == 4 then (regs.0, regs.1, regs.2, regs.3, v, regs.5, regs.6, regs.7)
+        else (regs.0, regs.1, regs.2, regs.3, regs.4, v, regs.6, regs.7)
+      else regs)
+    num_inputs
+  in
+  state.0

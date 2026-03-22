@@ -1,0 +1,75 @@
+-- Registry persistence: save/load a FragmentRegistry via file effects
+--
+-- Mirrors iris-store/src/registry_persistence.rs (135 LOC).
+--
+-- Serializes all fragments from a registry to disk and loads them back.
+-- Each fragment is saved as a separate file keyed by its FragmentId hash.
+-- Uses file_open/file_write_bytes/file_read_bytes/file_close effects.
+
+-- External stubs
+let serialize_graph x : Int -> Int [cost: Const(1)] = x
+let deserialize_graph x : Int -> Int [cost: Const(1)] = x
+
+-- Serialize a fragment to bytes.
+-- Format: [hash:8 bytes][graph_size:4 bytes][graph_data]
+let serialize_fragment fragment : Int -> Int [cost: Linear(fragment)] =
+  let hash_bytes = fragment.0 in
+  let graph = fragment.1 in
+  let graph_bytes = serialize_graph graph in
+  let size = bytes_len graph_bytes in
+  bytes_concat (bytes_from_ints (hash_bytes, (size, 0))) graph_bytes
+
+-- Deserialize a fragment from bytes.
+-- Returns (hash, graph).
+let deserialize_fragment data : Int -> (Int, Int) [cost: Linear(data)] =
+  let hash = data in
+  let graph = deserialize_graph data in
+  (hash, graph)
+
+-- Save all fragments from a registry to the given directory.
+-- Each fragment is written as: {dir}/{fragment_hash}.iris
+-- Returns the number of fragments saved.
+let save_registry dir fragments num_fragments : String -> Int -> Int -> Int [cost: Linear(num_fragments)] =
+  fold 0 (\saved i ->
+    let fragment = list_nth fragments i in
+    let hash_str = int_to_string (fragment.0) in
+    let path = str_concat (str_concat dir "/") (str_concat hash_str ".iris") in
+    let serialized = serialize_fragment fragment in
+    let h = file_open path 1 in
+    let unused = file_write_bytes h serialized in
+    let unused = file_close h in
+    saved + 1)
+    num_fragments
+
+-- Load all fragments from a directory into a new registry.
+-- Lists the directory, reads each .iris file, deserializes.
+-- Returns (num_loaded, fragments_list).
+let load_registry dir : String -> (Int, Int) [cost: Const(1)] =
+  let entries = dir_list dir in
+  let count = list_len entries in
+  let loaded = fold (0, 0) (\state i ->
+    let name = list_nth entries i in
+    let is_iris = str_ends_with name ".iris" in
+    if is_iris == 1 then
+      let path = str_concat (str_concat dir "/") name in
+      let h = file_open path 0 in
+      let data = file_read_bytes h 16777216 in
+      let unused = file_close h in
+      let fragment = deserialize_fragment data in
+      (state.0 + 1, (fragment, state.1))
+    else state)
+    count
+  in
+  loaded
+
+-- Snapshot a registry: save + write manifest.
+-- The manifest records fragment count and timestamp.
+let snapshot_registry dir fragments num_fragments : String -> Int -> Int -> Int [cost: Linear(num_fragments)] =
+  let saved = save_registry dir fragments num_fragments in
+  let manifest_path = str_concat dir "/manifest.json" in
+  let ts = clock_ns 0 in
+  let manifest = str_concat "{\"count\":" (str_concat (int_to_string saved) (str_concat ",\"timestamp\":" (str_concat (int_to_string ts) "}"))) in
+  let h = file_open manifest_path 1 in
+  let unused = file_write_bytes h manifest in
+  let unused = file_close h in
+  saved

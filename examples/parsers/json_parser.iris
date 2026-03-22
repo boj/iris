@@ -1,0 +1,145 @@
+-- Inline helper: fold with early termination via (continue?, acc) pairs.
+let fold_while init step_fn xs =
+  let result = fold (true, init) (\state elem ->
+    if state.0 then step_fn state.1 elem else state
+  ) xs in
+  result.1
+
+-- JSON Parser
+-- Parses a subset of JSON from a string into a structured representation.
+-- Returns structured values using IRIS's type system.
+--
+-- JSON values encoded as tagged tuples:
+--   (0, n)          -- number
+--   (1, s)          -- string (as IRIS String)
+--   (2, 1) / (2, 0) -- true / false
+--   (3,)            -- null
+--   (4, elements)   -- array
+--   (5, kv_pairs)   -- object (tuple of (key, value) pairs)
+--
+-- FIXME: Parsing strings character-by-character is very slow because
+-- str_slice/str_chars creates many intermediate allocations. A proper
+-- streaming parser or byte-level access would be much faster.
+-- FIXME: IRIS has no way to pattern-match on individual characters
+-- extracted from strings; must compare with char_at or str_eq on slices.
+
+-- Skip whitespace starting at position pos in string s.
+let rec skip_ws s pos : String -> Int -> Int [cost: Unknown] =
+  if pos >= str_len s then pos
+  else
+    let c = char_at s pos in
+    if c == 32 || c == 9 || c == 10 || c == 13 then  -- space, tab, \n, \r
+      skip_ws s (pos + 1)
+    else pos
+
+-- Parse a JSON number (integers only for simplicity).
+let rec parse_number s pos : String -> Int -> Tuple [cost: Unknown] =
+  let neg = char_at s pos == 45 in  -- '-'
+  let start = if neg then pos + 1 else pos in
+  -- Collect digits
+  let result = fold_while (0, start) (\pair ->
+    let state = pair.0 in
+    let step = pair.1 in
+    let n = state.0 in
+    let p = state.1 in
+    if p >= str_len s then (false, state)
+    else
+      let c = char_at s p in
+      if c >= 48 && c <= 57 then  -- '0'-'9'
+        (true, (n * 10 + (c - 48), p + 1))
+      else (false, state)
+  ) (list_range 0 20) in
+  let num = if neg then neg result.0 else result.0 in
+  ((0, num), result.1)
+
+-- Parse a JSON string (between quotes).
+let parse_string s pos : String -> Int -> Tuple [cost: Unknown] =
+  -- Expect opening quote
+  if char_at s pos != 34 then ((1, ""), pos)  -- not a string
+  else
+    let start = pos + 1 in
+    -- Find closing quote (no escape handling for simplicity)
+    let end_pos = fold_while start (\pair ->
+      let p = pair.0 in
+      let step = pair.1 in
+      if p >= str_len s then (false, p)
+      else if char_at s p == 34 then (false, p)  -- '"'
+      else (true, p + 1)
+    ) (list_range 0 1000) in
+    let content = str_slice s start end_pos in
+    ((1, content), end_pos + 1)
+
+-- Forward declaration stub for recursive parsing.
+-- FIXME: IRIS does not support mutually recursive top-level functions.
+-- We must use a single combined function with mode parameter, or use
+-- let rec within a single scope. This limits the parser's structure.
+
+-- Combined parser: mode determines what to parse.
+let rec parse_json s pos : String -> Int -> Tuple [cost: Unknown] =
+  let p = skip_ws s pos in
+  if p >= str_len s then ((3,), p)  -- null at EOF
+  else
+    let c = char_at s p in
+    -- Number
+    if (c >= 48 && c <= 57) || c == 45 then
+      parse_number s p
+    -- String
+    else if c == 34 then
+      parse_string s p
+    -- true
+    else if c == 116 then  -- 't'
+      ((2, 1), p + 4)
+    -- false
+    else if c == 102 then  -- 'f'
+      ((2, 0), p + 5)
+    -- null
+    else if c == 110 then  -- 'n'
+      ((3,), p + 4)
+    -- Array [...]
+    else if c == 91 then  -- '['
+      let result = fold_while ((), p + 1, true) (\pair ->
+        let state = pair.0 in
+        let step = pair.1 in
+        let elems = state.0 in
+        let cur = skip_ws s state.1 in
+        let first = state.2 in
+        if cur >= str_len s then (false, state)
+        else if char_at s cur == 93 then (false, (elems, cur + 1, false))  -- ']'
+        else
+          let comma_pos = if first then cur else
+            if char_at s cur == 44 then skip_ws s (cur + 1) else cur in
+          let elem = parse_json s comma_pos in
+          (true, (list_append elems elem.0, elem.1, false))
+      ) (list_range 0 100) in
+      ((4, result.0), result.1)
+    -- Object {...}
+    else if c == 123 then  -- '{'
+      let result = fold_while ((), p + 1, true) (\pair ->
+        let state = pair.0 in
+        let step = pair.1 in
+        let pairs = state.0 in
+        let cur = skip_ws s state.1 in
+        let first = state.2 in
+        if cur >= str_len s then (false, state)
+        else if char_at s cur == 125 then (false, (pairs, cur + 1, false))  -- '}'
+        else
+          let comma_pos = if first then cur else
+            if char_at s cur == 44 then skip_ws s (cur + 1) else cur in
+          -- Parse key (string)
+          let key = parse_string s comma_pos in
+          let colon_pos = skip_ws s key.1 in
+          let after_colon = if char_at s colon_pos == 58 then colon_pos + 1 else colon_pos in
+          -- Parse value
+          let val = parse_json s after_colon in
+          (true, (list_append pairs (key.0, val.0), val.1, false))
+      ) (list_range 0 100) in
+      ((5, result.0), result.1)
+    else ((3,), p)  -- unknown, treat as null
+
+-- Test
+let test_json_parser x : Int -> Tuple =
+  let r1 = parse_json "42" 0 in
+  let r2 = parse_json "\"hello\"" 0 in
+  let r3 = parse_json "true" 0 in
+  let r4 = parse_json "[1, 2, 3]" 0 in
+  (r1.0, r2.0, r3.0, r4.0)

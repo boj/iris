@@ -1,0 +1,42 @@
+-- Edit Distance (Levenshtein Distance)
+-- Minimum number of single-character edits (insert, delete, replace)
+-- to transform one string into another.
+-- Uses a flat DP table: dp[i*(m+1)+j] = edit_distance(s[0..i], t[0..j]).
+
+-- FIXME: IRIS lacks character-level random access on strings via indexing.
+-- This version works on integer sequences instead of strings.
+-- A str_chars primitive would make this work on actual strings.
+
+-- Minimum of three integers.
+let min3 a b c : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let ab = if a < b then a else b in
+  if ab < c then ab else c
+
+-- Compute edit distance between two integer sequences.
+-- Uses a flat (n+1)*(m+1) DP table built row by row.
+let edit_distance xs ys : Tuple -> Tuple -> Int [cost: Unknown] =
+  let n = list_len xs in
+  let m = list_len ys in
+  -- Initialize first row: (0, 1, 2, ..., m)
+  let first_row = list_range 0 (m + 1) in
+  -- Fill remaining rows via fold
+  let final_table = fold first_row (\prev_row i ->
+    -- Build row i+1
+    map (\j ->
+      if j == 0 then i + 1
+      else
+        let cost = if list_nth xs i == list_nth ys (j - 1) then 0 else 1 in
+        let del = list_nth prev_row j + 1 in
+        let ins = list_nth prev_row (j - 1) + 1 in  -- FIXME: should be current row's j-1, but we only have prev_row
+        let rep = list_nth prev_row (j - 1) + cost in
+        min3 del ins rep
+    ) (list_range 0 (m + 1))
+  ) (list_range 0 n) in
+  list_nth final_table m
+
+-- Test
+let test_edit_distance x : Int -> Tuple =
+  let d1 = edit_distance (1, 2, 3) (1, 3, 3) in         -- 1 (replace 2->3)
+  let d2 = edit_distance (1, 2, 3, 4) (1, 2, 3, 4) in   -- 0 (identical)
+  let d3 = edit_distance () (1, 2, 3) in                  -- 3 (insert all)
+  (d1, d2, d3)

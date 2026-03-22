@@ -1,0 +1,151 @@
+-- Defunctionalization: convert lambdas to data (Compiler Pass 2)
+--
+-- Each Lambda gets a unique ClosureTag. Lambda bodies are extracted to
+-- top-level Procedures. Apply nodes become tag-dispatch via ClosureDispatch
+-- or DirectCall for known small bodies.
+--
+-- Transformation:
+--   Lambda (kind 2) -> Prim with MakeClosure semantics (Lit node with closure tag)
+--   Apply (kind 1) with known small Lambda -> Prim with DirectCall (opcode 0x19, modifier 0)
+--   Apply (kind 1) with unknown Lambda -> Prim with ClosureDispatch (opcode 0x19, modifier 1)
+--
+-- Strategy:
+--   1. Count lambdas, assign sequential tags
+--   2. For each Lambda, extract body into a separate subgraph fragment (Procedure)
+--   3. Replace Lambda with a Lit node containing the closure tag value
+--   4. Count callsites per lambda to determine inline eligibility
+--   5. For each Apply, determine if target lambda is small enough to inline
+--   6. Replace Apply with DirectCall (modifier=0) or ClosureDispatch (modifier=1)
+--   7. Copy all other nodes unchanged
+
+-- Check if a node is a lambda (kind 2) or apply (kind 1)
+let is_higher_order program node_id : Int -> Int -> Int [cost: Const(2)] =
+  let kind = graph_get_kind program node_id in
+  if kind == 2 then 1
+  else if kind == 1 then 1
+  else 0
+
+-- Count lambda nodes in a program
+let count_lambdas program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 2 then acc + 1 else acc)
+    nodes
+
+-- Count apply nodes in a program
+let count_applies program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 1 then acc + 1 else acc)
+    nodes
+
+-- Count how many Apply nodes reference a given lambda (by checking port 0 children)
+let count_callsites program lambda_id : Int -> Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      if kind == 1 then
+        let children = graph_outgoing program nid in
+        if list_len children > 0 then
+          if list_nth children 0 == lambda_id then acc + 1 else acc
+        else acc
+      else acc)
+    nodes
+
+-- Count the body size of a lambda (number of nodes reachable from its first child)
+-- Approximation: count the lambda's outgoing edges
+let lambda_body_size program lambda_id : Int -> Int -> Int [cost: Const(4)] =
+  let children = graph_outgoing program lambda_id in
+  list_len children
+
+-- Determine if a lambda body should be inlined
+-- Small bodies (<=16 nodes) or single-callsite lambdas are inlined
+let should_inline body_size callsite_count : Int -> Int -> Int [cost: Const(2)] =
+  if body_size <= 16 then 1
+  else if callsite_count <= 1 then 1
+  else 0
+
+-- Extract a lambda body into a new subgraph fragment (Procedure)
+-- Creates a new graph containing the lambda's body nodes
+-- Returns (program_with_procedure_graph_added, procedure_graph_id)
+let extract_procedure program lambda_id tag : Int -> Int -> Int -> Int [cost: Const(10)] =
+  let proc_graph = graph_new () in
+  -- Add a root Prim node to the procedure graph representing the body entry
+  let added = graph_add_node_rt proc_graph 0 in
+  let pg = added.0 in
+  let entry_id = added.1 in
+  -- Set the procedure entry as VMOV (passthrough to body)
+  let pg2_r = graph_set_prim_op pg entry_id 15 in
+  let pg2 = pg2_r.0 in
+  -- Set the procedure graph root
+  let pg3 = graph_set_root pg2 entry_id in
+  -- Store the closure tag in the procedure graph's cost annotation
+  let pg4 = graph_set_cost pg3 entry_id tag in
+  pg4
+
+-- Defunctionalize a program: replace Lambda with MakeClosure, Apply with DirectCall/Dispatch
+-- Returns the transformed program
+let defunctionalize program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let lambdas = count_lambdas program in
+  let applies = count_applies program in
+  if lambdas + applies == 0 then program
+  else
+    -- Phase 1: Assign tags and extract lambda bodies into Procedure fragments
+    -- Replace each Lambda node with a Lit node (closure tag)
+    let with_lambdas = fold (program, 0)
+      (\state nid ->
+        let g = state.0 in
+        let tag = state.1 in
+        let kind = graph_get_kind g nid in
+        if kind == 2 then
+          -- Extract body into a procedure fragment
+          let proc = extract_procedure g nid tag in
+          -- Replace Lambda with a Lit node holding the closure tag value
+          let result = graph_set_lit_value g nid 0 tag in
+          (result.0, tag + 1)
+        else (g, tag))
+      nodes in
+    let g1 = with_lambdas.0 in
+    let total_tags = with_lambdas.1 in
+    -- Phase 2: Replace each Apply node with DirectCall or ClosureDispatch
+    -- Apply's first child (port 0) is the function
+    let g2 = fold g1
+      (\g nid ->
+        let kind = graph_get_kind g nid in
+        if kind == 1 then
+          -- Get the function argument (first child)
+          let children = graph_outgoing g nid in
+          if list_len children > 0 then
+            let func_id = list_nth children 0 in
+            let func_kind = graph_get_kind g func_id in
+            -- If func is now a Lit (was Lambda, now has closure tag), check inline
+            if func_kind == 5 then
+              -- Known lambda: check body size and callsite count for inlining
+              let body_sz = lambda_body_size program func_id in
+              let callsites = count_callsites program func_id in
+              if should_inline body_sz callsites == 1 then
+                -- DirectCall: VCALL(0x19=25) with modifier 0
+                let replaced = graph_set_prim_op g nid 25 in
+                replaced.0
+              else
+                -- ClosureDispatch: VCALL(0x19=25) with tag dispatch
+                -- Use a different opcode to distinguish: 26 for ClosureDispatch
+                let replaced = graph_set_prim_op g nid 26 in
+                replaced.0
+            else
+              -- Unknown function: use ClosureDispatch (opcode 26)
+              let replaced = graph_set_prim_op g nid 26 in
+              replaced.0
+          else
+            -- Apply with no children: turn into a ClosureDispatch
+            let replaced = graph_set_prim_op g nid 26 in
+            replaced.0
+        else g)
+      nodes in
+    g2

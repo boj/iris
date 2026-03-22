@@ -1,0 +1,88 @@
+-- Tic-Tac-Toe
+-- Board represented as a flat 9-element tuple.
+-- 0 = empty, 1 = X, 2 = O
+-- Positions: 0-8, row-major (0-2 = top row, 3-5 = middle, 6-8 = bottom).
+
+-- Make a move: place player's mark at position.
+let make_move board pos player : Tuple -> Int -> Int -> Tuple [cost: Const(3)] =
+  let prefix = list_take board pos in
+  let suffix = list_drop board (pos + 1) in
+  list_concat (list_append prefix player) suffix
+
+-- Check if a specific line (3 positions) is a win for a player.
+let check_line board a b c player : Tuple -> Int -> Int -> Int -> Int -> Bool [cost: Const(3)] =
+  list_nth board a == player &&
+  list_nth board b == player &&
+  list_nth board c == player
+
+-- Check if a player has won.
+let has_won board player : Tuple -> Int -> Bool [cost: Const(24)] =
+  -- Rows
+  check_line board 0 1 2 player ||
+  check_line board 3 4 5 player ||
+  check_line board 6 7 8 player ||
+  -- Columns
+  check_line board 0 3 6 player ||
+  check_line board 1 4 7 player ||
+  check_line board 2 5 8 player ||
+  -- Diagonals
+  check_line board 0 4 8 player ||
+  check_line board 2 4 6 player
+
+-- Check if the board is full (draw).
+let is_full board : Tuple -> Bool [cost: Const(9)] =
+  fold true (\full cell -> if cell == 0 then false else full) board
+
+-- Get available moves (empty positions).
+let available_moves board : Tuple -> Tuple [cost: Const(9)] =
+  filter (\i -> list_nth board i == 0) (list_range 0 9)
+
+-- Simple AI: pick the first available move.
+let ai_move_simple board : Tuple -> Int [cost: Const(9)] =
+  let moves = available_moves board in
+  if list_len moves > 0 then list_nth moves 0 else -1
+
+-- Minimax AI: returns the best score for the current player.
+-- player 1 = maximizing (X), player 2 = minimizing (O).
+let rec minimax board player depth : Tuple -> Int -> Int -> Int [cost: Unknown] =
+  if has_won board 1 then 10 - depth       -- X wins (good for X)
+  else if has_won board 2 then depth - 10   -- O wins (good for O)
+  else if is_full board then 0               -- draw
+  else
+    let moves = available_moves board in
+    if player == 1 then
+      -- Maximize
+      fold (-100) (\best pos ->
+        let new_board = make_move board pos 1 in
+        let score = minimax new_board 2 (depth + 1) in
+        if score > best then score else best
+      ) moves
+    else
+      -- Minimize
+      fold 100 (\best pos ->
+        let new_board = make_move board pos 2 in
+        let score = minimax new_board 1 (depth + 1) in
+        if score < best then score else best
+      ) moves
+
+-- Find the best move for a player using minimax.
+let best_move board player : Tuple -> Int -> Int [cost: Unknown] =
+  let moves = available_moves board in
+  let result = fold (-1, -100) (\state pos ->
+    let new_board = make_move board pos player in
+    let other = if player == 1 then 2 else 1 in
+    let score = minimax new_board other 0 in
+    let adjusted = if player == 1 then score else 0 - score in
+    if adjusted > state.1 then (pos, adjusted)
+    else state
+  ) moves in
+  result.0
+
+-- Test
+let test_tic_tac_toe x : Int -> Tuple =
+  let empty = (0, 0, 0, 0, 0, 0, 0, 0, 0) in
+  let b1 = make_move empty 4 1 in     -- X plays center
+  let b2 = make_move b1 0 2 in        -- O plays top-left
+  let b3 = make_move b2 8 1 in        -- X plays bottom-right
+  let won = has_won (1, 1, 1, 0, 0, 0, 0, 0, 0) 1 in  -- X wins top row
+  (b1, b2, b3, won)

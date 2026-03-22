@@ -1,0 +1,110 @@
+-- Relational Algebra Operations
+-- Implements core relational algebra on tables represented as
+-- tuples of rows, where each row is a tuple of column values.
+--
+-- Operations: select (filter), project, join, union, intersect, difference,
+--             group_by, order_by, aggregate
+
+-- Select: filter rows matching a predicate.
+let rel_select table pred : Tuple -> (Tuple -> Bool) -> Tuple [cost: Linear(table)] =
+  filter pred table
+
+-- Project: keep only specified column indices.
+let rel_project table cols : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  map (\row ->
+    map (\col -> list_nth row col) cols
+  ) table
+
+-- Rename is a no-op on structural tuples (no named columns).
+
+-- Natural join on a single key column.
+-- join_col_a: key column index in table_a
+-- join_col_b: key column index in table_b
+-- For each matching pair, concatenate the rows.
+let rel_join table_a table_b join_col_a join_col_b : Tuple -> Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  fold () (\acc row_a ->
+    let key_a = list_nth row_a join_col_a in
+    let matches = filter (\row_b -> list_nth row_b join_col_b == key_a) table_b in
+    let joined = map (\row_b -> list_concat row_a row_b) matches in
+    list_concat acc joined
+  ) table_a
+
+-- Union: combine two tables (no duplicate removal).
+let rel_union table_a table_b : Tuple -> Tuple -> Tuple [cost: Const(1)] =
+  list_concat table_a table_b
+
+-- Difference: rows in A not in B (comparing all columns).
+let rel_difference table_a table_b : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  filter (\row_a ->
+    fold true (\not_found row_b ->
+      if not_found == false then false
+      else
+        let same = fold true (\eq i ->
+          eq && list_nth row_a i == list_nth row_b i
+        ) (list_range 0 (list_len row_a)) in
+        if same then false else not_found
+    ) table_b
+  ) table_a
+
+-- Group by: group rows by a key column, apply aggregate to each group.
+-- Returns tuple of (key, aggregate_result) pairs.
+let rel_group_by table key_col agg : Tuple -> Int -> (Tuple -> Int) -> Tuple [cost: Unknown] =
+  -- Extract unique keys
+  let keys = list_dedup (list_sort (map (\row -> list_nth row key_col) table)) in
+  map (\key ->
+    let group = filter (\row -> list_nth row key_col == key) table in
+    (key, agg group)
+  ) keys
+
+-- Aggregates
+let agg_count group : Tuple -> Int [cost: Const(1)] = list_len group
+let agg_sum col group : Int -> Tuple -> Int [cost: Linear(group)] =
+  fold 0 (\acc row -> acc + list_nth row col) group
+let agg_max col group : Int -> Tuple -> Int [cost: Linear(group)] =
+  fold (list_nth (list_nth group 0) col) (\m row ->
+    let v = list_nth row col in
+    if v > m then v else m
+  ) group
+let agg_min col group : Int -> Tuple -> Int [cost: Linear(group)] =
+  fold (list_nth (list_nth group 0) col) (\m row ->
+    let v = list_nth row col in
+    if v < m then v else m
+  ) group
+
+-- Order by: sort table by a column.
+-- FIXME: list_sort sorts by first element of tuples. To sort by an arbitrary
+-- column, we'd need to prepend the sort key, sort, then strip it.
+let rel_order_by table sort_col : Tuple -> Int -> Tuple [cost: Unknown] =
+  let keyed = map (\row -> list_concat (list_nth row sort_col,) row) table in
+  let sorted = list_sort keyed in
+  map (\keyed_row -> list_drop keyed_row 1) sorted
+
+-- Test: employee database
+let test_relational x : Int -> Tuple =
+  -- Employees: (id, name_code, dept, salary)
+  let employees = (
+    (1, 10, 1, 5000),
+    (2, 20, 1, 6000),
+    (3, 30, 2, 5500),
+    (4, 40, 2, 7000),
+    (5, 50, 3, 4500)
+  ) in
+  -- Departments: (dept_id, budget)
+  let departments = (
+    (1, 100000),
+    (2, 80000),
+    (3, 50000)
+  ) in
+  -- Select: employees with salary > 5000
+  let high_sal = rel_select employees (\row -> list_nth row 3 > 5000) in
+  -- Project: just id and salary
+  let id_sal = rel_project employees (0, 3) in
+  -- Join: employees with their department budget
+  let joined = rel_join employees departments 2 0 in
+  -- Group by dept, count employees
+  let dept_counts = rel_group_by employees 2 agg_count in
+  -- Group by dept, sum salaries
+  let dept_sums = rel_group_by employees 2 (agg_sum 3) in
+  -- Order by salary
+  let sorted = rel_order_by employees 3 in
+  (list_len high_sal, dept_counts, dept_sums, list_len joined)

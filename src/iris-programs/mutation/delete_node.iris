@@ -1,0 +1,5 @@
+-- Delete a node by disconnecting and reconnecting around it
+let delete_node program source victim target port =
+  let p1 = graph_disconnect program source victim in
+  let p2 = graph_disconnect p1 victim target in
+  graph_connect p2 source target port

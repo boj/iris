@@ -1,0 +1,47 @@
+-- Depth-First Search (DFS)
+-- Explore a graph by going as deep as possible before backtracking.
+-- Graph represented as adjacency lists: graph[i] = tuple of neighbor indices.
+
+-- Check if a value exists in a tuple.
+let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =
+  fold false (\found x -> if x == val then true else found) xs
+
+-- DFS from a start node. Returns the list of visited nodes in DFS order.
+-- `graph` is a tuple of adjacency lists (one per node).
+-- Uses an explicit stack (tuple) to avoid unbounded recursion.
+let rec dfs_aux graph stack visited : Tuple -> Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let n = list_len stack in
+  if n == 0 then visited
+  else
+    let node = list_nth stack (n - 1) in         -- pop from stack
+    let rest_stack = list_take stack (n - 1) in
+    if contains visited node then
+      dfs_aux graph rest_stack visited
+    else
+      let new_visited = list_append visited node in
+      let neighbors = list_nth graph node in
+      -- Push unvisited neighbors onto stack
+      let new_stack = fold rest_stack (\s nb ->
+        if contains new_visited nb then s
+        else list_append s nb
+      ) neighbors in
+      dfs_aux graph new_stack new_visited
+
+let dfs graph start : Tuple -> Int -> Tuple [cost: Unknown] =
+  dfs_aux graph (start,) ()
+
+-- Check if there's a path from src to dst.
+let has_path graph src dst : Tuple -> Int -> Int -> Bool [cost: Unknown] =
+  let visited = dfs graph src in
+  contains visited dst
+
+-- Test: simple directed graph
+--   0 -> 1, 2
+--   1 -> 3
+--   2 -> 3
+--   3 -> (none)
+let test_dfs x : Int -> Tuple =
+  let graph = ((1, 2), (3,), (3,), ()) in
+  let order = dfs graph 0 in
+  let path = has_path graph 0 3 in
+  (order, path)

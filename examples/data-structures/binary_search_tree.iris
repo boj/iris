@@ -1,0 +1,76 @@
+-- Binary Search Tree (BST)
+-- Represented using State (map) with integer node IDs.
+-- Each node stores: value, left child ID, right child ID.
+-- Node ID -1 means "null" (no child).
+--
+-- Layout in State:
+--   "next_id" -> next available node ID
+--   "{id}_val" -> node value
+--   "{id}_left" -> left child ID
+--   "{id}_right" -> right child ID
+--   "root" -> root node ID
+
+-- FIXME: IRIS lacks int_to_string for building dynamic keys.
+-- This BST uses integer keys (node IDs) mapped via map_insert/map_get
+-- with integer keys, which requires State to support Int keys.
+-- If State only supports String keys, this needs int_to_string.
+
+-- Using a simpler encoding: BST as a sorted tuple (degenerate but functional).
+-- Insert maintains sorted order, search uses binary search.
+
+-- Insert a value into a sorted tuple (maintaining sorted order).
+let rec bst_insert xs val : Tuple -> Int -> Tuple [cost: Linear(xs)] =
+  let n = list_len xs in
+  if n == 0 then (val,)
+  else
+    let mid_idx = n / 2 in
+    let mid = list_nth xs mid_idx in
+    if val == mid then xs  -- no duplicates
+    else if val < mid then
+      list_concat (bst_insert (list_take xs mid_idx) val)
+                  (list_drop xs mid_idx)
+    else
+      list_concat (list_take xs (mid_idx + 1))
+                  (bst_insert (list_drop xs (mid_idx + 1)) val)
+
+-- Search for a value. Returns true/false.
+let rec bst_search xs val : Tuple -> Int -> Bool [cost: Unknown] =
+  let n = list_len xs in
+  if n == 0 then false
+  else
+    let mid_idx = n / 2 in
+    let mid = list_nth xs mid_idx in
+    if val == mid then true
+    else if val < mid then bst_search (list_take xs mid_idx) val
+    else bst_search (list_drop xs (mid_idx + 1)) val
+
+-- Find minimum (leftmost element).
+let bst_min xs : Tuple -> Int [cost: Const(1)] =
+  if list_len xs == 0 then -1
+  else list_nth xs 0
+
+-- Find maximum (rightmost element).
+let bst_max xs : Tuple -> Int [cost: Const(1)] =
+  let n = list_len xs in
+  if n == 0 then -1
+  else list_nth xs (n - 1)
+
+-- Delete a value from the BST.
+let bst_delete xs val : Tuple -> Int -> Tuple [cost: Linear(xs)] =
+  filter (\x -> x != val) xs
+
+-- In-order traversal (already sorted, so just return the tuple).
+let bst_inorder xs : Tuple -> Tuple [cost: Const(1)] = xs
+
+-- Build a BST from an unsorted tuple.
+let bst_from_list xs : Tuple -> Tuple [cost: Unknown] =
+  fold () (\tree x -> bst_insert tree x) xs
+
+-- Test
+let test_bst x : Int -> Tuple =
+  let tree = bst_from_list (5, 3, 7, 1, 4, 6, 8, 2) in
+  let found = bst_search tree 4 in
+  let not_found = bst_search tree 9 in
+  let minimum = bst_min tree in
+  let maximum = bst_max tree in
+  (tree, found, not_found, minimum, maximum)

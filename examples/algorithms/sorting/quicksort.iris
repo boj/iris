@@ -1,0 +1,29 @@
+-- Quicksort
+-- Divide-and-conquer: pick a pivot, partition into less/equal/greater, recurse.
+-- O(n log n) average, O(n^2) worst case. Not stable.
+
+-- Partition list into elements less than, equal to, and greater than pivot.
+let partition xs pivot : Tuple -> Int -> Tuple [cost: Linear(xs)] =
+  let less = filter (\x -> x < pivot) xs in
+  let equal = filter (\x -> x == pivot) xs in
+  let greater = filter (\x -> x > pivot) xs in
+  (less, equal, greater)
+
+-- Recursive quicksort using first element as pivot.
+let rec quicksort xs : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len xs in
+  if n <= 1 then xs
+  else
+    let pivot = list_nth xs 0 in
+    let parts = partition xs pivot in
+    let sorted_less = quicksort parts.0 in
+    let sorted_greater = quicksort parts.2 in
+    list_concat (list_concat sorted_less parts.1) sorted_greater
+
+-- Idiomatic alternative using sort_by:
+-- let quicksort_v2 xs = sort_by (\a b -> a - b) xs
+
+-- Test
+let test_quicksort x : Int -> Tuple =
+  let xs = (10, 7, 8, 9, 1, 5) in
+  quicksort xs

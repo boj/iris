@@ -1,0 +1,48 @@
+-- Evaluate a Let node: bind a value, then evaluate the body.
+--
+-- Mirrors the let handling from iris-exec interpreter.rs eval_let.
+--
+-- A Let node has:
+--   - Binding edge (port 0, label Binding): the value expression to bind
+--   - Continuation edge (port 0, label Continuation): the body to evaluate
+--     with the binding in scope
+--
+-- If the body is a Lambda, the bound value is passed as its parameter.
+-- Otherwise, the body is evaluated directly.
+--
+-- In the surface language, let is: let x = expr in body
+--
+-- Inputs:
+--   bound_value : Int (the value to bind)
+--   body_with_binding : Int -> Int (a function that uses the bound value)
+--
+-- Output: Int (the result of evaluating the body with the binding)
+--
+-- Simple let: bind a value and return it (identity body).
+let eval_let_identity value : Int -> Int [cost: Const(1)] =
+  let x = value in x
+
+-- Let with arithmetic body: bind value, compute with it.
+-- Simulates: let x = value in x + x
+let eval_let_double value : Int -> Int [cost: Const(2)] =
+  let x = value in x + x
+
+-- Nested let: bind two values, compute with both.
+-- Simulates: let x = a in let y = b in x + y
+let eval_let_add a b : Int -> Int -> Int [cost: Const(3)] =
+  let x = a in
+  let y = b in
+  x + y
+
+-- Let with shadowing: inner binding shadows outer.
+-- Simulates: let x = a in let x = b in x
+let eval_let_shadow a b : Int -> Int -> Int [cost: Const(2)] =
+  let x = a in
+  let x = b in
+  x
+
+-- Let-in-expression: bind and use in a complex expression.
+-- Simulates: let x = a in x * x + x
+let eval_let_poly a : Int -> Int [cost: Const(3)] =
+  let x = a in
+  x * x + x

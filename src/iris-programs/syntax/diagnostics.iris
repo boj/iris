@@ -1,0 +1,96 @@
+-- Diagnostics: map verification errors to source locations
+--
+-- Mirrors the Rust diagnostic.rs in iris-syntax/src/diagnostic.rs.
+-- Takes a source_map (list of (node_id, start_pos, end_pos) tuples)
+-- and a verification report (list of (node_id, error_message) tuples)
+-- and produces formatted diagnostic strings with source context.
+
+-- format_diagnostics: source -> source_map -> errors -> String
+-- source: the original source text
+-- source_map: list of (node_id, start_pos, end_pos) tuples
+-- errors: list of (node_id, error_message) tuples
+-- Returns a formatted string with all diagnostics
+let format_diagnostics source source_map errors =
+  let n_errors = list_len errors in
+  let n_smap = list_len source_map in
+  let slen = str_len source in
+
+  if n_errors == 0 then ""
+  else
+    fold ""
+      (\out _i ->
+        if _i >= n_errors then out
+        else
+          let err = list_nth errors _i in
+          let err_node_id = err.0 in
+          let err_message = err.1 in
+
+          -- Look up the node in the source map
+          let span_lk = fold (0, 0, 0)
+            (\sl _j ->
+              if sl.0 == 1 then sl
+              else if _j >= n_smap then sl
+              else
+                let sme = list_nth source_map _j in
+                if sme.0 == err_node_id then (1, sme.1, sme.2)
+                else sl)
+            n_smap in
+
+          if span_lk.0 == 1 then
+            -- Found span: format with source context
+            let start_pos = span_lk.1 in
+            let end_pos = span_lk.2 in
+
+            -- Find line number and line start
+            let line_info = fold (1, 0, 0)
+              (\li _k ->
+                if li.2 >= start_pos then li
+                else if li.2 >= slen then li
+                else
+                  let ch = char_at source li.2 in
+                  if ch == 10 then (li.0 + 1, li.2 + 1, li.2 + 1)
+                  else (li.0, li.1, li.2 + 1))
+              slen in
+
+            let line_num = line_info.0 in
+            let line_start = line_info.1 in
+
+            -- Find line end
+            let le_scan = fold (line_start, 0)
+              (\le _k ->
+                if le.1 == 1 then le
+                else if le.0 >= slen then (le.0, 1)
+                else if (char_at source le.0) == 10 then (le.0, 1)
+                else (le.0 + 1, 0))
+              slen in
+            let line_end = le_scan.0 in
+
+            let line_text = str_slice source line_start line_end in
+            let col = if start_pos > line_start then start_pos - line_start else 0 in
+            let raw_len = end_pos - start_pos in
+            let ul_len = if raw_len < 1 then 1 else raw_len in
+
+            let spaces = fold "" (\s _k -> str_concat s " ") col in
+            let carets = fold "" (\c _k -> str_concat c "^") ul_len in
+            let line_num_str = int_to_string line_num in
+
+            let diag = str_concat "error[line " line_num_str in
+            let diag = str_concat diag "]: " in
+            let diag = str_concat diag err_message in
+            let diag = str_concat diag "\n  |\n" in
+            let diag = str_concat diag line_num_str in
+            let diag = str_concat diag " | " in
+            let diag = str_concat diag line_text in
+            let diag = str_concat diag "\n  | " in
+            let diag = str_concat diag spaces in
+            let diag = str_concat diag carets in
+            let diag = str_concat diag "\n" in
+            str_concat out diag
+          else
+            -- No span: format without source context
+            let diag = str_concat "error (node " (int_to_string err_node_id) in
+            let diag = str_concat diag "): " in
+            let diag = str_concat diag err_message in
+            let diag = str_concat diag "\n" in
+            str_concat out diag)
+      n_errors

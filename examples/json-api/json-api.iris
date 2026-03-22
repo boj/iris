@@ -1,0 +1,111 @@
+-- HTTP JSON API Server
+-- A simple HTTP server that parses JSON requests, routes by path,
+-- and returns JSON responses.
+--
+-- Endpoints:
+--   GET  /health     -> {"status":"ok"}
+--   POST /add        -> {"result": a + b}  (body: {"a": N, "b": M})
+--   GET  /fib/N      -> {"value": fib(N)}
+
+-- Build an HTTP 200 JSON response (simplified, newline-separated headers).
+let json_response body : String -> String [cost: Unknown] =
+  let status_line = "HTTP/1.1 200 OK\n" in
+  let ct = "Content-Type: application/json\n" in
+  let cl = str_concat "Content-Length: " (str_concat (int_to_string (str_len body)) "\n") in
+  let conn = "Connection: close\n" in
+  str_concat status_line (str_concat ct (str_concat cl (str_concat conn (str_concat "\n" body))))
+
+-- Build an HTTP 404 JSON response.
+let json_404 x : Int -> String [cost: Unknown] =
+  let body = "{\"error\":\"not found\"}" in
+  let status_line = "HTTP/1.1 404 Not Found\n" in
+  let ct = "Content-Type: application/json\n" in
+  let cl = str_concat "Content-Length: " (str_concat (int_to_string (str_len body)) "\n") in
+  let conn = "Connection: close\n" in
+  str_concat status_line (str_concat ct (str_concat cl (str_concat conn (str_concat "\n" body))))
+
+-- Health endpoint: returns {"status":"ok"}
+let handle_health x : Int -> String [cost: Const(1)] =
+  json_response "{\"status\":\"ok\"}"
+
+-- Parse a flat JSON object with integer values, e.g. {"a":3,"b":5}
+-- Returns a Tuple of (key, value, rest) triples as an association list.
+let parse_simple_object s : String -> Tuple [cost: Unknown] =
+  let inner = str_slice s 1 (str_len s - 1) in
+  let segments = str_split inner "," in
+  let n = list_len segments in
+  fold () (\acc i ->
+    let seg = str_trim (list_nth segments i) in
+    let kv = str_split seg ":" in
+    let raw_key = str_trim (list_nth kv 0) in
+    let key = str_slice raw_key 1 (str_len raw_key - 1) in
+    let v = str_to_int (str_trim (list_nth kv 1)) in
+    (key, v, acc)
+  ) (list_range 0 n)
+
+-- Look up a key in the parsed association list.
+-- Walks (key, value, rest) triples via fold.
+let lookup_key obj key : Tuple -> String -> Int [cost: Unknown] =
+  fold 0 (\acc pair ->
+    if tuple_get pair 0 == () then acc
+    else if str_eq (tuple_get pair 0) key then tuple_get pair 1
+    else acc
+  ) obj
+
+-- Add endpoint: parse JSON body {"a": N, "b": M}, return {"result": N+M}
+let handle_add body : String -> String [cost: Unknown] =
+  let parsed = parse_simple_object body in
+  let a = lookup_key parsed "a" in
+  let b = lookup_key parsed "b" in
+  let result = a + b in
+  let resp_body = str_concat "{\"result\":" (str_concat (int_to_string result) "}") in
+  json_response resp_body
+
+-- Fibonacci helper using unfold.
+let compute_fib n : Int -> Int [cost: Linear(n)] =
+  if n <= 0 then 0
+  else if n == 1 then 1
+  else
+    let seq = unfold (0, 1) (+) (n + 1) in
+    list_nth seq n
+
+-- Fib endpoint: compute fib(N), return {"value": fib(N)}
+let handle_fib n : Int -> String [cost: Unknown] =
+  let result = compute_fib n in
+  let body = str_concat "{\"value\":" (str_concat (int_to_string result) "}") in
+  json_response body
+
+-- Parse HTTP request and extract (method, path, body).
+let parse_request raw : String -> Tuple [cost: Unknown] =
+  let parts = str_split raw "\n\n" in
+  let header_block = list_nth parts 0 in
+  let body = if list_len parts > 1 then list_nth parts 1 else "" in
+  let header_lines = str_split header_block "\n" in
+  let request_line = list_nth header_lines 0 in
+  let req_parts = str_split request_line " " in
+  let method = list_nth req_parts 0 in
+  let path = if list_len req_parts > 1 then list_nth req_parts 1 else "/" in
+  (method, path, body)
+
+-- Route a request to the appropriate handler.
+let route method path body : String -> String -> String -> String [cost: Unknown] =
+  if str_eq path "/health" then handle_health 0
+  else if str_starts_with path "/fib/" then
+    let n_str = str_slice path 5 (str_len path) in
+    let n = str_to_int n_str in
+    handle_fib n
+  else if str_eq path "/add" then handle_add body
+  else json_404 0
+
+-- Serve one HTTP request.
+let serve_once port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  let raw = tcp_read conn 65536 in
+  let req = parse_request raw in
+  let method = list_nth req 0 in
+  let path = list_nth req 1 in
+  let body = list_nth req 2 in
+  let response = route method path body in
+  let w = tcp_write conn response in
+  tcp_close conn

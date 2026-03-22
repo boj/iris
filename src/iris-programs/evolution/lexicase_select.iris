@@ -1,0 +1,119 @@
+-- Lexicase selection: per-test-case elimination
+--
+-- Standard lexicase: shuffle test cases, then for each test case
+-- eliminate any individual not optimal on that case. The last
+-- survivor is selected.
+--
+-- Since we lack runtime shuffling as a pure primitive, we implement
+-- a deterministic variant: iterate through test cases in order,
+-- keeping only individuals whose score on that case equals the
+-- best score on that case among remaining candidates.
+--
+-- candidates: tuple of (program, score_vector) pairs
+-- test_idx: which test case index to filter on (0-based)
+--
+-- Returns the filtered set of candidates still in contention.
+
+-- Find the best score for a given test case index across candidates
+let best_on_case candidates test_idx : Int -> Int -> Int [cost: Linear(candidates)] =
+  fold (0 - 999999999)
+    (\acc candidate -> max acc (candidate.1).0)
+    candidates
+
+-- Filter candidates to only those matching the best score on a test case
+-- Returns candidates whose score on test_idx equals threshold
+let filter_on_case candidates threshold : Int -> Int -> Int [cost: Linear(candidates)] =
+  filter (\candidate -> (candidate.1).0 >= threshold) candidates
+
+-- Single round of lexicase: find the best score on a case, then keep
+-- only candidates matching it. If applied repeatedly across test
+-- cases, converges to a single winner.
+let lexicase_round candidates test_idx : Int -> Int -> Int [cost: Linear(candidates)] =
+  let threshold = best_on_case candidates test_idx in
+  filter_on_case candidates threshold
+
+-- =========================================================================
+-- Epsilon-lexicase selection (MAD-based threshold)
+-- =========================================================================
+
+-- Compute median of a sorted list of scores
+-- scores must be pre-sorted ascending
+-- Returns the median value (middle element, or avg of two middles)
+let median_sorted scores n : Int -> Int -> Int [cost: Const(2)] =
+  -- For simplicity, use n/2-th element as approximate median
+  -- (exact median would require tuple indexing at arbitrary position)
+  let mid = n / 2 in
+  fold 0
+    (\acc pair ->
+      let idx = pair.0 in
+      let score_val = pair.1 in
+      if idx == mid then score_val else acc)
+    scores
+
+-- Compute Median Absolute Deviation (MAD) for epsilon-lexicase
+-- scores: list of (index, score) pairs for a given test case
+-- median_val: pre-computed median of the scores
+-- Returns: MAD = median(|score_i - median|)
+let compute_mad scores median_val n : Int -> Int -> Int -> Int [cost: Linear(scores)] =
+  -- Compute absolute deviations
+  let abs_devs = map
+    (\pair ->
+      let dev = pair.1 - median_val in
+      if dev < 0 then 0 - dev else dev)
+    scores in
+  -- Approximate MAD as mean absolute deviation (simpler than true median)
+  let sum_devs = fold 0 (\acc d -> acc + d) abs_devs in
+  if n == 0 then 0 else sum_devs / n
+
+-- Epsilon-lexicase: filter candidates within epsilon of the best
+-- epsilon: MAD-based threshold (candidates within epsilon of best are kept)
+-- Unlike standard lexicase which requires exact match with best,
+-- epsilon-lexicase keeps candidates within epsilon of the best score.
+-- This preserves "near-optimal" specialists.
+let epsilon_filter_on_case candidates epsilon : Int -> Int -> Int [cost: Linear(candidates)] =
+  let threshold = best_on_case candidates 0 in
+  let epsilon_threshold = threshold - epsilon in
+  filter (\candidate -> (candidate.1).0 >= epsilon_threshold) candidates
+
+-- Single round of epsilon-lexicase selection
+-- candidates: list of (program, score_vector) pairs
+-- test_idx: which test case to filter on
+-- epsilon: MAD-based tolerance threshold
+-- Returns: filtered candidates within epsilon of the best
+let epsilon_lexicase_round candidates test_idx epsilon : Int -> Int -> Int -> Int [cost: Linear(candidates)] =
+  let best = best_on_case candidates test_idx in
+  let epsilon_threshold = best - epsilon in
+  filter (\candidate -> (candidate.1).0 >= epsilon_threshold) candidates
+
+-- =========================================================================
+-- Down-sampled epsilon-lexicase
+-- =========================================================================
+
+-- Down-sampled variant: only evaluate on a fraction of test cases
+-- This reduces computation while maintaining selection pressure
+-- (La Cava et al. 2016)
+-- num_cases: total number of test cases
+-- sample_fraction_pct: percentage (0-100) of cases to use
+-- Returns: number of cases to evaluate
+let downsample_count num_cases sample_fraction_pct : Int -> Int -> Int [cost: Const(2)] =
+  let sample = (num_cases * sample_fraction_pct) / 100 in
+  if sample < 1 then 1 else sample
+
+-- Run multiple rounds of epsilon-lexicase until convergence
+-- Applies epsilon_lexicase_round for each test case in sequence
+-- Returns candidates after all rounds (ideally 1 survivor)
+let epsilon_lexicase_multi_round candidates num_rounds epsilon : Int -> Int -> Int -> Int [cost: Linear(candidates)] =
+  -- Apply lexicase round 0
+  let c1 = epsilon_lexicase_round candidates 0 epsilon in
+  if num_rounds <= 1 then c1
+  else
+    -- Apply round 1
+    let c2 = epsilon_lexicase_round c1 1 epsilon in
+    if num_rounds <= 2 then c2
+    else
+      -- Apply round 2
+      let c3 = epsilon_lexicase_round c2 2 epsilon in
+      if num_rounds <= 3 then c3
+      else
+        -- Apply round 3
+        epsilon_lexicase_round c3 3 epsilon

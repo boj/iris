@@ -1,0 +1,581 @@
+-- Binary wire format: serialize/deserialize graph to bytes
+--
+-- Canonical, deterministic, little-endian serialization.
+-- Mirrors the Rust wire.rs (1,972 LOC) in iris-repr.
+--
+-- Wire format layout (SPEC Section 14):
+--   Magic: 4B (0x49524953 "IRIS") | Version: 2B (LE) | Header len: 4B (LE)
+--   FragmentId: 32B | Flags: 2B (LE) | Resolution: 1B
+--   TypeEnv section | Node section | Edge section
+--   Boundary section | Import section | SemanticHash: 32B
+--   Optional: ProofReceipt section
+--   Metadata section
+--
+-- All multi-byte integers are little-endian.
+-- Strings/bytes are length-prefixed with a 4-byte LE u32 length.
+--
+-- Byte sequences are represented as tuples of integers (0-255),
+-- since IRIS lacks a contiguous byte buffer type.
+
+-- ============================================================
+-- Constants
+-- ============================================================
+
+-- Wire format magic: "IRIS" = 0x49 0x52 0x49 0x53
+-- As LE u32: 0x53495249 = 1397051977
+let wire_magic : Int [cost: Const(1)] = 1397051977
+
+-- Bundle magic: "IRBD" = 0x49 0x52 0x42 0x44
+-- As LE u32: 0x44425249 = 1145127497
+let bundle_magic : Int [cost: Const(1)] = 1145127497
+
+-- Wire format version
+let wire_version : Int [cost: Const(1)] = 1
+
+-- Fragment header size: magic(4) + version(2) + header_len(4) + id(32) + flags(2) + resolution(1) = 45
+let fragment_header_size : Int [cost: Const(1)] = 45
+
+-- Flag constants
+let flag_has_proof : Int [cost: Const(1)] = 1
+
+-- ============================================================
+-- NodeKind discriminants (20 active variants, 5-bit tag)
+-- ============================================================
+
+let node_kind_prim : Int [cost: Const(1)] = 0
+let node_kind_apply : Int [cost: Const(1)] = 1
+let node_kind_lambda : Int [cost: Const(1)] = 2
+let node_kind_let : Int [cost: Const(1)] = 3
+let node_kind_match : Int [cost: Const(1)] = 4
+let node_kind_lit : Int [cost: Const(1)] = 5
+let node_kind_ref : Int [cost: Const(1)] = 6
+let node_kind_neural : Int [cost: Const(1)] = 7
+let node_kind_fold : Int [cost: Const(1)] = 8
+let node_kind_unfold : Int [cost: Const(1)] = 9
+let node_kind_effect : Int [cost: Const(1)] = 10
+let node_kind_tuple : Int [cost: Const(1)] = 11
+let node_kind_inject : Int [cost: Const(1)] = 12
+let node_kind_project : Int [cost: Const(1)] = 13
+let node_kind_type_abst : Int [cost: Const(1)] = 14
+let node_kind_type_app : Int [cost: Const(1)] = 15
+let node_kind_let_rec : Int [cost: Const(1)] = 16
+let node_kind_guard : Int [cost: Const(1)] = 17
+let node_kind_rewrite : Int [cost: Const(1)] = 18
+let node_kind_extern : Int [cost: Const(1)] = 19
+
+-- ============================================================
+-- EdgeLabel discriminants (4-bit)
+-- ============================================================
+
+let edge_argument : Int [cost: Const(1)] = 0
+let edge_scrutinee : Int [cost: Const(1)] = 1
+let edge_binding : Int [cost: Const(1)] = 2
+let edge_continuation : Int [cost: Const(1)] = 3
+let edge_decrease : Int [cost: Const(1)] = 4
+
+-- ============================================================
+-- Resolution discriminants
+-- ============================================================
+
+let resolution_intent : Int [cost: Const(1)] = 0
+let resolution_architecture : Int [cost: Const(1)] = 1
+let resolution_implementation : Int [cost: Const(1)] = 2
+
+-- ============================================================
+-- Byte-level encoding helpers (integer tuples as byte arrays)
+-- ============================================================
+
+-- Encode a u16 as two LE bytes returned as a tuple.
+-- Returns: (low_byte, high_byte)
+let encode_u16_le v : Int -> (Int, Int) [cost: Const(2)] =
+  let low = v % 256 in
+  let high = (v / 256) % 256 in
+  (low, high)
+
+-- Decode a LE u16 from two bytes.
+let decode_u16_le low high : Int -> Int -> Int [cost: Const(1)] =
+  low + high * 256
+
+-- Encode a u32 as four LE bytes returned as a tuple.
+-- Returns: (b0, b1, b2, b3) where b0 is the least significant byte.
+let encode_u32_le v : Int -> (Int, Int, Int, Int) [cost: Const(2)] =
+  let b0 = v % 256 in
+  let b1 = (v / 256) % 256 in
+  let b2 = (v / 65536) % 256 in
+  let b3 = (v / 16777216) % 256 in
+  (b0, b1, b2, b3)
+
+-- Decode a LE u32 from four bytes.
+let decode_u32_le b0 b1 b2 b3 : Int -> Int -> Int -> Int -> Int [cost: Const(1)] =
+  b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+
+-- Encode a u64 as eight LE bytes returned as a tuple.
+let encode_u64_le v : Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(4)] =
+  let b0 = v % 256 in
+  let b1 = (v / 256) % 256 in
+  let b2 = (v / 65536) % 256 in
+  let b3 = (v / 16777216) % 256 in
+  let b4 = (v / 4294967296) % 256 in
+  let b5 = (v / 1099511627776) % 256 in
+  let b6 = (v / 281474976710656) % 256 in
+  let b7 = (v / 72057594037927936) % 256 in
+  (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ============================================================
+-- Payload size estimation (exact sizes from wire.rs)
+-- ============================================================
+
+let payload_size kind : Int -> Int [cost: Const(5)] =
+  if kind == 0 then 2
+  else if kind == 1 then 1
+  else if kind == 2 then 9
+  else if kind == 3 then 1
+  else if kind == 4 then 8
+  else if kind == 5 then 14
+  else if kind == 6 then 33
+  else if kind == 7 then 80
+  else if kind == 8 then 6
+  else if kind == 9 then 6
+  else if kind == 10 then 2
+  else if kind == 11 then 1
+  else if kind == 12 then 3
+  else if kind == 13 then 3
+  else if kind == 14 then 5
+  else if kind == 15 then 9
+  else if kind == 16 then 14
+  else if kind == 17 then 25
+  else if kind == 18 then 41
+  else if kind == 19 then 41
+  else 4
+
+-- ============================================================
+-- Node encoding: produce byte-value tuples
+-- ============================================================
+
+-- Encode a node's kind tag as a single byte.
+-- Returns: the tag byte (0-19) or 255 for invalid.
+let encode_node_kind kind : Int -> Int [cost: Const(2)] =
+  if kind >= 0 then
+    if kind <= 19 then kind else 255
+  else 255
+
+-- Encode a Prim node's payload: kind_tag(1) + opcode(1) = 2 bytes.
+let encode_prim_payload opcode : Int -> (Int, Int) [cost: Const(1)] =
+  (0, opcode)
+
+-- Encode a Lit node's payload header: kind_tag(1) + type_tag(1) + value_len(4) = 6 bytes.
+let encode_lit_header type_tag value_len : Int -> Int -> (Int, Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let len_bytes = encode_u32_le value_len in
+  (5, type_tag, len_bytes.0, len_bytes.1, len_bytes.2, len_bytes.3)
+
+-- Encode a Ref node's payload: kind_tag(1) + fragment_id_hash.
+let encode_ref_payload frag_hash : Int -> (Int, Int) [cost: Const(1)] =
+  (6, frag_hash)
+
+-- Encode a Guard node's payload: kind_tag(1) + pred_id(8) + body_id(8) + fallback_id(8).
+let encode_guard_payload pred_id body_id fallback_id : Int -> Int -> Int -> (Int, Int, Int, Int) [cost: Const(1)] =
+  (17, pred_id, body_id, fallback_id)
+
+-- Encode a complete node: id, kind byte, payload size, raw kind.
+let encode_node graph node_id : Int -> Int -> (Int, Int, Int, Int) [cost: Const(3)] =
+  let kind = graph_get_kind graph node_id in
+  let kind_byte = encode_node_kind kind in
+  let psize = payload_size kind in
+  (node_id, kind_byte, psize, kind)
+
+-- ============================================================
+-- Decode: parse byte values back to node fields
+-- ============================================================
+
+-- Decode a node from its byte representation.
+-- kind_byte: the kind discriminant byte
+-- payload_bytes: remaining payload (interpretation depends on kind)
+-- Returns: (node_kind, payload_hash, bytes_consumed)
+let decode_node kind_byte payload_val : Int -> Int -> (Int, Int, Int) [cost: Const(3)] =
+  if kind_byte >= 0 then
+    if kind_byte <= 19 then
+      let psize = payload_size kind_byte in
+      (kind_byte, payload_val, 1 + psize)
+    else
+      -- Invalid kind
+      (-1, 0, 0)
+  else (-1, 0, 0)
+
+-- ============================================================
+-- Header validation
+-- ============================================================
+
+-- Validate wire format header magic + version.
+-- Returns 1 if valid, 0 if invalid.
+let validate_header magic version : Int -> Int -> Int [cost: Const(2)] =
+  let magic_ok = bool_to_int (magic == 1397051977) in
+  let version_ok = bool_to_int (version == 1) in
+  magic_ok * version_ok
+
+-- Validate bundle header magic + version.
+let validate_bundle_header magic version : Int -> Int -> Int [cost: Const(2)] =
+  let magic_ok = bool_to_int (magic == 1145127497) in
+  let version_ok = bool_to_int (version == 1) in
+  magic_ok * version_ok
+
+-- Compute the flag byte for a fragment.
+let compute_flags has_proof : Int -> Int [cost: Const(1)] =
+  has_proof
+
+-- Check if the has_proof flag is set.
+let has_proof_flag flags : Int -> Int [cost: Const(1)] =
+  flags % 2
+
+-- ============================================================
+-- Node serialization size
+-- ============================================================
+
+-- Fixed overhead per node: id(8) + kind(1) + type_sig(8) + arity(1) + res_depth(1) + cost_tag(1) + payload_len(2) = 22
+let node_fixed_size : Int [cost: Const(1)] = 22
+
+-- Edge serialization size: source(8) + target(8) + port(1) + label(1) = 18
+let edge_wire_size : Int [cost: Const(1)] = 18
+
+-- Compute exact serialized size of a single node.
+let node_wire_size kind cost_term_tag cost_bound_size : Int -> Int -> Int -> Int [cost: Const(3)] =
+  let fixed = 22 in
+  let cost_extra = if cost_term_tag == 2 then cost_bound_size else 0 in
+  let payload = payload_size kind in
+  fixed + cost_extra + payload
+
+-- ============================================================
+-- Fragment encode header as byte tuple
+-- ============================================================
+
+-- Encode the IRIS magic as 4 individual bytes.
+let magic_bytes : (Int, Int, Int, Int) [cost: Const(1)] =
+  (73, 82, 73, 83)
+
+-- Encode a complete fragment header as a byte-value tuple.
+-- Returns: (m0, m1, m2, m3, ver_lo, ver_hi, hlen_b0, hlen_b1, hlen_b2, hlen_b3)
+let encode_fragment_header_bytes has_proof resolution : Int -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(3)] =
+  let m = magic_bytes in
+  let ver = encode_u16_le wire_version in
+  let hlen = encode_u32_le fragment_header_size in
+  (m.0, m.1, m.2, m.3, ver.0, ver.1, hlen.0, hlen.1)
+
+-- ============================================================
+-- NodeKind / EdgeLabel validation
+-- ============================================================
+
+let is_valid_node_kind kind : Int -> Int [cost: Const(2)] =
+  if kind >= 0 then
+    if kind <= 19 then 1 else 0
+  else 0
+
+let is_valid_edge_label label : Int -> Int [cost: Const(2)] =
+  if label >= 0 then
+    if label <= 4 then 1 else 0
+  else 0
+
+let is_valid_resolution res : Int -> Int [cost: Const(2)] =
+  if res >= 0 then
+    if res <= 2 then 1 else 0
+  else 0
+
+-- ============================================================
+-- Round-trip: encode then decode u16/u32
+-- ============================================================
+
+-- Verify round-trip for u16: encode then decode must yield original.
+let roundtrip_u16 v : Int -> Int [cost: Const(3)] =
+  let encoded = encode_u16_le v in
+  let decoded = decode_u16_le encoded.0 encoded.1 in
+  if decoded == v then 1 else 0
+
+-- Verify round-trip for u32: encode then decode must yield original.
+let roundtrip_u32 v : Int -> Int [cost: Const(3)] =
+  let encoded = encode_u32_le v in
+  let decoded = decode_u32_le encoded.0 encoded.1 encoded.2 encoded.3 in
+  if decoded == v then 1 else 0
+
+-- ============================================================
+-- Fragment wire size estimation
+-- ============================================================
+
+let estimate_wire_size program : Int -> Int [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\pair -> pair.0 + 1) nodes in
+  let edge_count = if node_count > 0 then node_count - 1 else 0 in
+  let header = fragment_header_size in
+  let type_env_est = 4 + node_count * 12 in
+  let node_section = 4 + node_count * 40 in
+  let edge_section = 4 + edge_count * edge_wire_size in
+  let boundary_est = 4 + 16 + 4 + 16 in
+  let import_section = 2 in
+  let trailer = 32 + 8 + 2 + 12 in
+  let metadata = 30 in
+  header + type_env_est + node_section + edge_section + boundary_est + import_section + trailer + metadata
+
+-- ============================================================
+-- Determinism check
+-- ============================================================
+
+let check_deterministic program : Int -> Int [cost: Linear(program)] =
+  let size1 = estimate_wire_size program in
+  let size2 = estimate_wire_size program in
+  if size1 == size2 then 1 else 0
+
+-- ============================================================
+-- Wire size validation
+-- ============================================================
+
+let validate_wire_size estimated_size : Int -> Int [cost: Const(3)] =
+  let min_ok = bool_to_int (estimated_size >= 45) in
+  let max_ok = bool_to_int (estimated_size <= 33554432) in
+  min_ok * max_ok
+
+-- ============================================================
+-- Byte-buffer cons-list helpers for wire serialization
+-- ============================================================
+
+-- Prepend a single byte.
+let wire_cons b tail : Int -> Int -> Int [cost: Const(1)] =
+  (b, tail)
+
+-- Prepend 2 LE bytes of a u16.
+let wire_prepend_u16 v tail : Int -> Int -> Int [cost: Const(2)] =
+  let b = encode_u16_le v in
+  (b.0, (b.1, tail))
+
+-- Prepend 4 LE bytes of a u32.
+let wire_prepend_u32 v tail : Int -> Int -> Int [cost: Const(2)] =
+  let b = encode_u32_le v in
+  (b.0, (b.1, (b.2, (b.3, tail))))
+
+-- Prepend 8 LE bytes of a u64.
+let wire_prepend_u64 v tail : Int -> Int -> Int [cost: Const(4)] =
+  let b = encode_u64_le v in
+  (b.0, (b.1, (b.2, (b.3, (b.4, (b.5, (b.6, (b.7, tail))))))))
+
+-- Prepend a 32-byte hash value (4 × u64 LE, repeating the 64-bit hash).
+let wire_prepend_hash32 hash_val tail : Int -> Int -> Int [cost: Const(5)] =
+  let buf = wire_prepend_u64 hash_val tail in
+  let buf = wire_prepend_u64 hash_val buf in
+  let buf = wire_prepend_u64 hash_val buf in
+  wire_prepend_u64 hash_val buf
+
+-- Prepend a section count header (4 bytes u32 LE).
+let wire_prepend_section_count count tail : Int -> Int -> Int [cost: Const(2)] =
+  wire_prepend_u32 count tail
+
+-- Prepend an import section count (2 bytes u16 LE).
+let wire_prepend_import_count count tail : Int -> Int -> Int [cost: Const(2)] =
+  wire_prepend_u16 count tail
+
+-- ============================================================
+-- Node serialization to byte cons-list
+-- ============================================================
+
+-- Serialize a single node entry: id(8) + kind(1) + type_sig(8) + arity(1)
+--   + res_depth(1) + salt flag + cost_tag(1) + payload_size(2) + payload.
+-- This is the fixed-overhead portion; payload bytes are appended by caller.
+let wire_prepend_node_header node_id kind type_sig arity res_depth salt cost_tag tail : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let psize = payload_size kind in
+  let ps = encode_u16_le psize in
+  -- Build right-to-left: payload_size(2) then cost_tag(1) then salt...
+  let buf = (ps.0, (ps.1, tail)) in
+  let buf = (cost_tag, buf) in
+  -- Salt: write u64 if non-zero, skip if zero
+  let buf = if salt == 0 then buf else wire_prepend_u64 salt buf in
+  let buf = (res_depth, buf) in
+  let buf = (arity, buf) in
+  let buf = wire_prepend_u64 type_sig buf in
+  let buf = (kind, buf) in
+  wire_prepend_u64 node_id buf
+
+-- ============================================================
+-- Edge serialization to byte cons-list
+-- ============================================================
+
+-- Serialize a single edge: source(8) + target(8) + port(1) + label(1) = 18 bytes.
+let wire_prepend_edge source target port label tail : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let buf = (label, tail) in
+  let buf = (port, buf) in
+  let buf = wire_prepend_u64 target buf in
+  wire_prepend_u64 source buf
+
+-- ============================================================
+-- Boundary entry serialization
+-- ============================================================
+
+-- Serialize a boundary entry: node_id(8) + type_id(8) = 16 bytes.
+let wire_prepend_boundary_entry node_id type_id tail : Int -> Int -> Int -> Int [cost: Const(4)] =
+  let buf = wire_prepend_u64 type_id tail in
+  wire_prepend_u64 node_id buf
+
+-- ============================================================
+-- Import entry serialization
+-- ============================================================
+
+-- Serialize an import entry: fragment_id (32 bytes).
+let wire_prepend_import frag_id_hash tail : Int -> Int -> Int [cost: Const(5)] =
+  wire_prepend_hash32 frag_id_hash tail
+
+-- ============================================================
+-- Complete fragment serialization
+-- ============================================================
+
+-- Assemble a complete serialized fragment as a byte cons-list.
+--
+-- Parameters:
+--   has_proof: 0 or 1
+--   resolution: 0=Intent, 1=Architecture, 2=Implementation
+--   frag_id_hash: 64-bit representative of the 256-bit fragment ID
+--   root_node_id: root node ID (u64)
+--   semantic_hash: semantic hash value (u64, repeated to fill 32 bytes)
+--   type_count, node_count, edge_count: section sizes
+--   input_count, output_count, import_count: boundary/import sizes
+--   type_env_bytes: pre-assembled type environment section as cons-list
+--   node_bytes: pre-assembled node section as cons-list
+--   edge_bytes: pre-assembled edge section as cons-list
+--   boundary_in_bytes: pre-assembled input boundary as cons-list
+--   boundary_out_bytes: pre-assembled output boundary as cons-list
+--   import_bytes: pre-assembled import section as cons-list
+--
+-- Returns: complete wire format as (byte, (byte, ... 0)).
+--
+-- Wire layout:
+--   Header: magic(4) + version(2) + header_len(4) + frag_id(32) + flags(2) + resolution(1)
+--   TypeEnv: count(4) + type_env_bytes
+--   Nodes:   count(4) + node_bytes
+--   Edges:   count(4) + edge_bytes
+--   Boundary: in_count(4) + boundary_in + out_count(4) + boundary_out
+--   Imports: count(2) + import_bytes
+--   Trailer: semantic_hash(32) + root_node_id(8)
+--   CostBound: tag=0 (Unknown, 1 byte)
+-- Assemble a fragment from pre-built section byte cons-lists.
+-- For fold-based serialization from actual graph data, use serialize_fragment below.
+let assemble_fragment_sections has_proof resolution frag_id_hash root_node_id semantic_hash type_count node_count edge_count input_count output_count import_count type_env_bytes node_bytes edge_bytes boundary_in_bytes boundary_out_bytes import_bytes : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  -- Build from right to left (last bytes first)
+  -- CostBound: Unknown = tag 0x00
+  let buf = (0, 0) in
+  -- Root node ID (8 bytes)
+  let buf = wire_prepend_u64 root_node_id buf in
+  -- Semantic hash (32 bytes)
+  let buf = wire_prepend_hash32 semantic_hash buf in
+  -- Import section: count(2) + import_bytes
+  let buf = import_bytes in
+  let buf = wire_prepend_import_count import_count buf in
+  -- Output boundary: count(4) + boundary_out_bytes
+  let buf_out = boundary_out_bytes in
+  let buf_out = wire_prepend_section_count output_count buf_out in
+  -- Input boundary: count(4) + boundary_in_bytes, then output boundary
+  let buf_bnd = boundary_in_bytes in
+  let buf_bnd = wire_prepend_section_count input_count buf_bnd in
+  -- Edge section: count(4) + edge_bytes
+  let buf_edge = edge_bytes in
+  let buf_edge = wire_prepend_section_count edge_count buf_edge in
+  -- Node section: count(4) + node_bytes
+  let buf_node = node_bytes in
+  let buf_node = wire_prepend_section_count node_count buf_node in
+  -- Type env section: count(4) + type_env_bytes
+  let buf_type = type_env_bytes in
+  let buf_type = wire_prepend_section_count type_count buf_type in
+  -- Now build the trailer chain: root + hash + cost
+  let trailer = (0, 0) in
+  let trailer = wire_prepend_u64 root_node_id trailer in
+  let trailer = wire_prepend_hash32 semantic_hash trailer in
+  -- Fragment header: magic + version + header_len + frag_id + flags + resolution
+  let flags = compute_flags has_proof in
+  let header_len = encode_u32_le fragment_header_size in
+  let ver = encode_u16_le wire_version in
+  let fl = encode_u16_le flags in
+  -- Assemble header bytes (45 bytes)
+  let hdr = (resolution, trailer) in
+  let hdr = (fl.0, (fl.1, hdr)) in
+  let hdr = wire_prepend_hash32 frag_id_hash hdr in
+  let hdr = (header_len.0, (header_len.1, (header_len.2, (header_len.3, hdr)))) in
+  let hdr = (ver.0, (ver.1, hdr)) in
+  -- Magic "IRIS"
+  (73, (82, (73, (83, hdr))))
+
+-- ============================================================
+-- serialize_fragment: fold-based full wire format serialization
+-- ============================================================
+
+-- Serialize a complete fragment from graph data using fold.
+-- Builds right-to-left: start with trailer, fold sections prepending onto it.
+--
+-- fragment_id_hash: 64-bit representative of fragment ID
+-- has_proof: 0 or 1
+-- resolution: 0/1/2
+-- root_node_id: root node u64
+-- semantic_hash: semantic hash value u64
+-- type_env_entries: fold-able list of TypeId values
+-- type_env_count: number of type entries
+-- node_entries: fold-able list of (node_id, kind, type_sig, arity, res_depth, cost_tag) tuples
+-- node_count: number of nodes
+-- edge_entries: fold-able list of (source, target, port, label) tuples
+-- edge_count: number of edges
+-- input_entries: fold-able list of (NodeId, TypeId) tuples
+-- input_count: number of boundary inputs
+-- output_entries: fold-able list of (NodeId, TypeId) tuples
+-- output_count: number of boundary outputs
+-- import_entries: fold-able list of fragment_id_hash values
+-- import_count: number of imports
+--
+-- Note: fold prepends each element, so caller provides lists in reverse order.
+let serialize_fragment fragment_id_hash has_proof resolution root_node_id semantic_hash type_env_entries type_env_count node_entries node_count edge_entries edge_count input_entries input_count output_entries output_count import_entries import_count : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Linear(node_count)] =
+  -- Build right-to-left: trailer first
+  let buf = (0, 0) in
+  let buf = wire_prepend_u64 root_node_id buf in
+  let buf = wire_prepend_hash32 semantic_hash buf in
+  -- Import section: count(2) + import hashes
+  let imp_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let fid = pair.1 in
+    wire_prepend_hash32 fid acc
+  ) import_entries in
+  let buf = wire_prepend_import_count import_count imp_data in
+  -- Output boundary: count(4) + entries
+  let out_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let entry = pair.1 in
+    wire_prepend_boundary_entry entry.0 entry.1 acc
+  ) output_entries in
+  let buf = wire_prepend_section_count output_count out_data in
+  -- Input boundary: count(4) + entries
+  let in_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let entry = pair.1 in
+    wire_prepend_boundary_entry entry.0 entry.1 acc
+  ) input_entries in
+  let buf = wire_prepend_section_count input_count in_data in
+  -- Edge section: count(4) + edges
+  let edge_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let e = pair.1 in
+    wire_prepend_edge e.0 e.1 e.2 e.3 acc
+  ) edge_entries in
+  let buf = wire_prepend_section_count edge_count edge_data in
+  -- Node section: count(4) + nodes
+  let node_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let n = pair.1 in
+    wire_prepend_node_header n.0 n.1 n.2 n.3 n.4 n.5 n.6 acc
+  ) node_entries in
+  let buf = wire_prepend_section_count node_count node_data in
+  -- Type env section: count(4) + TypeIds
+  let tenv_data = fold buf (\pair ->
+    let acc = pair.0 in
+    let tid = pair.1 in
+    wire_prepend_u64 tid acc
+  ) type_env_entries in
+  let buf = wire_prepend_section_count type_env_count tenv_data in
+  -- Header: magic + version + header_len + frag_id + flags + resolution
+  let flags = compute_flags has_proof in
+  let hdr_len = encode_u32_le fragment_header_size in
+  let ver = encode_u16_le wire_version in
+  let fl = encode_u16_le flags in
+  let buf = (resolution, buf) in
+  let buf = (fl.0, (fl.1, buf)) in
+  let buf = wire_prepend_hash32 fragment_id_hash buf in
+  let buf = (hdr_len.0, (hdr_len.1, (hdr_len.2, (hdr_len.3, buf)))) in
+  let buf = (ver.0, (ver.1, buf)) in
+  (73, (82, (73, (83, buf))))

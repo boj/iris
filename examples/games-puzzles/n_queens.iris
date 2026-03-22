@@ -1,0 +1,56 @@
+-- N-Queens Problem
+-- Place N queens on an NxN chessboard so no two queens attack each other.
+-- Queens attack along rows, columns, and diagonals.
+--
+-- Solution represented as a tuple where index i = column of queen in row i.
+-- E.g., (1, 3, 0, 2) means queens at (0,1), (1,3), (2,0), (3,2).
+
+-- Check if placing a queen at (row, col) conflicts with existing queens.
+-- queens is a tuple of columns for rows 0..row-1.
+let is_safe queens row col : Tuple -> Int -> Int -> Bool [cost: Linear(queens)] =
+  fold true (\safe i ->
+    if safe == false then false
+    else
+      let qcol = list_nth queens i in
+      let row_diff = row - i in
+      -- Same column or same diagonal?
+      if qcol == col then false
+      else if qcol - col == row_diff then false
+      else if col - qcol == row_diff then false
+      else true
+  ) (list_range 0 row)
+
+-- Find all solutions for row `row` given partial solution `queens`.
+-- Returns a tuple of complete solutions.
+let rec solve_queens n queens row : Int -> Tuple -> Int -> Tuple [cost: Unknown] =
+  if row == n then (queens,)  -- found a complete solution
+  else
+    fold () (\solutions col ->
+      if is_safe queens row col then
+        let new_queens = list_append queens col in
+        let sub_solutions = solve_queens n new_queens (row + 1) in
+        list_concat solutions sub_solutions
+      else solutions
+    ) (list_range 0 n)
+
+-- Find all solutions for the N-Queens problem.
+let n_queens n : Int -> Tuple [cost: Unknown] =
+  solve_queens n () 0
+
+-- Count solutions.
+let n_queens_count n : Int -> Int [cost: Unknown] =
+  list_len (n_queens n)
+
+-- Find the first solution (or empty tuple if none).
+let n_queens_first n : Int -> Tuple [cost: Unknown] =
+  let all = n_queens n in
+  if list_len all > 0 then list_nth all 0
+  else ()
+
+-- Test
+let test_n_queens x : Int -> Tuple =
+  let count4 = n_queens_count 4 in     -- 2 solutions
+  let count5 = n_queens_count 5 in     -- 10 solutions
+  let first4 = n_queens_first 4 in     -- e.g., (1, 3, 0, 2)
+  let count8 = n_queens_count 8 in     -- 92 solutions
+  (count4, count5, first4, count8)

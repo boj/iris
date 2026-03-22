@@ -1,0 +1,26 @@
+-- Detect absolute value pattern: output = |input| for all test cases
+--
+-- Takes a list of (input, output) pairs and the count n.
+-- Absolute value means output == input when input >= 0,
+-- and output == -input when input < 0.
+-- Returns confidence score 0-100.
+
+-- Compute absolute value
+let int_abs x : Int -> Int [cost: Const(1)] =
+  if x >= 0 then x else 0 - x
+
+-- Check if a single pair satisfies output == |input|
+let is_absolute_pair pair : (Int, Int) -> Int [cost: Const(1)] =
+  if pair.1 == int_abs pair.0 then 1 else 0
+
+-- Count how many test case pairs satisfy output == |input|
+let count_absolute_matches pairs : Int -> Int [cost: Linear(pairs)] =
+  fold 0 (\acc pair -> acc + is_absolute_pair pair) pairs
+
+-- Detect absolute value pattern across all test case pairs
+-- Returns confidence score 0-100
+let detect_absolute pairs n : Int -> Int -> Int [cost: Linear(pairs)] =
+  if n == 0 then 0
+  else
+    let matches = count_absolute_matches pairs in
+    (matches * 100) / n

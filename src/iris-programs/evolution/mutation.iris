@@ -1,0 +1,498 @@
+-- Mutation operators: type-directed and structure-aware graph mutations
+--
+-- Core mutation operators:
+--   point_mutate: change a single node's kind/opcode
+--   subtree_replace: replace a subtree with a new one
+--   edge_swap: swap edges between compatible nodes
+--   constant_perturb: adjust literal values
+--   wrap_fold: wrap expression in a fold
+--   unwrap_fold: remove unnecessary fold
+--
+-- Mutation rates are adaptive: higher for stagnant populations,
+-- lower for improving ones.
+
+-- Base mutation rate (per node, in parts per 10000)
+let base_mutation_rate : Int [cost: Const(1)] = 100  -- 1%
+
+-- Compute adaptive mutation rate based on stagnation
+-- stagnant_gens: number of generations without improvement
+-- Returns: mutation rate in parts per 10000
+let adaptive_rate stagnant_gens : Int -> Int [cost: Const(2)] =
+  let base = base_mutation_rate in
+  let boost = stagnant_gens * 50 in  -- +0.5% per stagnant generation
+  let rate = base + boost in
+  if rate > 5000 then 5000  -- cap at 50%
+  else rate
+
+-- Count expected mutations for a graph of given size
+-- Returns: expected number of nodes to mutate
+let expected_mutations node_count rate : Int -> Int -> Int [cost: Const(2)] =
+  (node_count * rate) / 10000
+
+-- Choose mutation type based on a random seed
+-- Returns: mutation type (0=point, 1=subtree, 2=edge_swap,
+--          3=const_perturb, 4=wrap_fold, 5=unwrap_fold)
+let choose_mutation seed : Int -> Int [cost: Const(2)] =
+  let abs_seed = if seed < 0 then 0 - seed else seed in
+  let choice = abs_seed - (abs_seed / 6) * 6 in
+  choice
+
+-- Check if a node is mutable (not a type/structure node)
+-- Some nodes like TypeAbst/TypeApp should not be mutated
+let is_mutable kind : Int -> Int [cost: Const(2)] =
+  if kind == 14 then 0   -- TypeAbst: skip
+  else if kind == 15 then 0   -- TypeApp: skip
+  else 1
+
+-- Point mutation: change a Prim's opcode to a compatible one
+-- old_opcode: current prim opcode
+-- seed: random seed for choosing new opcode
+-- Returns: new opcode (different from old)
+let point_mutate_prim old_opcode seed : Int -> Int -> Int [cost: Const(2)] =
+  -- 20 prim opcodes (0x00-0x13)
+  let range = 20 in
+  let raw = if seed < 0 then 0 - seed else seed in
+  let candidate = raw - (raw / range) * range in
+  if candidate == old_opcode then
+    if candidate + 1 < range then candidate + 1
+    else 0
+  else candidate
+
+-- Constant perturbation: adjust a literal value
+-- old_value: current literal value
+-- delta: perturbation range
+-- seed: random seed
+-- Returns: new value
+let perturb_constant old_value delta seed : Int -> Int -> Int -> Int [cost: Const(2)] =
+  let raw = if seed < 0 then 0 - seed else seed in
+  let offset = raw - (raw / (2 * delta + 1)) * (2 * delta + 1) - delta in
+  old_value + offset
+
+-- Mutation statistics for a graph
+-- Returns (mutable_nodes, expected_mutations, mutation_type_distribution)
+let mutation_stats program stagnant_gens : Int -> Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let nodes = graph_nodes program in
+  let total = fold 0 (\acc x -> acc + 1) nodes in
+  let mutable = fold 0
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      acc + is_mutable kind)
+    nodes in
+  let rate = adaptive_rate stagnant_gens in
+  let expected = expected_mutations mutable rate in
+  (mutable, expected, rate)
+
+-- =========================================================================
+-- Structural mutation operators (10 operators matching Rust mutation.rs)
+-- =========================================================================
+
+-- Mutation operator weights (cumulative thresholds, scaled to 1000)
+-- 0: insert_node=100, 1: delete_node=200, 2: rewire_edge=280,
+-- 3: replace_kind=310, 4: replace_prim=370, 5: mutate_literal=440,
+-- 6: duplicate_subgraph=450, 7: wrap_in_guard=460, 8: annotate_cost=470,
+-- 9: wrap_in_map=560, 10: wrap_in_filter=650, 11: compose_stages=720,
+-- 12: insert_zip=790, 13: swap_fold_op=920, 14: add_guard_condition=970,
+-- 15: extract_to_ref=1000
+let mutation_weight_thresholds : (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
+  (100, 200, 280, 310, 370, 440, 450, 460, 470, 560, 650, 720, 790, 920, 970, 1000)
+
+-- Select mutation operator from a random seed (0-999)
+-- Returns operator index 0-15
+let select_operator seed : Int -> Int [cost: Const(4)] =
+  let s = if seed < 0 then 0 - seed else seed in
+  let roll = s - (s / 1000) * 1000 in
+  if roll < 100 then 0       -- insert_node
+  else if roll < 200 then 1  -- delete_node
+  else if roll < 280 then 2  -- rewire_edge
+  else if roll < 310 then 3  -- replace_kind
+  else if roll < 370 then 4  -- replace_prim
+  else if roll < 440 then 5  -- mutate_literal
+  else if roll < 450 then 6  -- duplicate_subgraph
+  else if roll < 460 then 7  -- wrap_in_guard
+  else if roll < 470 then 8  -- annotate_cost
+  else if roll < 560 then 9  -- wrap_in_map
+  else if roll < 650 then 10 -- wrap_in_filter
+  else if roll < 720 then 11 -- compose_stages
+  else if roll < 790 then 12 -- insert_zip
+  else if roll < 920 then 13 -- swap_fold_op
+  else if roll < 970 then 14 -- add_guard_condition
+  else 15                     -- extract_to_ref
+
+-- -------------------------------------------------------------------------
+-- Operator 7: wrap_in_guard
+-- Wrap a random node in a Guard(predicate, body, fallback) structure
+-- Creates Guard node with Lit(true) predicate and Lit(0) fallback
+-- -------------------------------------------------------------------------
+let wrap_in_guard program target_nid : Int -> Int -> Int [cost: Const(12)] =
+  -- Create predicate node: ge comparison (Prim, opcode 36)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let pred_id = step1.1 in
+  let _spo0 = graph_set_prim_op prog1 pred_id 36 in
+  let prog1 = _spo0.0 in
+  let pred_id = _spo0.1 in
+  -- Create fallback node: Lit(0) placeholder
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let fallback_id = step2.1 in
+  -- Create the Guard node (kind 0x11)
+  let step3 = graph_add_node_rt prog2 17 in
+  let prog3 = step3.0 in
+  let guard_id = step3.1 in
+  -- Wire: guard -> predicate (port 0), guard -> body (port 1), guard -> fallback (port 2)
+  let p4 = graph_connect prog3 guard_id pred_id 0 in
+  let p5 = graph_connect p4 guard_id target_nid 1 in
+  let p6 = graph_connect p5 guard_id fallback_id 2 in
+  -- Replace references to target with guard
+  graph_replace_subtree p6 target_nid guard_id
+
+-- -------------------------------------------------------------------------
+-- Operator 8: annotate_cost
+-- Add a cost annotation to a node (modifies the node's cost metadata)
+-- cost_level: 0=Zero(Unit), 1=Inherited, 2+=Const(cost_level)
+-- Uses graph_set_cost to set cost metadata directly on the node,
+-- matching the Rust annotate_cost which sets node.cost = CostTerm::Annotated(cost).
+-- -------------------------------------------------------------------------
+let annotate_cost program target_nid cost_level : Int -> Int -> Int -> Int [cost: Const(4)] =
+  -- graph_set_cost(program, node_id, cost_val) sets the cost metadata:
+  --   0 = CostTerm::Unit
+  --   1 = CostTerm::Inherited
+  --   n >= 2 = CostTerm::Annotated(CostBound::Constant(n))
+  graph_set_cost program target_nid cost_level
+
+-- -------------------------------------------------------------------------
+-- Operator 9: wrap_in_map
+-- Insert a Map node between a Fold's input and the Fold
+-- Before: Fold(base, step)
+-- After:  Fold(base, step, Map(input, random_op))
+-- -------------------------------------------------------------------------
+let wrap_in_map program fold_nid seed : Int -> Int -> Int -> Int [cost: Const(14)] =
+  -- Choose map operation: 0=add, 2=mul, 5=neg, 6=abs, 8=max
+  let s = if seed < 0 then 0 - seed else seed in
+  let choice = s - (s / 5) * 5 in
+  let map_opcode = if choice == 0 then 0
+    else if choice == 1 then 2
+    else if choice == 2 then 5
+    else if choice == 3 then 6
+    else 8 in
+  -- Create map step function node (Prim, then set opcode)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let map_step_id = step1.1 in
+  let _spo1 = graph_set_prim_op prog1 map_step_id map_opcode in
+  let prog1 = _spo1.0 in
+  let map_step_id = _spo1.1 in
+  -- Create map node (Prim, opcode 48)
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let map_id = step2.1 in
+  let _spo2 = graph_set_prim_op prog2 map_id 48 in
+  let prog2 = _spo2.0 in
+  let map_id = _spo2.1 in
+  -- Wire: map -> step function (port 1)
+  let p3 = graph_connect prog2 map_id map_step_id 1 in
+  -- Wire: fold -> map (port 2, collection override)
+  graph_connect p3 fold_nid map_id 2
+
+-- -------------------------------------------------------------------------
+-- Operator 10: wrap_in_filter
+-- Insert a Filter before a Fold's input collection
+-- Before: Fold(base, step)
+-- After:  Fold(base, step, Filter(input, cmp_op))
+-- -------------------------------------------------------------------------
+let wrap_in_filter program fold_nid seed : Int -> Int -> Int -> Int [cost: Const(14)] =
+  -- Choose comparison operation: opcodes 32-37 for eq/ne/lt/gt/le/ge
+  let s = if seed < 0 then 0 - seed else seed in
+  let choice = s - (s / 6) * 6 in
+  let cmp_opcode = 32 + choice in
+  -- Create filter predicate node (Prim, then set opcode)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let pred_id = step1.1 in
+  let _spo3 = graph_set_prim_op prog1 pred_id cmp_opcode in
+  let prog1 = _spo3.0 in
+  let pred_id = _spo3.1 in
+  -- Create filter node (Prim, opcode 49)
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let filter_id = step2.1 in
+  let _spo4 = graph_set_prim_op prog2 filter_id 49 in
+  let prog2 = _spo4.0 in
+  let filter_id = _spo4.1 in
+  -- Wire: filter -> predicate (port 1)
+  let p3 = graph_connect prog2 filter_id pred_id 1 in
+  -- Wire: fold -> filter (port 2, collection override)
+  graph_connect p3 fold_nid filter_id 2
+
+-- -------------------------------------------------------------------------
+-- Operator 11: compose_stages
+-- Pipe existing output into a new Fold or Map stage
+-- Before: program output O
+-- After:  Fold(base, step, O) or Map(O, op) as new root
+-- -------------------------------------------------------------------------
+let compose_stages_fold program root_nid fold_opcode : Int -> Int -> Int -> Int [cost: Const(12)] =
+  -- Choose semantically matched base value
+  let base_val = if fold_opcode == 0 then 0
+    else if fold_opcode == 2 then 1
+    else if fold_opcode == 7 then 999999999
+    else if fold_opcode == 8 then 0 - 999999999
+    else 0 in
+  -- Create fold step function (Prim, then set opcode)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let step_id = step1.1 in
+  let _spo5 = graph_set_prim_op prog1 step_id fold_opcode in
+  let prog1 = _spo5.0 in
+  let step_id = _spo5.1 in
+  -- Create base literal
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let base_id = step2.1 in
+  -- Wire: create fold structure
+  let p3 = graph_connect prog2 base_id step_id 0 in
+  let p4 = graph_connect p3 step_id root_nid 1 in
+  graph_replace_subtree p4 root_nid step_id
+
+let compose_stages_map program root_nid map_opcode : Int -> Int -> Int -> Int [cost: Const(10)] =
+  -- Create map step function (Prim, then set opcode)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let step_fn_id = step1.1 in
+  let _spo6 = graph_set_prim_op prog1 step_fn_id map_opcode in
+  let prog1 = _spo6.0 in
+  let step_fn_id = _spo6.1 in
+  -- Create map node (Prim, opcode 48)
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let map_id = step2.1 in
+  let _spo7 = graph_set_prim_op prog2 map_id 48 in
+  let prog2 = _spo7.0 in
+  let map_id = _spo7.1 in
+  -- Wire: map -> old_root (port 0), map -> step_fn (port 1)
+  let p3 = graph_connect prog2 map_id root_nid 0 in
+  let p4 = graph_connect p3 map_id step_fn_id 1 in
+  graph_replace_subtree p4 root_nid map_id
+
+-- -------------------------------------------------------------------------
+-- Operator 12: insert_zip
+-- Insert Zip(input_a, input_b) before a Fold, with Map over the pairs
+-- Before: Fold(base, step)
+-- After:  Fold(base, step, Map(Zip(a, b), pair_op))
+-- -------------------------------------------------------------------------
+let insert_zip program fold_nid seed : Int -> Int -> Int -> Int [cost: Const(18)] =
+  -- Choose pair operation: 0=add, 1=sub, 2=mul, 8=max
+  let s = if seed < 0 then 0 - seed else seed in
+  let choice = s - (s / 4) * 4 in
+  let pair_opcode = if choice == 0 then 0
+    else if choice == 1 then 1
+    else if choice == 2 then 2
+    else 8 in
+  -- Create zip node (Prim, opcode 50)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let zip_id = step1.1 in
+  let _spo8 = graph_set_prim_op prog1 zip_id 50 in
+  let prog1 = _spo8.0 in
+  let zip_id = _spo8.1 in
+  -- Create pair operation node (Prim, then set opcode)
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let pair_op_id = step2.1 in
+  let _spo9 = graph_set_prim_op prog2 pair_op_id pair_opcode in
+  let prog2 = _spo9.0 in
+  let pair_op_id = _spo9.1 in
+  -- Create map node (Prim, opcode 48)
+  let step3 = graph_add_node_rt prog2 0 in
+  let prog3 = step3.0 in
+  let map_id = step3.1 in
+  let _spo10 = graph_set_prim_op prog3 map_id 48 in
+  let prog3 = _spo10.0 in
+  let map_id = _spo10.1 in
+  -- Wire: map -> zip (port 0), map -> pair_op (port 1)
+  let p4 = graph_connect prog3 map_id zip_id 0 in
+  let p5 = graph_connect p4 map_id pair_op_id 1 in
+  -- Wire: fold -> map (port 2, collection override)
+  graph_connect p5 fold_nid map_id 2
+
+-- -------------------------------------------------------------------------
+-- Operator 13: swap_fold_op (MOST IMPORTANT - 13% weight)
+-- Change a Fold's step operation AND adjust base value to match
+-- This is the correlated mutation that solves factorial/product/min/max
+-- -------------------------------------------------------------------------
+let swap_fold_op program fold_nid base_nid step_nid seed : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(10)] =
+  -- Choose new fold op + matching base:
+  -- 0: add, base=0
+  -- 1: sub, base=0
+  -- 2: mul, base=1
+  -- 3: min, base=MAX_INT
+  -- 4: max, base=MIN_INT
+  let s = if seed < 0 then 0 - seed else seed in
+  let choice = s - (s / 5) * 5 in
+  let new_opcode = if choice == 0 then 0
+    else if choice == 1 then 1
+    else if choice == 2 then 2
+    else if choice == 3 then 7
+    else 8 in
+  let new_base = if choice == 0 then 0
+    else if choice == 1 then 0
+    else if choice == 2 then 1
+    else if choice == 3 then 999999999
+    else 0 - 999999999 in
+  -- Replace step function opcode
+  let _spo11 = graph_set_prim_op program step_nid new_opcode in
+  let p1 = _spo11.0 in
+  let step_nid = _spo11.1 in
+  -- Replace base literal value (using set_prim_op on the base node)
+  graph_set_prim_op p1 base_nid new_base
+
+-- -------------------------------------------------------------------------
+-- Operator 14: add_guard_condition
+-- Wrap a computation in Guard(Compare(input, constant, cmp), body, fallback)
+-- -------------------------------------------------------------------------
+let add_guard_condition program body_nid seed : Int -> Int -> Int -> Int [cost: Const(16)] =
+  -- Choose comparison: opcodes 34-37 for lt/gt/le/ge
+  let s = if seed < 0 then 0 - seed else seed in
+  let choice = s - (s / 4) * 4 in
+  let cmp_opcode = 34 + choice in
+  -- Choose constant to compare against (-10 to 10)
+  let const_val = (s - (s / 21) * 21) - 10 in
+  -- Create comparison node (Prim, then set opcode)
+  let step1 = graph_add_node_rt program 0 in
+  let prog1 = step1.0 in
+  let cmp_id = step1.1 in
+  let _spo12 = graph_set_prim_op prog1 cmp_id cmp_opcode in
+  let prog1 = _spo12.0 in
+  let cmp_id = _spo12.1 in
+  -- Create constant node
+  let step2 = graph_add_node_rt prog1 0 in
+  let prog2 = step2.0 in
+  let const_id = step2.1 in
+  -- Create fallback node (Lit 0)
+  let step3 = graph_add_node_rt prog2 0 in
+  let prog3 = step3.0 in
+  let fallback_id = step3.1 in
+  -- Wire comparison: cmp -> constant (port 1)
+  let p4 = graph_connect prog3 cmp_id const_id 1 in
+  -- Create guard node (kind 0x11 = 17)
+  let step5 = graph_add_node_rt p4 17 in
+  let prog5 = step5.0 in
+  let guard_id = step5.1 in
+  let p6 = graph_connect prog5 guard_id cmp_id 0 in
+  let p7 = graph_connect p6 guard_id body_nid 1 in
+  let p8 = graph_connect p7 guard_id fallback_id 2 in
+  graph_replace_subtree p8 body_nid guard_id
+
+-- -------------------------------------------------------------------------
+-- Operator 15: extract_to_ref
+-- Extract a subgraph into a separate fragment referenced by a Ref node
+-- -------------------------------------------------------------------------
+let extract_to_ref program victim_nid seed : Int -> Int -> Int -> Int [cost: Const(8)] =
+  -- Create a Ref node that references a synthetic fragment ID
+  -- The fragment ID is derived from the victim node's hash + entropy
+  let step1 = graph_add_node_rt program 0 in  -- placeholder ref node
+  let prog1 = step1.0 in
+  let ref_id = step1.1 in
+  -- Replace the victim with the ref node
+  graph_replace_subtree prog1 victim_nid ref_id
+
+-- -------------------------------------------------------------------------
+-- Operator 6: duplicate_subgraph
+-- Copy a subgraph (node + 1-hop successors) and connect the copy
+-- -------------------------------------------------------------------------
+let duplicate_subgraph program start_nid seed : Int -> Int -> Int -> Int [cost: Const(10)] =
+  -- Create a copy of the start node with a new opcode (perturbed)
+  let kind = graph_get_kind program start_nid in
+  let step1 = graph_add_node_rt program kind in
+  let prog1 = step1.0 in
+  let dup_id = step1.1 in
+  -- Connect the duplicate to the original (or a random node)
+  graph_connect prog1 dup_id start_nid 0
+
+-- =========================================================================
+-- Dispatch: apply a mutation operator by index
+-- Routes ALL 16 operators (0-15) by their index.
+-- =========================================================================
+let dispatch_mutation program seed : Int -> Int -> Int [cost: Const(20)] =
+  let op = select_operator seed in
+  let root = graph_get_root program in
+  -- For operators that need a target node, use root as default
+  -- Real implementation would pick a random node via RNG
+  if op == 0 then
+    -- insert_node: add a new Prim node with random opcode and connect to root
+    let new_opcode = point_mutate_prim 0 seed in
+    let step = graph_add_node_rt program 0 in
+    let prog = step.0 in
+    let nid = step.1 in
+    let _spo13 = graph_set_prim_op prog nid new_opcode in
+    let prog = _spo13.0 in
+    let nid = _spo13.1 in
+    graph_connect prog root nid 0
+  else if op == 1 then
+    -- delete_node: simplified no-op
+    program
+  else if op == 2 then
+    -- rewire_edge: add new Prim node and rewire
+    let new_opcode = point_mutate_prim 0 seed in
+    let step = graph_add_node_rt program 0 in
+    let prog = step.0 in
+    let nid = step.1 in
+    let _spo14 = graph_set_prim_op prog nid new_opcode in
+    let prog = _spo14.0 in
+    let nid = _spo14.1 in
+    graph_connect prog root nid 0
+  else if op == 3 then
+    -- replace_kind: add new Prim node with different opcode
+    let new_opcode = point_mutate_prim 0 seed in
+    let step = graph_add_node_rt program 0 in
+    let prog = step.0 in
+    let nid = step.1 in
+    let _spo15 = graph_set_prim_op prog nid new_opcode in
+    let prog = _spo15.0 in
+    let nid = _spo15.1 in
+    graph_connect prog root nid 0
+  else if op == 4 then
+    -- replace_prim: change a Prim node's opcode
+    let new_op = point_mutate_prim 0 seed in
+    graph_set_prim_op program root new_op
+  else if op == 5 then
+    -- mutate_literal: perturb a constant value
+    let delta = 5 in
+    perturb_constant 0 delta seed
+  else if op == 6 then
+    -- duplicate_subgraph: copy a node and connect it
+    duplicate_subgraph program root seed
+  else if op == 7 then
+    -- wrap_in_guard: wrap root in a guard structure
+    wrap_in_guard program root
+  else if op == 8 then
+    -- annotate_cost: set cost metadata on root
+    let cost_val = if seed < 0 then 0 - seed else seed in
+    let choice = cost_val - (cost_val / 3) * 3 in
+    let cost_level = if choice == 0 then 0
+      else if choice == 1 then 1
+      else 2 + (cost_val - (cost_val / 100) * 100) in
+    annotate_cost program root cost_level
+  else if op == 9 then
+    -- wrap_in_map: insert a Map before a fold
+    wrap_in_map program root seed
+  else if op == 10 then
+    -- wrap_in_filter: insert a Filter before a fold
+    wrap_in_filter program root seed
+  else if op == 11 then
+    -- compose_stages: pipe output into a new fold or map
+    let s = if seed < 0 then 0 - seed else seed in
+    let use_fold = s - (s / 2) * 2 in
+    if use_fold == 0 then compose_stages_fold program root 0
+    else compose_stages_map program root 0
+  else if op == 12 then
+    -- insert_zip: insert zip before a fold
+    insert_zip program root seed
+  else if op == 13 then
+    -- swap_fold_op: the most important operator (correlated base+step change)
+    swap_fold_op program root root root seed
+  else if op == 14 then
+    -- add_guard_condition: wrap in a conditional guard
+    add_guard_condition program root seed
+  else
+    -- op == 15: extract_to_ref
+    extract_to_ref program root seed

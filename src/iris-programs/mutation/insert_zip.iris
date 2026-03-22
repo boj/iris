@@ -1,0 +1,37 @@
+-- Insert a Zip+Map structure between a Fold and its collection
+-- Creates: map(zip(input_a, input_b), binary_op) → fold.port2
+let insert_zip program fold_id collection_id binary_opcode =
+  -- Create two input placeholders (Lit nodes)
+  let s1 = graph_add_node_rt program 5 in
+  let p1 = s1.0 in
+  let input_a = s1.1 in
+  let s2 = graph_add_node_rt p1 5 in
+  let p2 = s2.0 in
+  let input_b = s2.1 in
+  -- Create Zip node (opcode 0x32)
+  let s3 = graph_add_node_rt p2 0 in
+  let p3 = s3.0 in
+  let zip_id = s3.1 in
+  let p4_t = graph_set_prim_op p3 zip_id 50 in
+  let p4 = p4_t.0 in
+  -- Create binary op for Map step
+  let s4 = graph_add_node_rt p4 0 in
+  let p5 = s4.0 in
+  let op_id = s4.1 in
+  let p6_t = graph_set_prim_op p5 op_id binary_opcode in
+  let p6 = p6_t.0 in
+  -- Create Map node (opcode 0x30)
+  let s5 = graph_add_node_rt p6 0 in
+  let p7 = s5.0 in
+  let map_id = s5.1 in
+  let p8_t = graph_set_prim_op p7 map_id 48 in
+  let p8 = p8_t.0 in
+  -- Wire zip(a, b)
+  let p9 = graph_connect p8 zip_id input_a 0 in
+  let p10 = graph_connect p9 zip_id input_b 1 in
+  -- Wire map(zip, op)
+  let p11 = graph_connect p10 map_id zip_id 0 in
+  let p12 = graph_connect p11 map_id op_id 1 in
+  -- Disconnect fold from old collection, wire to map
+  let p13 = graph_disconnect p12 fold_id collection_id in
+  graph_connect p13 fold_id map_id 2

@@ -1,0 +1,85 @@
+-- Seed generator: construct a zip+map+fold composition program
+--
+-- Builds a SemanticGraph: fold(base, fold_op, map(zip(input_a, input_b), pair_op))
+-- Seeds programs like dot product: fold(0, add, map(zip(a, b), mul))
+--
+-- Graph structure:
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)              base case
+--     port 1 -> Prim(add)           fold step (accumulate)
+--     port 2 -> Map                 collection override
+--                 port 0 -> Zip     zipped pair inputs
+--                             port 0 -> Tuple (input_a placeholder)
+--                             port 1 -> Lit(0) (input_b placeholder)
+--                 port 1 -> Prim(mul) pair operation
+--
+-- This is the full 3-stage composition: zip -> map -> fold
+-- Opcodes: add=0x00, mul=0x02, map=0x30(48), zip=0x32(50)
+
+-- Build the complete zip+map+fold pipeline
+let generate_zip_map_fold program : Int -> Int [cost: Const(24)] =
+  -- Add zip node (Prim, opcode 50)
+  let z = graph_add_node_rt program 0 in
+  let p1 = z.0 in
+  let zip_id = z.1 in
+  let _spo0 = graph_set_prim_op p1 zip_id 50 in
+  let p1 = _spo0.0 in
+  let zip_id = _spo0.1 in
+  -- Add pair operation: mul (opcode 2)
+  let m = graph_add_node_rt p1 0 in
+  let p2 = m.0 in
+  let mul_id = m.1 in
+  let _spo1 = graph_set_prim_op p2 mul_id 2 in
+  let p2 = _spo1.0 in
+  let mul_id = _spo1.1 in
+  -- Add map node (Prim, opcode 48): map(zipped_pairs, mul)
+  let mp = graph_add_node_rt p2 0 in
+  let p3 = mp.0 in
+  let map_id = mp.1 in
+  let _spo2 = graph_set_prim_op p3 map_id 48 in
+  let p3 = _spo2.0 in
+  let map_id = _spo2.1 in
+  let p4 = graph_connect p3 map_id zip_id 0 in
+  let p5 = graph_connect p4 map_id mul_id 1 in
+  -- Add fold step: add (opcode 0)
+  let fs = graph_add_node_rt p5 0 in
+  let p6 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root
+  let root = graph_get_root p6 in
+  let p7 = graph_connect p6 root add_id 1 in
+  graph_connect p7 root map_id 2
+
+-- Variant: zip+map+fold with subtraction for difference-based patterns
+let generate_zip_map_fold_sub program : Int -> Int [cost: Const(24)] =
+  -- Add zip node (Prim, opcode 50)
+  let z = graph_add_node_rt program 0 in
+  let p1 = z.0 in
+  let zip_id = z.1 in
+  let _spo3 = graph_set_prim_op p1 zip_id 50 in
+  let p1 = _spo3.0 in
+  let zip_id = _spo3.1 in
+  -- Add pair operation: sub (opcode 1)
+  let m = graph_add_node_rt p1 0 in
+  let p2 = m.0 in
+  let sub_id = m.1 in
+  let _spo4 = graph_set_prim_op p2 sub_id 1 in
+  let p2 = _spo4.0 in
+  let sub_id = _spo4.1 in
+  -- Add map node (Prim, opcode 48): map(zipped_pairs, sub)
+  let mp = graph_add_node_rt p2 0 in
+  let p3 = mp.0 in
+  let map_id = mp.1 in
+  let _spo5 = graph_set_prim_op p3 map_id 48 in
+  let p3 = _spo5.0 in
+  let map_id = _spo5.1 in
+  let p4 = graph_connect p3 map_id zip_id 0 in
+  let p5 = graph_connect p4 map_id sub_id 1 in
+  -- Add fold step: add (opcode 0) to sum the differences
+  let fs = graph_add_node_rt p5 0 in
+  let p6 = fs.0 in
+  let add_id = fs.1 in
+  -- Wire fold root
+  let root = graph_get_root p6 in
+  let p7 = graph_connect p6 root add_id 1 in
+  graph_connect p7 root map_id 2

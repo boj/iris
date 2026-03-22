@@ -1,0 +1,30 @@
+-- Fibonacci TCP Server
+-- Accepts a connection, reads a number N, computes fib(N), and sends it back.
+-- Uses unfold for efficient iterative fibonacci computation.
+
+-- Compute fibonacci using unfold.
+-- unfold (0, 1) (+) n produces the fibonacci sequence [0, 1, 1, 2, 3, 5, ...]
+let fib_sequence n : Int -> Tuple [cost: Linear(n)] =
+  unfold (0, 1) (+) n
+
+-- Get the Nth fibonacci number (0-indexed).
+let fib n : Int -> Int [cost: Linear(n)] =
+  if n <= 0 then 0
+  else
+    let seq = unfold (0, 1) (+) (n + 1) in
+    list_nth seq n
+
+-- Serve a single request: read a number, compute fib, send result.
+let serve_fib conn : Int -> Int [cost: Unknown] =
+  let data = tcp_read conn 1024 in
+  let n = str_to_int data in
+  let result = fib n in
+  let response = int_to_string result in
+  let w = tcp_write conn response in
+  tcp_close conn
+
+-- Start the fibonacci server on the given port.
+let main port : Int -> Int [cost: Unknown] =
+  let listener = tcp_listen port in
+  let conn = tcp_accept listener in
+  serve_fib conn

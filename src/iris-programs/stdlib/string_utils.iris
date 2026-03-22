@@ -1,0 +1,91 @@
+-- String utilities: higher-level string operations
+--
+-- Composed from the built-in string primitives (0xB0-0xC0).
+
+-- Split a string into words (split by spaces)
+let words s : Int -> Int [cost: Linear(s)] =
+  str_split (str_trim s) " "
+
+-- Split a string into lines (split by newline)
+let lines s : Int -> Int [cost: Linear(s)] =
+  str_split s "\n"
+
+-- Check if a string starts with a given prefix
+let starts_with s prefix : Int -> Int -> Int [cost: Const(2)] =
+  str_starts_with s prefix
+
+-- Check if a string ends with a given suffix
+let ends_with s suffix : Int -> Int -> Int [cost: Const(2)] =
+  str_ends_with s suffix
+
+-- Join a tuple of strings with newlines
+let unlines parts : Int -> Int [cost: Linear(parts)] =
+  str_join parts "\n"
+
+-- Join a tuple of strings with spaces
+let unwords parts : Int -> Int [cost: Linear(parts)] =
+  str_join parts " "
+
+-- Capitalize the first character (uppercase first, keep rest)
+let capitalize s : Int -> Int [cost: Linear(s)] =
+  if str_len s == 0 then s
+  else
+    let first = str_upper (str_slice s 0 1) in
+    let rest = str_slice s 1 (str_len s) in
+    str_concat first rest
+
+-- Convert to title case (capitalize each word)
+let title_case s : Int -> Int [cost: Linear(s)] =
+  let ws = str_split (str_trim s) " " in
+  str_join ws " "
+
+-- Strip a prefix from a string (if present)
+let strip_prefix s prefix : Int -> Int -> Int [cost: Linear(s)] =
+  if str_starts_with s prefix == 1 then
+    str_slice s (str_len prefix) (str_len s)
+  else s
+
+-- Strip a suffix from a string (if present)
+let strip_suffix s suffix : Int -> Int -> Int [cost: Linear(s)] =
+  if str_ends_with s suffix == 1 then
+    str_slice s 0 (str_len s - str_len suffix)
+  else s
+
+-- Check if a string contains only digits
+let is_numeric s : Int -> Int [cost: Linear(s)] =
+  if str_len s == 0 then 0
+  else
+    fold 1
+      (\acc i ->
+        let ch = char_at s i in
+        if ch >= 48 && ch <= 57 then acc
+        else 0)
+      (str_len s)
+
+-- Check if a string contains only alphabetic characters
+let is_alpha s : Int -> Int [cost: Linear(s)] =
+  if str_len s == 0 then 0
+  else
+    fold 1
+      (\acc i ->
+        let ch = char_at s i in
+        if (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) then acc
+        else 0)
+      (str_len s)
+
+-- Truncate a string to a maximum length, adding "..." if truncated
+let truncate s max_len : Int -> Int -> Int [cost: Const(3)] =
+  if str_len s <= max_len then s
+  else str_concat (str_slice s 0 (max_len - 3)) "..."
+
+-- Remove all occurrences of a character/substring
+let remove_all s target : Int -> Int -> Int [cost: Linear(s)] =
+  str_replace s target ""
+
+-- Surround a string with a delimiter (e.g., quote it)
+let surround s wrapper : Int -> Int -> Int [cost: Const(3)] =
+  str_concat (str_concat wrapper s) wrapper
+
+-- Quote a string with double quotes
+let quote s : Int -> Int [cost: Const(3)] =
+  surround s "\""

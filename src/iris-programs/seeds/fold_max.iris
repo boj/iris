@@ -1,0 +1,18 @@
+-- Seed generator: construct a fold+max comparison program
+--
+-- Builds a SemanticGraph: fold(MIN_INT, max, input) = max(input)
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(MIN_INT)  base case (negative infinity for max)
+--     port 1 -> Prim(max)     step function (max of accumulator and element)
+--
+-- Uses self_graph to obtain a base program, adds a Prim(max) node,
+-- then wires it as the fold step via graph_connect.
+-- Opcode: max = 0x08
+let generate_fold_max program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 8 in
+  let prog = step.0 in
+  let max_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root max_id 1

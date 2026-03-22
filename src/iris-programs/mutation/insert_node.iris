@@ -1,0 +1,6 @@
+-- Insert a new Prim node into a program
+let insert_node program opcode =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let nid = step.1 in
+  graph_set_prim_op prog nid opcode

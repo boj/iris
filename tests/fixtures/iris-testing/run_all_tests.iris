@@ -1,0 +1,49 @@
+-- IRIS-native self-hosted test runner.
+--
+-- This program IS the test suite. Zero Rust test files.
+-- The only Rust is the bootstrap binary (permanent substrate).
+--
+-- Substrate primitives used:
+--   compile_test_file root test_path -> Int (module_id)
+--   module_test_count module_id      -> Int (number of test_ bindings)
+--   module_eval_test module_id idx   -> Value (evaluates Nth test binding)
+--
+-- Takes the project root path as input (String).
+-- Returns a tuple of (test_path: String, passed: Int, failed: Int) per file.
+
+-- Run all tests in a compiled module. Returns (passed, failed).
+let eval_module_tests module_id =
+  let n = module_test_count module_id in
+  fold (0, 0) (\acc i ->
+    let passed = acc.0 in
+    let failed = acc.1 in
+    let result = module_eval_test module_id i in
+    if result > 0 then (passed + 1, failed)
+    else (passed, failed + 1)
+  ) n
+
+-- Test file manifest
+let test_files = (
+  "programs/testing/test_analyzer.iris",
+  "programs/testing/test_capability_wiring.iris",
+  "programs/testing/test_codec.iris",
+  "programs/testing/test_deploy.iris",
+  "programs/testing/test_effects.iris",
+  "programs/testing/test_evolution.iris",
+  "programs/testing/test_jit.iris",
+  "programs/testing/test_lsp.iris",
+  "programs/testing/test_meta.iris",
+  "programs/testing/test_repr.iris",
+  "programs/testing/test_vm.iris"
+)
+
+-- Main entry point: compile and run all test files.
+-- Returns tuple of (test_path, passed, failed) per file.
+let run_all root =
+  let n = list_len test_files in
+  fold (list_range 0 0) (\results i ->
+    let test_path = list_nth test_files i in
+    let module_id = compile_test_file root test_path in
+    let file_result = eval_module_tests module_id in
+    list_append results (test_path, file_result.0, file_result.1)
+  ) n

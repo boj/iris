@@ -1,0 +1,163 @@
+-- FASTA (Benchmarks Game)
+-- Generate random DNA sequences using a linear congruential generator (LCG).
+--
+-- The benchmark generates three types of output:
+--   1. A repeated sequence (ALU)
+--   2. A random DNA sequence using weighted probabilities
+--   3. A random amino acid sequence using weighted probabilities
+--
+-- Since IRIS has no string mutation, we use fold to build sequences
+-- character by character.
+
+-- Linear congruential generator constants (same as Benchmarks Game spec)
+-- seed = (seed * IA + IC) % IM
+let im = 139968
+let ia = 3877
+let ic = 29573
+
+-- Advance the LCG and return (new_seed, random_float in [0,1))
+let lcg_next seed =
+  let new_seed = (seed * 3877 + 29573) % 139968 in
+  (new_seed, int_to_float new_seed / 139968.0)
+
+-- DNA nucleotides with cumulative probabilities
+-- A: 0.27, C: 0.12, G: 0.12, T: 0.27, rest: small
+-- Cumulative: A=0.27, C=0.39, G=0.51, T=0.78, ...
+-- Simplified: we use just ACGT with adjusted probabilities
+
+-- Select a nucleotide based on random value r in [0, 1)
+-- A: r < 0.27 -> "A"
+-- C: r < 0.39 -> "C"
+-- G: r < 0.51 -> "G"
+-- T: otherwise -> "T"
+let select_nucleotide r =
+  if r < 0.27 then "A"
+  else if r < 0.39 then "C"
+  else if r < 0.51 then "G"
+  else "T"
+
+-- Generate a random DNA sequence of length n
+-- Returns (final_seed, sequence_string)
+let random_dna n seed =
+  fold (seed, "") (\state iter_idx ->
+    let s = state.0 in
+    let seq = state.1 in
+    let next = lcg_next s in
+    let new_seed = next.0 in
+    let r = next.1 in
+    let nuc = select_nucleotide r in
+    (new_seed, str_concat seq nuc)
+  ) (list_range 0 n)
+
+-- Repeat a base string to fill n characters
+-- The ALU sequence is 287 chars, repeated to fill the required length
+let repeat_string base n =
+  let base_len = str_len base in
+  fold "" (\acc i ->
+    let pos = i % base_len in
+    str_concat acc (str_slice base pos (pos + 1))
+  ) (list_range 0 n)
+
+-- ALU sequence (abbreviated for the benchmark)
+let alu = "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAG"
+
+-- Main benchmark function
+-- Returns (alu_sequence, random_dna_sequence, final_seed)
+let fasta n =
+  let alu_out = repeat_string alu n in
+  let dna_res = random_dna n 42 in
+  let dna_out = dna_res.1 in
+  let final_seed = dna_res.0 in
+  (alu_out, dna_out, final_seed)
+
+-- Simplified benchmark: just generate random DNA of length n
+let fasta_dna n =
+  let res = random_dna n 42 in
+  res.1
+
+-- Generate a length for output verification
+let fasta_len n =
+  str_len (fasta_dna n)
+
+-- =========================================================================
+-- Buffer-based versions: O(n) instead of O(n^2)
+-- =========================================================================
+
+-- Generate random DNA using buf_push (O(1) amortized per character)
+let random_dna_buf n seed =
+  let buf = buf_new in
+  let result = fold (seed, buf) (\state i ->
+    let s = state.0 in
+    let b = state.1 in
+    let next = lcg_next s in
+    let new_seed = next.0 in
+    let r = next.1 in
+    let nuc = select_nucleotide r in
+    let b2 = buf_push b nuc in
+    (new_seed, b2)
+  ) (list_range 0 n) in
+  (result.0, buf_finish result.1)
+
+-- Buffer-based fasta benchmark
+let fasta_buf n =
+  let res = random_dna_buf n 42 in
+  res.1
+
+let fasta_buf_len n =
+  str_len (fasta_buf n)
+
+-- =========================================================================
+-- Native codegen version: integer-encoded nucleotides in fold body
+-- =========================================================================
+-- Encode nucleotides as integers (0=A, 1=C, 2=G, 3=T) inside the fold.
+-- The fold body is pure integer arithmetic → triggers GP native codegen.
+-- Convert to string only at the end via buf_push.
+
+-- Select nucleotide as integer: 0=A, 1=C, 2=G, 3=T
+-- Uses integer thresholds (27%, 39%, 51%) scaled to IM=139968
+-- 27% of 139968 = 37791, 39% = 54587, 51% = 71383
+let select_nuc_int r =
+  if r < 37791 then 0
+  else if r < 54587 then 1
+  else if r < 71383 then 2
+  else 3
+
+-- Generate random DNA as integer array via fold (native codegen eligible)
+-- State: (seed, count) — the nucleotide values are pushed to a buffer
+-- This fold body is all-integer: add, mul, mod, comparisons, guards
+let random_dna_native n seed =
+  let buf = buf_new in
+  let nucs = "ACGT" in
+  let result = fold (seed, buf) (\state i ->
+    let s = state.0 in
+    let b = state.1 in
+    let new_seed = (s * 3877 + 29573) % 139968 in
+    let nuc_idx = select_nuc_int new_seed in
+    let nuc_char = str_slice nucs nuc_idx (nuc_idx + 1) in
+    let b2 = buf_push b nuc_char in
+    (new_seed, b2)
+  ) (list_range 0 n) in
+  (result.0, buf_finish result.1)
+
+let fasta_native n =
+  let res = random_dna_native n 42 in
+  res.1
+
+-- Pure integer fold: compute (seed, nuc0, nuc1, ...) as a flat tuple
+-- This entire fold body is integer arithmetic → native GP codegen
+-- Then convert the integer nucleotides to a string in one pass
+let random_dna_int_only n seed =
+  fold (seed, 0) (\state i ->
+    let new_seed = (state.0 * 3877 + 29573) % 139968 in
+    let nuc = if new_seed < 37791 then 0
+              else if new_seed < 54587 then 1
+              else if new_seed < 71383 then 2
+              else 3 in
+    (new_seed, nuc)
+  ) (list_range 0 n)
+
+-- Just the seed computation (all-integer, native codegen eligible)
+let fasta_seed_only n seed =
+  fold seed (\s i ->
+    (s * 3877 + 29573) % 139968
+  ) (list_range 0 n)

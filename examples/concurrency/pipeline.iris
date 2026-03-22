@@ -1,0 +1,56 @@
+-- Pipeline Processing
+-- Chain multiple processing stages, each transforming data.
+-- Demonstrates the pipeline / dataflow pattern common in concurrent systems.
+-- In a real concurrent system, each stage would run in parallel (par_map).
+
+-- A pipeline stage is a function: Int -> Int.
+-- A pipeline is a tuple of stages.
+
+-- Run data through a single stage.
+let run_stage data stage : Tuple -> (Int -> Int) -> Tuple [cost: Linear(data)] =
+  map stage data
+
+-- Run data through an entire pipeline (chain of stages).
+let run_pipeline data stages : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  fold data (\current_data stage -> map stage current_data) stages
+
+-- Example stages for a data processing pipeline:
+-- 1. Filter: keep only positive numbers (map negative to 0 as a sentinel)
+let stage_filter_positive x : Int -> Int [cost: Const(1)] =
+  if x > 0 then x else 0
+
+-- 2. Transform: double each value
+let stage_double x : Int -> Int [cost: Const(1)] = x * 2
+
+-- 3. Transform: add offset
+let stage_offset x : Int -> Int [cost: Const(1)] = x + 10
+
+-- 4. Cap: clamp values to max 100
+let stage_cap x : Int -> Int [cost: Const(1)] =
+  if x > 100 then 100 else x
+
+-- Build and run a pipeline.
+let process_data data : Tuple -> Tuple [cost: Unknown] =
+  run_pipeline data (stage_filter_positive, stage_double, stage_offset, stage_cap)
+
+-- Fan-out: apply multiple independent transformations and collect results.
+let fan_out data transforms : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  map (\t -> map t data) transforms
+
+-- Fan-in: merge multiple result sets into one.
+let fan_in results : Tuple -> Tuple [cost: Unknown] =
+  fold () (\acc r -> list_concat acc r) results
+
+-- Parallel pipeline: fan-out, process independently, fan-in.
+let parallel_pipeline data : Tuple -> Tuple [cost: Unknown] =
+  let branch1 = map (\x -> x * 2) data in
+  let branch2 = map (\x -> x + 100) data in
+  let branch3 = map (\x -> x * x) data in
+  (branch1, branch2, branch3)
+
+-- Test
+let test_pipeline x : Int -> Tuple =
+  let data = (-5, 3, -1, 7, 12, 0, 45, 60) in
+  let processed = process_data data in
+  let parallel = parallel_pipeline (1, 2, 3, 4, 5) in
+  (processed, parallel)

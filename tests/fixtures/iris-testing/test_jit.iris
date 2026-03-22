@@ -1,0 +1,136 @@
+-- Tests for JIT subsystem: emit_x86, compile_node, jit_full
+-- depends: programs/jit/emit_x86.iris, programs/jit/compile_node.iris
+-- depends: programs/jit/jit_full.iris
+
+-- =========================================================================
+-- emit_x86.iris: byte encoding verification
+-- =========================================================================
+
+-- Test: emit_prologue produces non-empty bytes
+let test_emit_prologue_exists : Int [cost: Const(3)] =
+  let b = emit_prologue in
+  assert_gt (bytes_len b) 0 0
+
+-- Test: emit_prologue length is 4 bytes (push rbp; mov rbp, rsp)
+let test_emit_prologue_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_prologue) 4 0
+
+-- Test: emit_epilogue length is 3 bytes (pop rax; pop rbp; ret)
+let test_emit_epilogue_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_epilogue) 3 0
+
+-- Test: emit_add length is 6 bytes
+let test_emit_add_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_add) 6 0
+
+-- Test: emit_sub length is 6 bytes
+let test_emit_sub_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_sub) 6 0
+
+-- Test: emit_mul length is 7 bytes
+let test_emit_mul_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_mul) 7 0
+
+-- Test: emit_div produces non-empty bytes
+let test_emit_div_len : Int [cost: Const(3)] =
+  assert_gt (bytes_len emit_div) 0 0
+
+-- Test: emit_div is 29 bytes
+let test_emit_div_exact_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_div) 29 0
+
+-- Test: emit_mod produces non-empty bytes
+let test_emit_mod_exists : Int [cost: Const(3)] =
+  assert_gt (bytes_len emit_mod) 0 0
+
+-- Test: emit_neg length is 5 bytes
+let test_emit_neg_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_neg) 5 0
+
+-- Test: emit_eq length is 13 bytes
+let test_emit_eq_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_eq) 13 0
+
+-- Test: emit_lt length is 13 bytes
+let test_emit_lt_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_lt) 13 0
+
+-- Test: emit_push_imm64 produces 11-byte sequence
+let test_emit_push_imm64_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_push_imm64 42)) 11 0
+
+-- Test: emit_test_rax length is 3 bytes
+let test_emit_test_rax_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_test_rax) 3 0
+
+-- Test: emit_jz_placeholder length is 6 bytes
+let test_emit_jz_placeholder_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_jz_placeholder) 6 0
+
+-- Test: emit_jmp_placeholder length is 5 bytes
+let test_emit_jmp_placeholder_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len emit_jmp_placeholder) 5 0
+
+-- Test: emit_arith_op(0) same as emit_add
+let test_emit_arith_op_add : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_arith_op 0)) (bytes_len emit_add) 0
+
+-- Test: emit_arith_op(1) same as emit_sub
+let test_emit_arith_op_sub : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_arith_op 1)) (bytes_len emit_sub) 0
+
+-- Test: emit_arith_op(2) same as emit_mul
+let test_emit_arith_op_mul : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_arith_op 2)) (bytes_len emit_mul) 0
+
+-- Test: emit_load_arg(0) produces 4 bytes
+let test_emit_load_arg_0 : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_load_arg 0)) 4 0
+
+-- Test: emit_load_arg(1) produces 4 bytes
+let test_emit_load_arg_1 : Int [cost: Const(3)] =
+  assert_eq (bytes_len (emit_load_arg 1)) 4 0
+
+-- =========================================================================
+-- compile_node.iris: opcode classification and byte compilation
+-- =========================================================================
+
+-- Test: is_unary_op for neg (opcode 5)
+let test_compile_node_is_unary_neg : Int [cost: Const(3)] =
+  assert_eq (is_unary_op 5) 1 0
+
+-- Test: is_unary_op for abs (opcode 6)
+let test_compile_node_is_unary_abs : Int [cost: Const(3)] =
+  assert_eq (is_unary_op 6) 1 0
+
+-- Test: is_unary_op for add (opcode 0) should be false
+let test_compile_node_is_unary_add : Int [cost: Const(3)] =
+  assert_eq (is_unary_op 0) 0 0
+
+-- Test: compile_constant produces 11-byte sequence
+let test_compile_constant_len : Int [cost: Const(3)] =
+  assert_eq (bytes_len (compile_constant 100)) 11 0
+
+-- Test: compile_argref(0) produces 4 bytes
+let test_compile_argref_0 : Int [cost: Const(3)] =
+  assert_eq (bytes_len (compile_argref 0)) 4 0
+
+-- Test: compile_argref(3) produces 4 bytes
+let test_compile_argref_3 : Int [cost: Const(3)] =
+  assert_eq (bytes_len (compile_argref 3)) 4 0
+
+-- Test: compile_binop for add (opcode 0) is same length as emit_add
+let test_compile_binop_add : Int [cost: Const(3)] =
+  assert_eq (bytes_len (compile_binop 0)) (bytes_len emit_add) 0
+
+-- Test: compile_unaryop for neg (opcode 5) produces 5 bytes
+let test_compile_unaryop_neg : Int [cost: Const(3)] =
+  assert_eq (bytes_len (compile_unaryop 5)) 5 0
+
+-- =========================================================================
+-- jit_full.iris: is_jit_compilable
+-- Note: Graph construction tests (is_jit_compilable) require bootstrap
+-- evaluator intrinsics (graph_new, graph_add_node_rt) which are not
+-- available in the full interpreter. These tests are covered by the
+-- Rust-level test_exec_iris_programs test suite.
+-- =========================================================================

@@ -1,0 +1,102 @@
+-- Math standard library
+-- Built on math opcodes 0xD8-0xE3.
+
+-- Square root.
+let sqrt x : Float64 -> Float64 [cost: Const(1)] =
+  math_sqrt x
+
+-- Natural logarithm.
+let log x : Float64 -> Float64 [cost: Const(1)] =
+  math_log x
+
+-- Exponential (e^x).
+let exp x : Float64 -> Float64 [cost: Const(1)] =
+  math_exp x
+
+-- Sine.
+let sin x : Float64 -> Float64 [cost: Const(1)] =
+  math_sin x
+
+-- Cosine.
+let cos x : Float64 -> Float64 [cost: Const(1)] =
+  math_cos x
+
+-- Floor (round down to integer).
+let floor x : Float64 -> Int [cost: Const(1)] =
+  math_floor x
+
+-- Ceiling (round up to integer).
+let ceil x : Float64 -> Int [cost: Const(1)] =
+  math_ceil x
+
+-- Round to nearest integer.
+let round x : Float64 -> Int [cost: Const(1)] =
+  math_round x
+
+-- Pi constant.
+let pi : Float64 [cost: Const(1)] =
+  math_pi
+
+-- Euler's number (e) constant.
+let e : Float64 [cost: Const(1)] =
+  math_e
+
+-- Random integer in [min, max].
+let rand_int min max : Int -> Int -> Int [cost: Const(1)] =
+  random_int min max
+
+-- Random float in [0.0, 1.0).
+let rand_float : Float64 [cost: Const(1)] =
+  random_float
+
+-- Tangent.
+let tan x : Float64 -> Float64 [cost: Const(1)] =
+  math_sin x / math_cos x
+
+-- Absolute value (float).
+let fabs x : Float64 -> Float64 [cost: Const(1)] =
+  if x < 0.0 then 0.0 - x else x
+
+-- Power (x^y) using exp and log.
+let pow x y : Float64 -> Float64 -> Float64 [cost: Const(1)] =
+  math_exp (y * math_log x)
+
+-- Log base 10.
+let log10 x : Float64 -> Float64 [cost: Const(1)] =
+  math_log x / math_log 10.0
+
+-- Log base 2.
+let log2 x : Float64 -> Float64 [cost: Const(1)] =
+  math_log x / math_log 2.0
+
+-- Degrees to radians.
+let to_radians deg : Float64 -> Float64 [cost: Const(1)] =
+  deg * math_pi / 180.0
+
+-- Radians to degrees.
+let to_degrees rad : Float64 -> Float64 [cost: Const(1)] =
+  rad * 180.0 / math_pi
+
+-- Clamp value to [lo, hi].
+let clamp x lo hi : Float64 -> Float64 -> Float64 -> Float64 [cost: Const(1)] =
+  if x < lo then lo
+  else if x > hi then hi
+  else x
+
+-- Linear interpolation between a and b by factor t in [0,1].
+let lerp a b t : Float64 -> Float64 -> Float64 -> Float64 [cost: Const(1)] =
+  a + (b - a) * t
+
+-- Euclidean distance between two 2D points.
+let dist2d x1 y1 x2 y2 : Float64 -> Float64 -> Float64 -> Float64 -> Float64 [cost: Const(1)] =
+  math_sqrt ((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+
+-- Sigmoid function.
+let sigmoid x : Float64 -> Float64 [cost: Const(1)] =
+  1.0 / (1.0 + math_exp (0.0 - x))
+
+-- Hyperbolic tangent.
+let tanh x : Float64 -> Float64 [cost: Const(1)] =
+  let ex = math_exp x in
+  let emx = math_exp (0.0 - x) in
+  (ex - emx) / (ex + emx)

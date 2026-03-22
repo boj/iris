@@ -1,0 +1,7 @@
+-- Print file contents (like Unix cat)
+-- Opens a file, reads up to 1MB, prints to stdout
+let main path : Int -> Int [cost: Linear(path)] =
+  let h = file_open path 0 in
+  let contents = file_read_bytes h 1048576 in
+  let _ = file_close h in
+  print contents

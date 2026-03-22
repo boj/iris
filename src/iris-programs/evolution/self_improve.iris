@@ -1,0 +1,63 @@
+-- Self-improvement: IRIS programs that modify their own implementation
+--
+-- Core self-modification loop:
+--   1. Identify a component to improve (mutation operator, fitness fn, etc.)
+--   2. Generate candidate replacement via meta-evolution
+--   3. Verify the replacement passes all existing tests
+--   4. Verify the replacement satisfies the proof kernel
+--   5. Hot-swap the component if verified
+--
+-- Only the proof kernel is exempt from self-modification (Lob's theorem ceiling).
+-- Everything else is fair game: mutation operators, seed generators,
+-- compiler passes, the interpreter itself.
+
+-- Component categories that can be self-modified
+let component_mutation : Int [cost: Const(1)] = 0
+let component_fitness : Int [cost: Const(1)] = 1
+let component_seed : Int [cost: Const(1)] = 2
+let component_compiler : Int [cost: Const(1)] = 3
+let component_interpreter : Int [cost: Const(1)] = 4
+let component_count : Int [cost: Const(1)] = 5
+
+-- Check if a component is modifiable (not the proof kernel)
+-- Returns 1 if can be modified, 0 if exempt
+let is_modifiable component : Int -> Int [cost: Const(1)] =
+  -- All listed components are modifiable
+  -- The proof kernel is not in the component list
+  if component >= 0 then
+    if component < component_count then 1 else 0
+  else 0
+
+-- Compute improvement score: compare new vs old on test suite
+-- old_score: old component's test suite score
+-- new_score: new component's test suite score
+-- Returns: improvement delta (positive = better)
+let improvement_delta old_score new_score : Int -> Int -> Int [cost: Const(1)] =
+  new_score - old_score
+
+-- Check if improvement meets the minimum threshold
+-- delta: improvement delta
+-- threshold: minimum acceptable improvement (prevents noise-driven swaps)
+-- Returns 1 if meets threshold, 0 otherwise
+let meets_threshold delta threshold : Int -> Int -> Int [cost: Const(1)] =
+  if delta >= threshold then 1 else 0
+
+-- Minimum improvement threshold (1% = 100 on 10000 scale)
+let min_improvement_threshold : Int [cost: Const(1)] = 100
+
+-- Check if self-modification should proceed
+-- Requires: improvement above threshold + verification passes
+-- Returns 1 if should swap, 0 if should reject
+let should_swap improvement_delta verified : Int -> Int -> Int [cost: Const(2)] =
+  if verified == 1 then
+    meets_threshold improvement_delta min_improvement_threshold
+  else 0
+
+-- Self-improvement plan
+-- Returns (is_modifiable, estimated_improvement, should_attempt)
+let self_improve_plan component old_score new_score verified : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Const(4)] =
+  let modifiable = is_modifiable component in
+  let delta = improvement_delta old_score new_score in
+  let swap = should_swap delta verified in
+  let attempt = if modifiable == 1 then swap else 0 in
+  (modifiable, delta, attempt)

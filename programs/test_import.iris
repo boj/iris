@@ -1,0 +1,46 @@
+-- Test: path-based import of stdlib option
+import "stdlib/option.iris" as Option
+
+let test_unwrap_some : Int =
+  let x = Some(42) in
+  unwrap_or x 0
+
+let test_unwrap_none : Int =
+  unwrap_or None 99
+
+let test_map : Int =
+  let doubled = map (Some(21)) (\x -> x * 2) in
+  unwrap_or doubled 0
+
+let test_is_some : Bool =
+  is_some (Some(1))
+
+let test_is_none : Bool =
+  is_none None
+
+-- and_then: closure returns a sum type (monadic bind)
+let test_and_then_some : Int =
+  let result = and_then (Some(10)) (\x -> if x > 5 then Some(x * 3) else None) in
+  unwrap_or result 0
+
+let test_and_then_none : Int =
+  let result = and_then None (\x -> Some(x + 1)) in
+  unwrap_or result 0
+
+-- filter: predicate HOF
+let test_filter_pass : Bool =
+  let result = filter (Some(42)) (\x -> x > 10) in
+  is_some result
+
+let test_filter_fail : Bool =
+  let result = filter (Some(3)) (\x -> x > 10) in
+  is_none result
+
+-- unwrap_or_else: lazy default via closure
+let test_unwrap_or_else : Int =
+  unwrap_or_else None (\x -> 99)
+
+-- map on None returns None
+let test_map_none : Bool =
+  let result = map None (\x -> x + 1) in
+  is_none result

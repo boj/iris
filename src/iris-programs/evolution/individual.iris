@@ -1,0 +1,139 @@
+-- Individual representation with multi-objective fitness
+--
+-- 5-objective fitness vector: [correctness, performance, verifiability, cost, novelty]
+-- Each component in [0, 100] (integer-scaled from [0.0, 1.0]).
+-- Ranked via NSGA-II Pareto dominance, not scalarization.
+
+-- Number of fitness objectives
+let num_objectives : Int [cost: Const(1)] =
+  5
+
+-- Check Pareto dominance: does individual A dominate individual B?
+-- A dominates B iff A is >= B on all objectives and > B on at least one.
+-- fitness_a, fitness_b: tuples of 5 integer-scaled objectives
+-- Returns 1 if A dominates B, 0 otherwise
+let dominates a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(10)] =
+  let all_geq = (if a0 >= b0 then 1 else 0) * (if a1 >= b1 then 1 else 0) * (if a2 >= b2 then 1 else 0) * (if a3 >= b3 then 1 else 0) * (if a4 >= b4 then 1 else 0) in
+  let any_gt = (if a0 > b0 then 1 else 0) + (if a1 > b1 then 1 else 0) + (if a2 > b2 then 1 else 0) + (if a3 > b3 then 1 else 0) + (if a4 > b4 then 1 else 0) in
+  if all_geq == 1 then
+    if any_gt > 0 then 1 else 0
+  else 0
+
+-- Sum all fitness objectives (used for simple scalarized comparison)
+let total_fitness f0 f1 f2 f3 f4 : Int -> Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+  f0 + f1 + f2 + f3 + f4
+
+-- Access individual fitness components by index
+-- Returns the i-th objective value
+let get_objective f0 f1 f2 f3 f4 idx : Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  if idx == 0 then f0
+  else if idx == 1 then f1
+  else if idx == 2 then f2
+  else if idx == 3 then f3
+  else f4
+
+-- Convert f32-range fitness to integer-scaled (multiply by 100)
+-- Assumes input is in [0, 100] range already for integer IRIS
+let scale_fitness raw_fitness : Int -> Int [cost: Const(1)] =
+  raw_fitness
+
+-- Check if an individual is skeleton-protected at a given generation
+-- Returns 1 if protected, 0 otherwise
+let is_protected protected_until current_gen : Int -> Int -> Int [cost: Const(1)] =
+  if current_gen < protected_until then 1 else 0
+
+-- Compare two individuals by Pareto rank then crowding distance
+-- Lower rank is better; higher crowding distance breaks ties
+-- Returns 0 if a is preferred, 1 if b is preferred
+let compare_individuals rank_a crowd_a rank_b crowd_b : Int -> Int -> Int -> Int -> Int [cost: Const(2)] =
+  if rank_a < rank_b then 0
+  else if rank_a > rank_b then 1
+  else if crowd_a >= crowd_b then 0
+  else 1
+
+-- Select the best individual from a population using NSGA-II criteria
+-- Each individual in the population is (f0, f1, f2, f3, f4, rank, crowd, protected_until)
+-- Uses Pareto dominance, then rank/crowd comparison, then total fitness as tiebreaker
+-- Returns (best_index, best_total_fitness, pareto_front_flag, num_objectives)
+let select_best population current_gen : Int -> Int -> (Int, Int, Int, Int) [cost: Linear(population)] =
+  let n_obj = num_objectives in
+  let result = fold (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1) (\state ind ->
+    let idx = state.0 in
+    let best_idx = state.1 in
+    let bf0 = state.2 in
+    let bf1 = state.3 in
+    let bf2 = state.4 in
+    let bf3 = state.5 in
+    let bf4 = state.6 in
+    let best_rank = state.7 in
+    let best_crowd = state.8 in
+    let best_total = state.9 in
+    let best_front = state.10 in
+    let first = state.11 in
+    let f0 = scale_fitness ind.0 in
+    let f1 = scale_fitness ind.1 in
+    let f2 = scale_fitness ind.2 in
+    let f3 = scale_fitness ind.3 in
+    let f4 = scale_fitness ind.4 in
+    let rank = ind.5 in
+    let crowd = ind.6 in
+    let prot = is_protected ind.7 current_gen in
+    let total = total_fitness f0 f1 f2 f3 f4 in
+    let _obj0 = get_objective f0 f1 f2 f3 f4 0 in
+    if first == 1 then
+      (idx + 1, idx, f0, f1, f2, f3, f4, rank, crowd, total, 1, 0)
+    else
+      let dom_new = dominates f0 f1 f2 f3 f4 bf0 bf1 bf2 bf3 bf4 in
+      if dom_new == 1 then
+        (idx + 1, idx, f0, f1, f2, f3, f4, rank, crowd, total, 1, 0)
+      else
+        let dom_old = dominates bf0 bf1 bf2 bf3 bf4 f0 f1 f2 f3 f4 in
+        if dom_old == 1 then
+          (idx + 1, best_idx, bf0, bf1, bf2, bf3, bf4, best_rank, best_crowd, best_total, best_front, 0)
+        else
+          let cmp = compare_individuals rank crowd best_rank best_crowd in
+          if cmp == 0 then
+            (idx + 1, idx, f0, f1, f2, f3, f4, rank, crowd, total, 0, 0)
+          else
+            (idx + 1, best_idx, bf0, bf1, bf2, bf3, bf4, best_rank, best_crowd, best_total, best_front, 0)
+  ) population in
+  (result.1, result.9, result.10, n_obj)
+
+-- Tests
+let test_dominates_yes : Int [cost: Const(1)] =
+  if dominates 80 80 80 80 80 70 70 70 70 70 == 1 then 1 else 0 - 1
+
+let test_dominates_no : Int [cost: Const(1)] =
+  if dominates 70 80 80 80 80 80 70 70 70 70 == 0 then 1 else 0 - 1
+
+let test_total_fitness : Int [cost: Const(1)] =
+  if total_fitness 10 20 30 40 50 == 150 then 1 else 0 - 1
+
+let test_get_objective : Int [cost: Const(1)] =
+  if get_objective 10 20 30 40 50 2 == 30 then 1 else 0 - 1
+
+let test_compare_better_rank : Int [cost: Const(1)] =
+  if compare_individuals 1 100 2 100 == 0 then 1 else 0 - 1
+
+let test_compare_crowd_tiebreak : Int [cost: Const(1)] =
+  if compare_individuals 1 200 1 100 == 0 then 1 else 0 - 1
+
+let test_is_protected : Int [cost: Const(1)] =
+  if is_protected 10 5 == 1 then
+    if is_protected 10 15 == 0 then 1 else 0 - 1
+  else 0 - 1
+
+let test_num_objectives : Int [cost: Const(1)] =
+  if num_objectives == 5 then 1 else 0 - 1
+
+let test_select_best_single : Int [cost: Const(1)] =
+  let pop = ((80, 80, 80, 80, 80, 1, 100, 0),) in
+  let result = select_best pop 0 in
+  if result.0 == 0 then
+    if result.3 == 5 then 1 else 0 - 1
+  else 0 - 1
+
+let test_select_best_picks_dominant : Int [cost: Const(1)] =
+  let pop = ((50, 50, 50, 50, 50, 2, 50, 0), (80, 80, 80, 80, 80, 1, 100, 0)) in
+  let result = select_best pop 0 in
+  if result.0 == 1 then 1 else 0 - 1

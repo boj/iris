@@ -1,0 +1,39 @@
+-- Seed generator: construct a map-then-fold program (e.g., sum of squares)
+--
+-- Builds a SemanticGraph: fold(0, add, map(input, mul))
+-- When map applies mul(x, x) = x^2 to each element, the result is
+-- sum of squares. Evolution can mutate the map/fold opcodes to discover
+-- other map+fold compositions.
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=3)
+--     port 0 -> Lit(0)              base case
+--     port 1 -> Prim(add)           fold step (accumulate)
+--     port 2 -> Prim(map)           collection override
+--                 port 0 -> Tuple   placeholder input
+--                 port 1 -> Prim(mul) map step (transform each element)
+--
+-- Opcodes: add = 0x00, mul = 0x02, map = 0x30 (48 decimal)
+
+-- Step 1: add the fold step function (add node)
+let add_fold_step program : Int -> Int [cost: Const(6)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let root = graph_get_root p in
+  graph_connect p root nid 1
+
+-- Step 2: add the map node and wire it as the fold collection
+let add_map_stage program : Int -> Int [cost: Const(6)] =
+  let r = graph_add_node_rt program 48 in
+  let p = r.0 in
+  let nid = r.1 in
+  let root = graph_get_root p in
+  graph_connect p root nid 2
+
+-- Step 3: add the map's step function (mul) and wire to map
+let add_map_step program map_id : Int -> Int -> Int [cost: Const(4)] =
+  let r = graph_add_node_rt program 2 in
+  let p = r.0 in
+  let nid = r.1 in
+  graph_connect p map_id nid 1

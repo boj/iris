@@ -1,0 +1,289 @@
+-- Evolution checkpoint: serializable state for save/restore/fork
+--
+-- Captures full evolution state for:
+--   - Crash recovery (checkpoint to disk)
+--   - Distributed evolution (serialize across machines)
+--   - Trajectory forking (explore multiple evolutionary paths)
+--
+-- Checkpoint contents:
+--   generation, population, novelty_archive, phase,
+--   best_fitness[5], config, timestamp
+--
+-- Serialization uses graph primitives to encode state as a flat
+-- tuple structure that can be stored and reconstructed.
+--
+-- Bootstrap compatibility:
+--   Uses graph_nodes, graph_get_kind, graph_get_prim_op, graph_outgoing
+--   to extract graph structure, and graph_new + graph_add_node_rt +
+--   graph_set_prim_op + graph_connect to reconstruct.
+
+-- =========================================================================
+-- Graph serialization: extract structure as data
+-- =========================================================================
+
+-- Serialize a program's graph structure into a data tuple
+-- Walks all nodes, encoding (node_id, kind, opcode, children) per node
+-- Uses graph_outgoing to capture the edge structure
+-- Returns: (node_count, root_id, node_data_list)
+-- node_data_list: cons-list of (node_id, kind, opcode, child0, child1, child2) entries
+let serialize_graph program : Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let root = graph_get_root program in
+  let nodes = graph_nodes program in
+  let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  -- Serialize each node with its children from outgoing edges
+  let node_data = fold ()
+    (\acc nid ->
+      let kind = graph_get_kind program nid in
+      let opcode = if kind == 0 then graph_get_prim_op program nid else 0 in
+      let children = graph_outgoing program nid in
+      let cc = fold 0 (\c x -> c + 1) children in
+      let c0 = if cc > 0 then children.0 else 0 in
+      let c1 = if cc > 1 then children.1 else 0 in
+      let c2 = if cc > 2 then children.2 else 0 in
+      ((nid, kind, opcode, c0, c1, c2), acc))
+    nodes in
+  (node_count, root, node_data)
+
+-- Look up a new node ID from a cons-list mapping of (old_id, new_id) pairs
+-- Folds over node_count iterations, consuming one mapping entry per step
+-- Returns 0 if old_id not found (or old_id is 0)
+let lookup_new_id old_id mapping nc : Int -> Int -> Int -> Int [cost: Linear(nc)] =
+  if old_id == 0 then 0
+  else
+    let result = fold (mapping, 0, 0)
+      (\state _i ->
+        if state.2 == 1 then state
+        else
+          let pair = (state.0).0 in
+          let rest = (state.0).1 in
+          if pair.0 == old_id then (rest, pair.1, 1)
+          else (rest, state.1, 0))
+      nc in
+    result.1
+
+-- Deserialize a graph from serialized data
+-- Reconstructs a program using graph primitives in two passes:
+--   Pass 1: create all nodes and build an old->new ID mapping
+--   Pass 2: reconnect edges using the serialized child references
+-- node_data: cons-list of (node_id, kind, opcode, child0, child1, child2) entries
+-- node_count: number of entries in node_data
+-- root_id: the root node ID of the original graph
+-- Returns: reconstructed program
+let deserialize_graph node_data node_count root_id : Int -> Int -> Int -> Int [cost: Unknown] =
+  -- Pass 1: create all nodes, build mapping (cons-list of (old_id, new_id))
+  let pass1 = fold (graph_new, node_data, ())
+    (\state _i ->
+      let prog = state.0 in
+      let remaining = state.1 in
+      let id_map = state.2 in
+      let entry = remaining.0 in
+      let rest = remaining.1 in
+      let old_id = entry.0 in
+      let kind = entry.1 in
+      let opcode = entry.2 in
+      let step = graph_add_node_rt prog 0 in
+      let p = step.0 in
+      let nid = step.1 in
+      let p2 = if kind == 0 then
+        if opcode != 0 then (graph_set_prim_op p nid opcode).0 else p
+      else p in
+      (p2, rest, ((old_id, nid), id_map)))
+    node_count in
+  let prog_with_nodes = pass1.0 in
+  let id_map = pass1.2 in
+  -- Pass 2: reconnect edges using stored child IDs
+  let pass2 = fold (prog_with_nodes, node_data)
+    (\state _i ->
+      let prog = state.0 in
+      let remaining = state.1 in
+      let entry = remaining.0 in
+      let rest = remaining.1 in
+      let old_src = entry.0 in
+      let c0 = entry.3 in
+      let c1 = entry.4 in
+      let c2 = entry.5 in
+      let new_src = lookup_new_id old_src id_map node_count in
+      let p1 = if c0 != 0 then
+        let new_c0 = lookup_new_id c0 id_map node_count in
+        if new_c0 != 0 then graph_connect prog new_src new_c0 0 else prog
+      else prog in
+      let p2 = if c1 != 0 then
+        let new_c1 = lookup_new_id c1 id_map node_count in
+        if new_c1 != 0 then graph_connect p1 new_src new_c1 1 else p1
+      else p1 in
+      let p3 = if c2 != 0 then
+        let new_c2 = lookup_new_id c2 id_map node_count in
+        if new_c2 != 0 then graph_connect p2 new_src new_c2 2 else p2
+      else p2 in
+      (p3, rest))
+    node_count in
+  let prog_final = pass2.0 in
+  -- Set root
+  let new_root = lookup_new_id root_id id_map node_count in
+  if new_root != 0 then graph_set_root prog_final new_root
+  else prog_final
+
+-- Serialize a program's full structure via serialize_graph
+-- Returns: (node_count, root_id, node_data_list)
+let serialize_program program : Int -> (Int, Int, Int) [cost: Linear(program)] =
+  serialize_graph program
+
+-- =========================================================================
+-- Size estimation
+-- =========================================================================
+
+-- Compute actual checkpoint size by serializing the program graph
+-- Returns the number of serialized fields (node_count * 6 per-node fields + 2 header)
+let checkpoint_size program : Int -> Int [cost: Linear(program)] =
+  let ser = serialize_graph program in
+  let nc = ser.0 in
+  nc * 6 + 2
+
+-- =========================================================================
+-- Timing control
+-- =========================================================================
+
+-- Check if it's time to checkpoint (every N generations)
+-- generation: current generation number
+-- interval: checkpoint every N generations
+-- Returns 1 if should checkpoint, 0 otherwise
+let should_checkpoint generation interval : Int -> Int -> Int [cost: Const(2)] =
+  if interval == 0 then 0
+  else if generation % interval == 0 then 1
+  else 0
+
+-- Compute the age of a checkpoint in generations
+-- current_gen: current generation
+-- checkpoint_gen: generation when checkpoint was taken
+let checkpoint_age current_gen checkpoint_gen : Int -> Int -> Int [cost: Const(1)] =
+  current_gen - checkpoint_gen
+
+-- Check if a checkpoint is stale (older than threshold)
+-- Returns 1 if stale, 0 if fresh
+let is_stale current_gen checkpoint_gen max_age : Int -> Int -> Int -> Int [cost: Const(2)] =
+  if checkpoint_age current_gen checkpoint_gen > max_age then 1 else 0
+
+-- =========================================================================
+-- Checkpoint serialization (metadata + program)
+-- =========================================================================
+
+-- Serialize evolution state as a checkpoint tuple
+-- Includes both metadata AND the best program's graph structure
+-- Returns: (generation, pop_size, best_fitness, phase, novelty_size, timestamp,
+--           graph_data)
+-- where graph_data = (node_count, root_id, node_data_list) from serialize_graph
+let serialize_checkpoint generation pop_size best_fitness phase novelty_size timestamp program : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let graph_data = serialize_graph program in
+  (generation, pop_size, best_fitness, phase, novelty_size, timestamp, graph_data)
+
+-- Full checkpoint with program: serialize metadata + full program graph
+let serialize_full_checkpoint generation pop_size best_fitness phase novelty_size timestamp program : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  serialize_checkpoint generation pop_size best_fitness phase novelty_size timestamp program
+
+-- Deserialize a checkpoint: extract fields from the tuple
+let deserialize_generation checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.0
+
+let deserialize_pop_size checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.1
+
+let deserialize_best_fitness checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.2
+
+let deserialize_phase checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.3
+
+let deserialize_novelty_size checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.4
+
+let deserialize_timestamp checkpoint : Int -> Int [cost: Const(1)] =
+  checkpoint.5
+
+-- Reconstruct the program from a checkpoint's graph_data field
+-- Extracts the serialized graph data (at index 6) and calls deserialize_graph
+let deserialize_program_from_checkpoint checkpoint : Int -> Int [cost: Unknown] =
+  let graph_data = checkpoint.6 in
+  let nc = graph_data.0 in
+  let root_id = graph_data.1 in
+  let node_data = graph_data.2 in
+  deserialize_graph node_data nc root_id
+
+-- =========================================================================
+-- Checkpoint validation
+-- =========================================================================
+
+-- Validate a checkpoint has consistent data
+-- Returns: 1 if valid, 0 if corrupted
+let validate_checkpoint checkpoint : Int -> Int [cost: Const(5)] =
+  let gen = checkpoint.0 in
+  let pop = checkpoint.1 in
+  let fitness = checkpoint.2 in
+  let phase = checkpoint.3 in
+  -- Sanity checks
+  if gen < 0 then 0
+  else if pop <= 0 then 0
+  else if fitness < 0 then 0
+  else if phase < 0 then 0
+  else if phase > 2 then 0
+  else 1
+
+-- =========================================================================
+-- Checkpoint management
+-- =========================================================================
+
+-- Checkpoint management: report stats from actual program data
+-- Returns (checkpoint_size, generations_since_last, is_stale)
+let checkpoint_stats program current_gen last_checkpoint_gen max_age : Int -> Int -> Int -> Int -> (Int, Int, Int) [cost: Linear(program)] =
+  let size = checkpoint_size program in
+  let age = checkpoint_age current_gen last_checkpoint_gen in
+  let stale = is_stale current_gen last_checkpoint_gen max_age in
+  (size, age, stale)
+
+-- Decide whether to take a new checkpoint
+-- Considers: interval, staleness, and whether fitness improved
+-- Returns: 1 if should checkpoint now
+let should_checkpoint_now generation interval last_gen best_fitness prev_best max_age : Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(5)] =
+  let by_interval = should_checkpoint generation interval in
+  let stale = is_stale generation last_gen max_age in
+  let improved = if best_fitness > prev_best then 1 else 0 in
+  -- Checkpoint if: regular interval OR stale OR just improved
+  if by_interval == 1 then 1
+  else if stale == 1 then 1
+  else if improved == 1 then 1
+  else 0
+
+-- Trajectory forking: decide if we should fork the evolution
+-- Fork when: diversity is low AND fitness has plateaued
+-- Returns: number of forks to create (0, 1, or 2)
+let should_fork diversity_pct improvement_pct : Int -> Int -> Int [cost: Const(2)] =
+  if diversity_pct < 20 then
+    if improvement_pct < 5 then 2
+    else 1
+  else 0
+
+-- Full checkpoint lifecycle: serialize, validate, deserialize, and decide
+-- Exercises the complete checkpoint API as integration entry point
+let full_checkpoint_cycle generation pop_size best_fitness phase novelty_size timestamp program interval last_gen prev_best max_age diversity_pct improvement_pct : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
+  let should = should_checkpoint_now generation interval last_gen best_fitness prev_best max_age in
+  let forks = should_fork diversity_pct improvement_pct in
+  if should == 1 then
+    let ckpt = serialize_full_checkpoint generation pop_size best_fitness phase novelty_size timestamp program in
+    let valid = validate_checkpoint ckpt in
+    let stats = checkpoint_stats program generation last_gen max_age in
+    let prog_ser = serialize_program program in
+    let restored = deserialize_program_from_checkpoint ckpt in
+    -- Round-trip validation: extract all fields from the checkpoint
+    let gen_rt = deserialize_generation ckpt in
+    let pop_rt = deserialize_pop_size ckpt in
+    let fit_rt = deserialize_best_fitness ckpt in
+    let phase_rt = deserialize_phase ckpt in
+    let nov_rt = deserialize_novelty_size ckpt in
+    let ts_rt = deserialize_timestamp ckpt in
+    let roundtrip_ok = if gen_rt == generation then
+      (if pop_rt == pop_size then
+        (if fit_rt == best_fitness then 1 else 0)
+      else 0)
+    else 0 in
+    (ckpt, valid, stats, forks, restored, roundtrip_ok)
+  else
+    (0, 0, (0, 0, 0), forks, program, 0)

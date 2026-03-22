@@ -1,0 +1,50 @@
+-- Result type: computation that may succeed or fail (parametric)
+type Result<T, E> = Ok(T) | Err(E)
+
+-- Unwrap a Result with a default value
+let result_unwrap_or res default =
+  match res with
+  | Ok(v) -> v
+  | Err(e) -> default
+
+-- Check if a Result is Ok
+let is_ok res =
+  match res with
+  | Ok(v) -> true
+  | Err(e) -> false
+
+-- Check if a Result is Err
+let is_err res =
+  match res with
+  | Ok(v) -> false
+  | Err(e) -> true
+
+-- Map a function over the Ok value
+let map_ok res f =
+  match res with
+  | Ok(v) -> Ok(f v)
+  | Err(e) -> Err(e)
+
+-- Map a function over the Err value
+let map_err res f =
+  match res with
+  | Ok(v) -> Ok(v)
+  | Err(e) -> Err(f e)
+
+-- Chain computations that may fail
+let result_and_then res f =
+  match res with
+  | Ok(v) -> f v
+  | Err(e) -> Err(e)
+
+-- Get Ok value or 0
+let ok_or_zero res =
+  match res with
+  | Ok(v) -> v
+  | Err(e) -> 0
+
+-- Unwrap or call a function on the error
+let result_unwrap_or_else res f =
+  match res with
+  | Ok(v) -> v
+  | Err(e) -> f e

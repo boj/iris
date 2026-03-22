@@ -1,0 +1,59 @@
+-- Church Encoding
+-- Represent natural numbers, booleans, and pairs as pure functions.
+-- Demonstrates that IRIS's lambda calculus core is expressive enough
+-- for foundational computation without built-in data types.
+
+-- Church Booleans: true = \t f -> t, false = \t f -> f
+let church_true t f : Int -> Int -> Int [cost: Const(1)] = t
+let church_false t f : Int -> Int -> Int [cost: Const(1)] = f
+
+-- Church Boolean operations
+let church_and a b t f : (Int -> Int -> Int) -> (Int -> Int -> Int) -> Int -> Int -> Int [cost: Const(2)] =
+  a (b t f) f
+
+let church_or a b t f : (Int -> Int -> Int) -> (Int -> Int -> Int) -> Int -> Int -> Int [cost: Const(2)] =
+  a t (b t f)
+
+let church_not a t f : (Int -> Int -> Int) -> Int -> Int -> Int [cost: Const(1)] =
+  a f t
+
+-- Church Numerals: n = \f x -> f(f(...f(x)...)) applied n times
+-- Represented as the number of times to apply f to x.
+
+-- Church zero: apply f zero times.
+let church_zero f x : (Int -> Int) -> Int -> Int [cost: Const(1)] = x
+
+-- Church successor: apply f one more time.
+let church_succ n f x : ((Int -> Int) -> Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
+  f (n f x)
+
+-- Convert Church numeral to integer by applying (+1) starting from 0.
+let church_to_int n : ((Int -> Int) -> Int -> Int) -> Int [cost: Unknown] =
+  n (\x -> x + 1) 0
+
+-- Church addition: m + n = apply f (m+n) times.
+let church_add m n f x : ((Int -> Int) -> Int -> Int) -> ((Int -> Int) -> Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
+  m f (n f x)
+
+-- Church multiplication: m * n = apply (f^n) m times.
+let church_mul m n f : ((Int -> Int) -> Int -> Int) -> ((Int -> Int) -> Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
+  m (n f)
+
+-- Church pairs
+let church_pair a b sel : Int -> Int -> (Int -> Int -> Int) -> Int [cost: Const(1)] =
+  sel a b
+
+let church_fst p : ((Int -> Int -> Int) -> Int) -> Int [cost: Const(1)] =
+  p (\a b -> a)
+
+let church_snd p : ((Int -> Int -> Int) -> Int) -> Int [cost: Const(1)] =
+  p (\a b -> b)
+
+-- Test: build some Church numerals and convert to integers.
+let test_church x : Int -> Tuple =
+  let zero = church_to_int church_zero in
+  let one = church_to_int (church_succ church_zero) in
+  let two = church_to_int (church_succ (church_succ church_zero)) in
+  let t = church_true 1 0 in   -- should be 1
+  let f = church_false 1 0 in  -- should be 0
+  (zero, one, two, t, f)

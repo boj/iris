@@ -1,0 +1,115 @@
+-- IRIS Language Constants
+--
+-- Named type aliases and constants for magic numbers used throughout
+-- the compiler, interpreter, and evolution programs.
+--
+-- Import this file to replace raw integer comparisons with readable names.
+
+-- =========================================================================
+-- Node Kinds (SemanticGraph node type tags)
+-- =========================================================================
+
+type NodeKind = Int
+
+let nk_prim     : NodeKind = 0
+let nk_apply    : NodeKind = 1
+let nk_lambda   : NodeKind = 2
+let nk_let      : NodeKind = 3
+let nk_match    : NodeKind = 4
+let nk_lit      : NodeKind = 5
+let nk_ref      : NodeKind = 6
+let nk_neural   : NodeKind = 7
+let nk_fold     : NodeKind = 8
+let nk_unfold   : NodeKind = 9
+let nk_effect   : NodeKind = 10
+let nk_tuple    : NodeKind = 11
+let nk_inject   : NodeKind = 12
+let nk_project  : NodeKind = 13
+let nk_typeabst : NodeKind = 14
+let nk_typeapp  : NodeKind = 15
+let nk_letrec   : NodeKind = 16
+let nk_guard    : NodeKind = 17
+let nk_rewrite  : NodeKind = 18
+let nk_extern   : NodeKind = 19
+
+-- =========================================================================
+-- Primitive Opcodes (Prim node operation tags)
+-- =========================================================================
+
+type PrimOp = Int
+
+-- Arithmetic (0x00-0x09)
+let prim_add : PrimOp = 0
+let prim_sub : PrimOp = 1
+let prim_mul : PrimOp = 2
+let prim_div : PrimOp = 3
+let prim_mod : PrimOp = 4
+let prim_neg : PrimOp = 5
+let prim_abs : PrimOp = 6
+let prim_min : PrimOp = 7
+let prim_max : PrimOp = 8
+let prim_pow : PrimOp = 9
+
+-- Bitwise (0x10-0x15)
+let prim_bitand : PrimOp = 16
+let prim_bitor  : PrimOp = 17
+let prim_bitxor : PrimOp = 18
+let prim_bitnot : PrimOp = 19
+let prim_shl    : PrimOp = 20
+let prim_shr    : PrimOp = 21
+
+-- Comparison (0x20-0x25)
+let prim_eq  : PrimOp = 32
+let prim_ne  : PrimOp = 33
+let prim_lt  : PrimOp = 34
+let prim_gt  : PrimOp = 35
+let prim_le  : PrimOp = 36
+let prim_ge  : PrimOp = 37
+
+-- =========================================================================
+-- Value Type Tags (runtime value classification)
+-- =========================================================================
+
+type ValueTag = Int
+
+let val_int    : ValueTag = 0
+let val_bool   : ValueTag = 1
+let val_float  : ValueTag = 2
+let val_string : ValueTag = 3
+let val_tuple  : ValueTag = 4
+let val_unit   : ValueTag = 5
+let val_bytes  : ValueTag = 6
+let val_tagged : ValueTag = 7
+
+-- =========================================================================
+-- Evaluation Tiers
+-- =========================================================================
+
+type EvalTier = Int
+
+let tier_a : EvalTier = 0
+let tier_b : EvalTier = 1
+let tier_c : EvalTier = 2
+
+-- =========================================================================
+-- Cost Bounds
+-- =========================================================================
+
+type CostBound = Int
+
+let cost_unknown    : CostBound = 0
+let cost_zero       : CostBound = 1
+let cost_constant   : CostBound = 2
+let cost_linear     : CostBound = 3
+let cost_nlogn      : CostBound = 4
+let cost_polynomial : CostBound = 5
+
+-- =========================================================================
+-- Evolution Phases
+-- =========================================================================
+
+type EvolutionPhase = Int
+
+let phase_explore  : EvolutionPhase = 0
+let phase_refine   : EvolutionPhase = 1
+let phase_converge : EvolutionPhase = 2

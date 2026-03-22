@@ -1,0 +1,37 @@
+-- Test struct (record) types
+type Point = { x: Int, y: Int }
+type Color = { r: Int, g: Int, b: Int }
+
+-- Construct and access fields
+let test_point_x : Int =
+  let p = { x = 3, y = 4 } in
+  p.x
+
+let test_point_y : Int =
+  let p = { x = 3, y = 4 } in
+  p.y
+
+-- Computed fields
+let distance_sq p : Point -> Int =
+  p.x * p.x + p.y * p.y
+
+let test_distance : Int =
+  distance_sq { x = 3, y = 4 }
+
+-- Multi-field struct
+let test_color_g : Int =
+  let c = { r = 255, g = 128, b = 0 } in
+  c.g
+
+-- Struct in let binding
+let add_points a b : Point -> Point -> Point =
+  { x = a.x + b.x, y = a.y + b.y }
+
+let test_add_points : Int =
+  let result = add_points { x = 1, y = 2 } { x = 3, y = 4 } in
+  result.x + result.y
+
+-- Positional access still works on structs
+let test_positional : Int =
+  let p = { x = 10, y = 20 } in
+  p.0 + p.1

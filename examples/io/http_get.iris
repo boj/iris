@@ -1,0 +1,9 @@
+-- Minimal HTTP GET built from TCP primitives
+-- Connects to host:port, sends a GET request, returns the response
+let http_get host port path : Int -> Int -> Int -> Int [cost: Unknown] =
+  let conn = tcp_connect host port in
+  let req = str_concat "GET " (str_concat path " HTTP/1.0\r\n\r\n") in
+  let _ = tcp_write conn req in
+  let response = tcp_read conn 65536 in
+  let _ = tcp_close conn in
+  response

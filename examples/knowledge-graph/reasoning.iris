@@ -1,0 +1,87 @@
+-- Knowledge Graph Reasoning
+-- Uses IRIS's built-in Knowledge Graph primitives (kg_*) to
+-- build a semantic network and perform inference.
+--
+-- Demonstrates: entity creation, relationship traversal,
+-- transitive closure, and simple rule-based reasoning.
+
+-- Edge types (encoded as integers)
+-- 1 = "is_a", 2 = "has_property", 3 = "part_of", 4 = "causes"
+
+-- Build a taxonomy of animals.
+let build_animal_kg x : Int -> Graph [cost: Unknown] =
+  let kg = kg_empty in
+  -- Add entities
+  let kg = kg_add_node kg 1 "animal" in
+  let kg = kg_add_node kg 2 "mammal" in
+  let kg = kg_add_node kg 3 "bird" in
+  let kg = kg_add_node kg 4 "dog" in
+  let kg = kg_add_node kg 5 "cat" in
+  let kg = kg_add_node kg 6 "eagle" in
+  let kg = kg_add_node kg 7 "penguin" in
+  -- is_a relationships (edge type 1)
+  let kg = kg_add_edge kg 2 1 1 1.0 in   -- mammal is_a animal
+  let kg = kg_add_edge kg 3 1 1 1.0 in   -- bird is_a animal
+  let kg = kg_add_edge kg 4 2 1 1.0 in   -- dog is_a mammal
+  let kg = kg_add_edge kg 5 2 1 1.0 in   -- cat is_a mammal
+  let kg = kg_add_edge kg 6 3 1 1.0 in   -- eagle is_a bird
+  let kg = kg_add_edge kg 7 3 1 1.0 in   -- penguin is_a bird
+  -- has_property relationships (edge type 2)
+  let kg = kg_add_edge kg 2 100 2 1.0 in  -- mammal has_property warm_blooded(100)
+  let kg = kg_add_edge kg 3 100 2 1.0 in  -- bird has_property warm_blooded
+  let kg = kg_add_edge kg 3 101 2 1.0 in  -- bird has_property has_feathers(101)
+  let kg = kg_add_edge kg 6 102 2 1.0 in  -- eagle has_property can_fly(102)
+  let kg = kg_add_edge kg 7 103 2 1.0 in  -- penguin has_property can_swim(103)
+  kg
+
+-- Transitive is_a: check if entity X is_a Y (transitively).
+-- Walk up the is_a chain from X.
+let rec is_a_transitive kg entity target depth : Graph -> Int -> Int -> Int -> Bool [cost: Unknown] =
+  if depth <= 0 then false
+  else if entity == target then true
+  else
+    -- Get direct parents via is_a (edge type 1)
+    let parents = kg_neighbors kg entity 1 in
+    fold false (\found parent ->
+      if found then true
+      else is_a_transitive kg parent target (depth - 1)
+    ) parents
+
+-- Inherit properties: collect all properties from entity and its ancestors.
+let rec collect_properties kg entity depth : Graph -> Int -> Int -> Tuple [cost: Unknown] =
+  if depth <= 0 then ()
+  else
+    -- Get direct properties (edge type 2)
+    let direct = kg_neighbors kg entity 2 in
+    -- Get parent properties
+    let parents = kg_neighbors kg entity 1 in
+    let inherited = fold () (\acc parent ->
+      list_concat acc (collect_properties kg parent (depth - 1))
+    ) parents in
+    list_concat direct inherited
+
+-- Simple inference: "if X is_a mammal, then X has warm blood"
+let infer_warm_blooded kg entity : Graph -> Int -> Bool [cost: Unknown] =
+  is_a_transitive kg entity 2 5  -- 2 = mammal, max depth 5
+
+-- Count entities of a given type (transitively).
+let count_instances kg type_id all_ids : Graph -> Int -> Tuple -> Int [cost: Unknown] =
+  fold 0 (\count id ->
+    if is_a_transitive kg id type_id 5 then count + 1 else count
+  ) all_ids
+
+-- Test
+let test_reasoning x : Int -> Tuple =
+  let kg = build_animal_kg 0 in
+  -- Is a dog an animal? (transitively: dog -> mammal -> animal)
+  let dog_is_animal = is_a_transitive kg 4 1 5 in
+  -- Is an eagle a mammal?
+  let eagle_is_mammal = is_a_transitive kg 6 2 5 in
+  -- Properties of a dog (should inherit warm_blooded from mammal)
+  let dog_props = collect_properties kg 4 5 in
+  -- Is a cat warm-blooded?
+  let cat_warm = infer_warm_blooded kg 5 in
+  -- Count all animals
+  let all_ids = (1, 2, 3, 4, 5, 6, 7) in
+  let animal_count = count_instances kg 1 all_ids in
+  (dog_is_animal, eagle_is_mammal, dog_props, cat_warm, animal_count)

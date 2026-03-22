@@ -1,0 +1,43 @@
+-- Evaluate an Effect node: dispatch to an effect handler.
+--
+-- Mirrors the effect handling from iris-exec interpreter.rs eval_effect.
+--
+-- An Effect node has:
+--   - effect_tag: u8 in the payload (which effect to perform)
+--   - Argument edges: values to pass to the effect handler
+--
+-- The Rust interpreter:
+--   1. Extracts the effect_tag from the payload
+--   2. Evaluates all argument edges eagerly
+--   3. Constructs an EffectRequest { tag, args }
+--   4. If a handler is provided, delegates to it
+--   5. If no handler, returns Unit (backward compatible no-op)
+--
+-- Effect tags (from EffectTag enum):
+--   0x00 = Log      (logging/tracing)
+--   0x01 = Store    (persistent storage)
+--   0x02 = Load     (persistent retrieval)
+--   0x03 = Network  (network I/O)
+--   0x04 = Timer    (timing/scheduling)
+--   0x05 = Random   (random number generation)
+--   0x06 = FileRead
+--   0x07 = FileWrite
+--
+-- In the surface language, effects are the mechanism for I/O and
+-- side effects. Without a handler, they are no-ops.
+
+-- Effect simulation: log a value (returns the value, side effect is no-op).
+let eval_effect_log value : Int -> Int [cost: Const(1)] =
+  value
+
+-- Effect simulation: store and retrieve.
+-- In a real handler, store would write and load would read.
+-- Without a handler, both return their input unchanged.
+let eval_effect_store_load key value : Int -> Int -> Int [cost: Const(2)] =
+  value
+
+-- Effect simulation: random bounded value.
+-- Without a handler, returns a deterministic fallback.
+let eval_effect_random lo hi : Int -> Int -> Int [cost: Const(2)] =
+  if hi > lo then lo + (hi - lo) / 2
+  else lo

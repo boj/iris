@@ -1,0 +1,62 @@
+-- 1D Cellular Automata (Elementary Cellular Automata)
+-- Implements Wolfram's elementary CA rules (0-255).
+-- Each cell looks at itself and its two neighbors to determine next state.
+-- Rule 110 is Turing-complete.
+
+-- Get the rule output for a 3-bit neighborhood.
+-- neighborhood: (left, center, right) each 0 or 1
+-- rule_num: 0-255, the 8-bit rule number
+let apply_rule rule_num left center right : Int -> Int -> Int -> Int -> Int [cost: Const(3)] =
+  let index = left * 4 + center * 2 + right in
+  -- Extract bit `index` from rule_num
+  shr rule_num index % 2
+
+-- Step one generation of a 1D CA.
+-- cells: tuple of 0s and 1s
+-- rule_num: the Wolfram rule number
+let ca_step cells rule_num : Tuple -> Int -> Tuple [cost: Linear(cells)] =
+  let n = list_len cells in
+  map (\i ->
+    let left = if i == 0 then list_nth cells (n - 1) else list_nth cells (i - 1) in
+    let center = list_nth cells i in
+    let right = if i == n - 1 then list_nth cells 0 else list_nth cells (i + 1) in
+    apply_rule rule_num left center right
+  ) (list_range 0 n)
+
+-- Run n generations.
+let ca_run cells rule_num generations : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  fold (cells,) (\history step ->
+    let last = list_nth history (list_len history - 1) in
+    list_append history (ca_step last rule_num)
+  ) (list_range 0 generations)
+
+-- Count live cells.
+let ca_population cells : Tuple -> Int [cost: Linear(cells)] =
+  fold 0 (+) cells
+
+-- Check if the CA has reached a fixed point (same state as previous).
+let ca_is_fixed prev current : Tuple -> Tuple -> Bool [cost: Linear(prev)] =
+  let n = list_len prev in
+  if n != list_len current then false
+  else
+    fold true (\same i ->
+      same && list_nth prev i == list_nth current i
+    ) (list_range 0 n)
+
+-- Create initial state: single cell in the middle.
+let ca_single_center size : Int -> Tuple [cost: Linear(size)] =
+  map (\i -> if i == size / 2 then 1 else 0) (list_range 0 size)
+
+-- Create random initial state.
+let ca_random size : Int -> Tuple [cost: Linear(size)] =
+  map (\i -> random_int 0 2) (list_range 0 size)
+
+-- Test: Rule 110 (Turing-complete) and Rule 30 (chaotic)
+let test_ca x : Int -> Tuple =
+  let init = ca_single_center 21 in
+  let rule110 = ca_run init 110 10 in
+  let rule30 = ca_run init 30 10 in
+  -- Population after 10 steps
+  let pop110 = ca_population (list_nth rule110 10) in
+  let pop30 = ca_population (list_nth rule30 10) in
+  (pop110, pop30, list_nth rule110 5)

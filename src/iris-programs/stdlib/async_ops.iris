@@ -1,0 +1,109 @@
+-- Async/Concurrency standard library
+--
+-- Higher-level combinators built on IRIS effect primitives:
+--   thread_spawn (0xF0), thread_join (0xF1), atomic_swap (0xF4)
+--
+-- These combinators provide structured patterns for concurrent programming
+-- without requiring direct effect manipulation.
+
+-- Run two computations concurrently, return both results as a tuple.
+-- Spawns f and g on separate threads, joins both.
+let parallel f g =
+  let t1 = thread_spawn f in
+  let t2 = thread_spawn g in
+  let r1 = thread_join t1 in
+  let r2 = thread_join t2 in
+  (r1, r2)
+
+-- Run a computation with a timeout (in milliseconds).
+-- Returns (1, result) on success, (0, 0) on timeout.
+-- Implementation: race the computation against a sleep.
+let with_timeout ms f =
+  let done = atomic_new 0 in
+  let result = atomic_new 0 in
+  let worker = thread_spawn (\u ->
+    let r = f 0 in
+    let prev = atomic_swap result r in
+    atomic_swap done 1
+  ) in
+  sleep_ms ms
+  let finished = atomic_read done in
+  if finished > 0 then
+    (1, atomic_read result)
+  else
+    (0, 0)
+
+-- Map a function over a list in parallel.
+-- Spawns one thread per element, joins all.
+let parallel_map f xs =
+  let n = list_len xs in
+  let threads = fold () (\acc i ->
+    let elem = list_nth xs i in
+    let t = thread_spawn (\u -> f elem) in
+    list_append acc t
+  ) (list_range 0 n) in
+  fold () (\acc i ->
+    let t = list_nth threads i in
+    list_append acc (thread_join t)
+  ) (list_range 0 n)
+
+-- Race two computations: return the result of whichever finishes first.
+-- The loser's thread is abandoned (not cancelled -- IRIS has no thread cancel).
+let race f g =
+  let winner = atomic_new 0 in
+  let result = atomic_new 0 in
+  let run_and_signal comp id =
+    let r = comp 0 in
+    let prev = atomic_swap winner id in
+    if prev == 0 then atomic_swap result r else 0
+  in
+  let t1 = thread_spawn (\u -> run_and_signal f 1) in
+  let t2 = thread_spawn (\u -> run_and_signal g 2) in
+  thread_join t1
+  thread_join t2
+  (atomic_read winner, atomic_read result)
+
+-- Simple channel: bounded buffer using atomic operations.
+-- Returns (send_fn, recv_fn) as a pair of closures.
+-- Buffer size is 1 (synchronous channel).
+let channel_new unit =
+  let slot = atomic_new 0 in
+  let full = atomic_new 0 in
+  let send = \val ->
+    fold 0 (\acc i ->
+      if atomic_read full == 0 then
+        let prev = atomic_swap slot val in
+        atomic_swap full 1
+      else
+        let wait = sleep_ms 1 in
+        0
+    ) (list_range 0 1000)
+  in
+  let recv = \unit ->
+    fold 0 (\acc i ->
+      if atomic_read full > 0 then
+        let val = atomic_read slot in
+        let prev = atomic_swap full 0 in
+        val
+      else
+        let wait = sleep_ms 1 in
+        0
+    ) (list_range 0 1000)
+  in
+  (send, recv)
+
+-- Fold with parallel chunks: split the input into n_chunks pieces,
+-- fold each chunk in parallel, then combine results.
+let parallel_fold init combine chunk_fn xs n_chunks =
+  let n = list_len xs in
+  let chunk_size = if n_chunks > 0 then n / n_chunks + 1 else n in
+  let chunks = fold () (\acc i ->
+    let start = i * chunk_size in
+    let end = min (start + chunk_size) n in
+    if start < n then
+      list_append acc (list_take (list_drop xs start) (end - start))
+    else
+      acc
+  ) (list_range 0 n_chunks) in
+  let chunk_results = parallel_map (\chunk -> chunk_fn init chunk) chunks in
+  fold init (\acc r -> combine acc r) chunk_results

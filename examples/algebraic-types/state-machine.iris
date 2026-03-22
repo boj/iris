@@ -1,0 +1,24 @@
+-- State machine modeled with sum types.
+-- Demonstrates enums for protocol / lifecycle states.
+
+type State = Idle | Running(Int) | Paused(Int) | Done(Int)
+
+-- Advance the state machine by one step.
+let step state : Int -> Int =
+    match state with
+      | Idle -> Running 0
+      | Running(n) -> if n >= 100 then Done n else Running (n + 1)
+      | Paused(n) -> Running n
+      | Done(n) -> Done n
+
+-- Check if the machine has finished.
+let is_done state : Int -> Bool =
+    match state with
+      | Done(result) -> true
+      | _ -> false
+
+-- Extract the result, defaulting to -1 if not done.
+let get_result state : Int -> Int =
+    match state with
+      | Done(result) -> result
+      | _ -> -1

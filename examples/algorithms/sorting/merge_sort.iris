@@ -1,0 +1,32 @@
+-- Merge Sort
+-- Divide-and-conquer: split list in half, sort each half, merge results.
+-- O(n log n) time, stable sort.
+
+-- Merge two sorted lists into one sorted list.
+let rec merge xs ys : Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let nx = list_len xs in
+  let ny = list_len ys in
+  if nx == 0 then ys
+  else if ny == 0 then xs
+  else
+    let x = list_nth xs 0 in
+    let y = list_nth ys 0 in
+    if x <= y then
+      list_concat (x,) (merge (list_drop xs 1) ys)
+    else
+      list_concat (y,) (merge xs (list_drop ys 1))
+
+-- Recursive merge sort.
+let rec merge_sort xs : Tuple -> Tuple [cost: Unknown] =
+  let n = list_len xs in
+  if n <= 1 then xs
+  else
+    let mid = n / 2 in
+    let left = list_take xs mid in
+    let right = list_drop xs mid in
+    merge (merge_sort left) (merge_sort right)
+
+-- Test
+let test_merge_sort x : Int -> Tuple =
+  let xs = (38, 27, 43, 3, 9, 82, 10) in
+  merge_sort xs

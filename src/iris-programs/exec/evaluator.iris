@@ -1,0 +1,77 @@
+-- 3-tier evaluation strategy: try JIT first, then VM, then tree-walker.
+--
+-- Mirrors the tiered evaluation logic from iris-exec evaluator.rs.
+--
+-- The Rust evaluator implements a cascade:
+--   1. Try CLCU execution (AVX-512 / scalar SIMD path)
+--   2. Try JIT (x86-64 native code) — integer arithmetic only
+--   3. Try VM (stack-based bytecode interpreter)
+--   4. Fall back to tree-walking interpreter
+--
+-- Each tier is identified by a tag:
+--   tier 0 = JIT (fastest, most restricted: integer arithmetic only)
+--   tier 1 = VM  (fast, limited node kinds)
+--   tier 2 = tree-walker (slow, supports all node kinds)
+--
+-- Inputs:
+--   program : Int (graph identifier / hash)
+--   input   : Int (the input value for evaluation)
+--   jit_ok  : Int (1 if JIT compilation succeeded, 0 otherwise)
+--   vm_ok   : Int (1 if VM compilation succeeded, 0 otherwise)
+--
+-- Output: (Int, Int) tuple of (result, tier_used)
+--   result    : the evaluation output
+--   tier_used : which tier executed (0=JIT, 1=VM, 2=tree-walker)
+--
+-- Note: IRIS currently only has graph_eval (the tree-walking interpreter).
+-- JIT and VM require native code backends not available in IRIS.
+-- The tier-selection logic is preserved so when JIT/VM become available
+-- the routing is ready, but all paths honestly report tier 2.
+
+let evaluate program input jit_ok vm_ok : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(4)] =
+  if jit_ok == 1 then
+    -- JIT path: when native backend is available, this would use it
+    let result = graph_eval program input in
+    (result, 2)
+  else if vm_ok == 1 then
+    -- VM path: when bytecode backend is available, this would use it
+    let result = graph_eval program input in
+    (result, 2)
+  else
+    -- Tree-walker fallback (currently the only available backend)
+    let result = graph_eval program input in
+    (result, 2)
+
+-- Evaluate with deadline checking.
+-- If elapsed_ms >= timeout_ms, return a sentinel instead of evaluating.
+--
+-- Mirrors the wall-clock deadline check in evaluator.rs:
+--   if Instant::now() > deadline { outputs.push(vec![]); continue; }
+let evaluate_timed program input elapsed_ms timeout_ms : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(3)] =
+  if timeout_ms > 0 then
+    if elapsed_ms >= timeout_ms then
+      -- Deadline exceeded: return sentinel (-1) and tier -1
+      (-1, -1)
+    else
+      let result = graph_eval program input in
+      (result, 2)
+  else
+    -- No timeout: always evaluate
+    let result = graph_eval program input in
+    (result, 2)
+
+-- Score a single output against an expected value.
+-- Partial credit: exact match = 100, close = proportional, wrong = 0.
+--
+-- Mirrors score_single_output from evaluator.rs (simplified to ints).
+let score_output actual expected : Int -> Int -> Int [cost: Const(4)] =
+  if actual == expected then 100
+  else
+    let diff = if actual > expected then actual - expected
+               else expected - actual in
+    let scale = if expected > 0 then expected
+                else if expected < 0 then 0 - expected
+                else 1 in
+    if diff == 0 then 100
+    else if diff <= scale then 100 * scale / (scale + diff)
+    else 0

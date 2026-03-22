@@ -1,0 +1,6 @@
+-- Spawn a computation in a new thread and join for the result.
+-- The spawned thread runs a program that adds 3 and 5.
+let compute x : Int -> Int [cost: Const(1)] =
+  let prog = self_graph () in
+  let handle = thread_spawn prog in
+  thread_join handle

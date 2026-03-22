@@ -1,0 +1,25 @@
+-- Add a guard condition around a node: Guard(cmp(input, const), body, Lit(0))
+let add_guard_condition program body_id input_id cmp_opcode threshold =
+  -- Create threshold constant
+  let s1 = graph_add_node_rt program 5 in
+  let p1 = s1.0 in
+  let const_id = s1.1 in
+  let p2_t = graph_set_lit_value p1 const_id 0 threshold in
+  let p2 = p2_t.0 in
+  -- Create comparison node
+  let s2 = graph_add_node_rt p2 0 in
+  let p3 = s2.0 in
+  let cmp_id = s2.1 in
+  let p4_t = graph_set_prim_op p3 cmp_id cmp_opcode in
+  let p4 = p4_t.0 in
+  -- Wire cmp(input, const)
+  let p5 = graph_connect p4 cmp_id input_id 0 in
+  let p6 = graph_connect p5 cmp_id const_id 1 in
+  -- Create fallback Lit(0)
+  let s3 = graph_add_node_rt p6 5 in
+  let p7 = s3.0 in
+  let fallback_id = s3.1 in
+  let p8_t = graph_set_lit_value p7 fallback_id 0 0 in
+  let p8 = p8_t.0 in
+  -- Create guard: Guard(cmp, body, fallback)
+  graph_add_guard_rt p8 cmp_id body_id fallback_id

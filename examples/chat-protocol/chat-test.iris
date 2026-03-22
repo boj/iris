@@ -1,0 +1,64 @@
+-- Chat Protocol Tests
+-- Verifies message formatting, parsing, and client management.
+
+-- Test: format message produces "USER:message\n"
+let test_format_message x : Int -> Int [cost: Const(3)] =
+  let msg = str_concat "alice" (str_concat ":" (str_concat "hello" "\n")) in
+  if str_eq msg "alice:hello\n" then 1 else 0 - 1
+
+-- Test: parse message extracts user and message.
+let test_parse_message x : Int -> Int [cost: Const(3)] =
+  let raw = "bob:world" in
+  let parts = str_split raw ":" in
+  let user = list_nth parts 0 in
+  let msg = list_nth parts 1 in
+  if str_eq user "bob" then
+    if str_eq msg "world" then 1 else 0 - 1
+  else 0 - 1
+
+-- Test: add client to state map.
+let test_add_client x : Int -> Int [cost: Const(3)] =
+  let clients = state_empty in
+  let key = str_concat "client_" (int_to_string 0) in
+  let c1 = map_insert clients key 42 in
+  if map_get c1 key == 42 then 1 else 0 - 1
+
+-- Test: remove client reduces size.
+let test_remove_client x : Int -> Int [cost: Const(4)] =
+  let c1 = map_insert state_empty "client_0" 42 in
+  let c2 = map_remove c1 "client_0" in
+  if map_size c2 == 0 then 1 else 0 - 1
+
+-- Test: str_split on colon separates user from message.
+let test_split_colon x : Int -> Int [cost: Const(2)] =
+  let parts = str_split "user:msg" ":" in
+  let len = fold 0 (\acc p -> acc + 1) parts in
+  if len == 2 then 1 else 0 - 1
+
+-- Test: multiple clients in state map.
+let test_multiple_clients x : Int -> Int [cost: Const(4)] =
+  let c1 = map_insert state_empty "client_0" 10 in
+  let c2 = map_insert c1 "client_1" 20 in
+  if map_size c2 == 2 then 1 else 0 - 1
+
+-- Test: str_starts_with filters client keys.
+let test_filter_client_keys x : Int -> Int [cost: Const(3)] =
+  let c1 = map_insert state_empty "client_0" 10 in
+  let c2 = map_insert c1 "metadata" 99 in
+  let ks = map_keys c2 in
+  let client_count = fold 0 (\acc k -> if str_starts_with k "client_" then acc + 1 else acc) ks in
+  if client_count == 1 then 1 else 0 - 1
+
+-- Aggregate test results
+let test_results x : Int -> Tuple [cost: Const(25)] =
+  let t1 = if str_eq (str_concat "a" (str_concat ":" (str_concat "b" "\n"))) "a:b\n" then 1 else 0 - 1 in
+  let parts = str_split "bob:world" ":" in
+  let t2 = if str_eq (list_nth parts 0) "bob" then 1 else 0 - 1 in
+  let t3 = if str_eq (list_nth parts 1) "world" then 1 else 0 - 1 in
+  let c = map_insert state_empty "client_0" 42 in
+  let t4 = if map_get c "client_0" == 42 then 1 else 0 - 1 in
+  let c2 = map_remove c "client_0" in
+  let t5 = if map_size c2 == 0 then 1 else 0 - 1 in
+  let c3 = map_insert (map_insert state_empty "client_0" 1) "client_1" 2 in
+  let t6 = if map_size c3 == 2 then 1 else 0 - 1 in
+  (t1, t2, t3, t4, t5, t6)

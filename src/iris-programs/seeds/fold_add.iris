@@ -1,0 +1,18 @@
+-- Seed generator: construct a fold+add program (sum over list)
+--
+-- Builds a SemanticGraph: fold(0, add, input) = sum(input)
+--
+-- Graph structure of the generated program:
+--   Fold(root, arity=2)
+--     port 0 -> Lit(0)        base case (identity for addition)
+--     port 1 -> Prim(add)     step function (accumulator + element)
+--
+-- Uses self_graph to obtain a base program, adds a Prim(add) node,
+-- then wires it as the fold step via graph_connect.
+-- Opcode: add = 0x00
+let generate_fold_add program : Int -> Int [cost: Const(6)] =
+  let step = graph_add_node_rt program 0 in
+  let prog = step.0 in
+  let add_id = step.1 in
+  let root = graph_get_root prog in
+  graph_connect prog root add_id 1

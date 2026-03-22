@@ -1,0 +1,58 @@
+-- Classify a problem by running multiple pattern detectors
+--
+-- Runs each detector and returns the pattern code with highest confidence.
+-- Pattern codes:
+--   0 = unknown
+--   1 = identity
+--   2 = constant
+--   3 = linear
+--   4 = sum
+--   5 = max
+--   6 = length
+--   7 = product
+--   8 = negation
+--   9 = absolute
+
+-- Select the better of two (score, code) pairs
+-- Returns the pair with the higher score
+let better a_score a_code b_score b_code : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(1)] =
+  if a_score >= b_score then (a_score, a_code)
+  else (b_score, b_code)
+
+-- Classify a scalar problem (input and output are single integers)
+-- Takes scores from each detector and returns (best_score, pattern_code)
+-- Uses nested if/else to find the maximum score and its pattern code.
+let classify_scalar identity_score constant_score linear_score negation_score absolute_score : Int -> Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(5)] =
+  let s0 = identity_score in
+  let c0 = 1 in
+  let s1 = if constant_score > s0 then constant_score else s0 in
+  let c1 = if constant_score > s0 then 2 else c0 in
+  let s2 = if linear_score > s1 then linear_score else s1 in
+  let c2 = if linear_score > s1 then 3 else c1 in
+  let s3 = if negation_score > s2 then negation_score else s2 in
+  let c3 = if negation_score > s2 then 8 else c2 in
+  let s4 = if absolute_score > s3 then absolute_score else s3 in
+  let c4 = if absolute_score > s3 then 9 else c3 in
+  (s4, c4)
+
+-- Classify a list problem (input is a list, output is a scalar)
+-- Takes scores from list-based detectors and returns (best_score, pattern_code)
+let classify_list sum_score max_score length_score product_score : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(4)] =
+  let s0 = sum_score in
+  let c0 = 4 in
+  let s1 = if max_score > s0 then max_score else s0 in
+  let c1 = if max_score > s0 then 5 else c0 in
+  let s2 = if length_score > s1 then length_score else s1 in
+  let c2 = if length_score > s1 then 6 else c1 in
+  let s3 = if product_score > s2 then product_score else s2 in
+  let c3 = if product_score > s2 then 7 else c2 in
+  (s3, c3)
+
+-- Classify a problem by combining scalar and list detector results
+-- Returns (best_score, pattern_code)
+-- If best_score < 50, returns (best_score, 0) indicating unknown
+let classify_problem scalar_score scalar_code list_score list_code : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(2)] =
+  let best_score = if scalar_score >= list_score then scalar_score else list_score in
+  let best_code = if scalar_score >= list_score then scalar_code else list_code in
+  if best_score < 50 then (best_score, 0)
+  else (best_score, best_code)

@@ -1,0 +1,102 @@
+-- Seed generator: construct a pairwise fold program
+--
+-- Builds: fold over zip(input, drop(input, 1))
+-- Seeds pairwise comparison patterns:
+--   - Is sorted: fold(1, mul, map(zip(input, drop(input,1)), le))
+--   - Pairwise differences: map(zip(input, drop(input,1)), sub)
+--   - Pairwise max: fold(MIN, max, map(zip(input, drop(input,1)), add))
+--
+-- All higher-order ops (map, zip, drop) are Prim nodes with opcodes.
+-- Opcodes: sub=1, mul=2, min=7, max=8, le=36, lt=34, map=48, zip=50, drop=52
+
+-- Helper: add a Prim node with a specific opcode
+let add_prim program opcode : Int -> Int -> Int [cost: Const(4)] =
+  let r = graph_add_node_rt program 0 in
+  let p = r.0 in
+  let nid = r.1 in
+  let spo = graph_set_prim_op p nid opcode in
+  let p = spo.0 in
+  let nid = spo.1 in
+  (p, nid)
+
+-- Generate is-sorted seed: fold(1, mul, map(zip(input, drop(input,1)), le))
+let generate_is_sorted program : Int -> Int [cost: Const(24)] =
+  -- Add drop(input, 1) node (Prim, opcode 52)
+  let s1 = add_prim program 52 in
+  let p1 = s1.0 in
+  let drop_id = s1.1 in
+  -- Add zip node (Prim, opcode 50)
+  let s2 = add_prim p1 50 in
+  let p2 = s2.0 in
+  let zip_id = s2.1 in
+  let p3 = graph_connect p2 zip_id drop_id 1 in
+  -- Add comparison step: le (opcode 36)
+  let s4 = add_prim p3 36 in
+  let p4 = s4.0 in
+  let le_id = s4.1 in
+  -- Add map node (Prim, opcode 48)
+  let s5 = add_prim p4 48 in
+  let p5 = s5.0 in
+  let map_id = s5.1 in
+  let p6 = graph_connect p5 map_id zip_id 0 in
+  let p7 = graph_connect p6 map_id le_id 1 in
+  -- Add fold step: mul (opcode 2, for AND-like behavior)
+  let s8 = add_prim p7 2 in
+  let p8 = s8.0 in
+  let mul_id = s8.1 in
+  -- Wire fold root
+  let root = graph_get_root p8 in
+  let p9 = graph_connect p8 root mul_id 1 in
+  graph_connect p9 root map_id 2
+
+-- Generate pairwise differences: map(zip(input, drop(input,1)), sub)
+let generate_pairwise_diff program : Int -> Int [cost: Const(18)] =
+  -- Add drop(input, 1) node (Prim, opcode 52)
+  let s1 = add_prim program 52 in
+  let p1 = s1.0 in
+  let drop_id = s1.1 in
+  -- Add zip node (Prim, opcode 50)
+  let s2 = add_prim p1 50 in
+  let p2 = s2.0 in
+  let zip_id = s2.1 in
+  let p3 = graph_connect p2 zip_id drop_id 1 in
+  -- Add subtraction step (Prim, opcode 1)
+  let s4 = add_prim p3 1 in
+  let p4 = s4.0 in
+  let sub_id = s4.1 in
+  -- Add map node (Prim, opcode 48)
+  let s5 = add_prim p4 48 in
+  let p5 = s5.0 in
+  let map_id = s5.1 in
+  let p6 = graph_connect p5 map_id zip_id 0 in
+  graph_connect p6 map_id sub_id 1
+
+-- Generate pairwise fold with custom comparison and reduction
+let generate_pairwise_fold program cmp_opcode fold_opcode : Int -> Int -> Int -> Int [cost: Const(24)] =
+  -- Add drop(input, 1) node (Prim, opcode 52)
+  let s1 = add_prim program 52 in
+  let p1 = s1.0 in
+  let drop_id = s1.1 in
+  -- Add zip node (Prim, opcode 50)
+  let s2 = add_prim p1 50 in
+  let p2 = s2.0 in
+  let zip_id = s2.1 in
+  let p3 = graph_connect p2 zip_id drop_id 1 in
+  -- Add comparison step
+  let s4 = add_prim p3 cmp_opcode in
+  let p4 = s4.0 in
+  let cmp_id = s4.1 in
+  -- Add map node (Prim, opcode 48)
+  let s5 = add_prim p4 48 in
+  let p5 = s5.0 in
+  let map_id = s5.1 in
+  let p6 = graph_connect p5 map_id zip_id 0 in
+  let p7 = graph_connect p6 map_id cmp_id 1 in
+  -- Add fold step
+  let s8 = add_prim p7 fold_opcode in
+  let p8 = s8.0 in
+  let fold_step_id = s8.1 in
+  -- Wire fold root
+  let root = graph_get_root p8 in
+  let p9 = graph_connect p8 root fold_step_id 1 in
+  graph_connect p9 root map_id 2

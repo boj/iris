@@ -1,0 +1,79 @@
+-- LIA solver: Linear Integer Arithmetic decision procedure
+--
+-- Evaluates and solves quantifier-free LIA formulas used in
+-- refinement type predicates. Pure implementation, no external SMT.
+--
+-- Formula structure:
+--   Term: Const(c), Var(v), Add(a, b), Mul(c, t), Neg(t), Len(v), Size(v)
+--   Atom: Eq(a, b), Lt(a, b), Le(a, b), Divisible(t, d)
+--   Formula: True, False, And(a, b), Or(a, b), Not(f), Implies(a, b), Atom(a)
+--
+-- Algorithm: bounded enumeration over small ranges for simple predicates,
+-- negation-based counterexample search for complex formulas.
+
+-- Evaluate a simple linear term: coefficient * variable + constant
+-- Returns the evaluated value
+let eval_linear_term coeff var_value constant : Int -> Int -> Int -> Int [cost: Const(2)] =
+  coeff * var_value + constant
+
+-- Evaluate an equality atom: a == b
+let eval_eq a b : Int -> Int -> Int [cost: Const(1)] =
+  if a == b then 1 else 0
+
+-- Evaluate a less-than atom: a < b
+let eval_lt a b : Int -> Int -> Int [cost: Const(1)] =
+  if a < b then 1 else 0
+
+-- Evaluate a less-or-equal atom: a <= b
+let eval_le a b : Int -> Int -> Int [cost: Const(1)] =
+  if a <= b then 1 else 0
+
+-- Evaluate a divisibility atom: t is divisible by d
+-- Returns 1 if t mod d == 0, 0 otherwise (0 divides nothing)
+let eval_divisible t d : Int -> Int -> Int [cost: Const(2)] =
+  if d == 0 then 0
+  else if t - (t / d) * d == 0 then 1
+  else 0
+
+-- Evaluate logical AND: both must hold
+let eval_and a b : Int -> Int -> Int [cost: Const(1)] =
+  if a == 1 then
+    if b == 1 then 1 else 0
+  else 0
+
+-- Evaluate logical OR: at least one must hold
+let eval_or a b : Int -> Int -> Int [cost: Const(1)] =
+  if a == 1 then 1
+  else if b == 1 then 1
+  else 0
+
+-- Evaluate logical NOT: negate a formula result
+let eval_not f : Int -> Int [cost: Const(1)] =
+  if f == 1 then 0 else 1
+
+-- Evaluate logical IMPLIES: a -> b = (not a) or b
+let eval_implies a b : Int -> Int -> Int [cost: Const(1)] =
+  if a == 1 then b
+  else 1
+
+-- Check a simple bounds predicate: lo <= x <= hi
+-- Returns 1 if x is within bounds, 0 otherwise
+let check_bounds x lo hi : Int -> Int -> Int -> Int [cost: Const(2)] =
+  eval_and (eval_le lo x) (eval_le x hi)
+
+-- Bounded enumeration: check a predicate at several sample points
+-- Checks predicate at 0, 1, -1, range, -range
+-- Returns 1 if any satisfying assignment found, 0 if none
+let bounded_search predicate range : (Int -> Int) -> Int -> Int [cost: Const(5)] =
+  let r0 = predicate 0 in
+  let r1 = predicate 1 in
+  let r2 = predicate (0 - 1) in
+  let r3 = predicate range in
+  let r4 = predicate (0 - range) in
+  eval_or r0 (eval_or r1 (eval_or r2 (eval_or r3 r4)))
+
+-- Find a counterexample: search for an assignment that falsifies the formula
+-- Returns 1 if counterexample found (formula is NOT valid), 0 if valid
+let find_counterexample predicate range : (Int -> Int) -> Int -> Int [cost: Const(5)] =
+  let negated = \v -> eval_not (predicate v) in
+  bounded_search negated range

@@ -1,0 +1,51 @@
+-- Inline helper: replace element at index.
+let list_set xs i val =
+  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+
+-- Coin Change Problem
+-- Given coin denominations, find the minimum number of coins to make an amount.
+-- Classic DP: dp[i] = min coins needed for amount i.
+
+-- A large sentinel value for "impossible".
+let inf x : Int -> Int [cost: Const(1)] = 999999
+
+-- Minimum coins to make `amount` using given denominations.
+let coin_change coins amount : Tuple -> Int -> Int [cost: Unknown] =
+  -- dp[0] = 0, dp[1..amount] = inf initially
+  let init = map (\i -> if i == 0 then 0 else inf 0) (list_range 0 (amount + 1)) in
+  -- For each coin, update the DP table
+  let final_dp = fold init (\dp coin ->
+    -- For amounts from coin to amount, try using this coin
+    fold dp (\dp2 a ->
+      if a < coin then dp2
+      else
+        let prev = list_nth dp2 (a - coin) in
+        let current = list_nth dp2 a in
+        if prev + 1 < current then
+          list_set dp2 a (prev + 1)
+        else dp2
+    ) (list_range 0 (amount + 1))
+  ) coins in
+  let result = list_nth final_dp amount in
+  if result >= inf 0 then -1 else result
+
+-- Count total ways to make change (order doesn't matter).
+let coin_ways coins amount : Tuple -> Int -> Int [cost: Unknown] =
+  let init = map (\i -> if i == 0 then 1 else 0) (list_range 0 (amount + 1)) in
+  let final_dp = fold init (\dp coin ->
+    fold dp (\dp2 a ->
+      if a < coin then dp2
+      else
+        let ways = list_nth dp2 a + list_nth dp2 (a - coin) in
+        list_set dp2 a ways
+    ) (list_range 0 (amount + 1))
+  ) coins in
+  list_nth final_dp amount
+
+-- Test
+let test_coin_change x : Int -> Tuple =
+  let coins = (1, 5, 10, 25) in
+  let min11 = coin_change coins 11 in
+  let min30 = coin_change coins 30 in
+  let ways11 = coin_ways coins 11 in
+  (min11, min30, ways11)
