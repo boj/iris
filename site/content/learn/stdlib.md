@@ -446,7 +446,7 @@ Requires `--features jit`. Capability-gated: sandboxes deny `MmapExec` by defaul
 
 ## Type Modules {#type-modules}
 
-Four modules in `programs/stdlib/` define common algebraic data types with
+Four modules in `src/iris-programs/stdlib/` define common algebraic data types with
 utility functions. Import them with [path-based imports](/learn/language/#path-imports):
 
 ```iris

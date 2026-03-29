@@ -353,7 +353,7 @@ src/
   bin/iris.rs          CLI binary (run, check, solve, daemon, repl)
 src/iris-programs/    Core .iris programs (19 categories)
 examples/             Demo .iris programs + Rust examples
-programs/stdlib/      Standard library type modules (Option, Result, Either, Ordering)
+  stdlib/             Standard library type modules (Option, Result, Either, Ordering)
 benchmark/             10 Computer Language Benchmarks Game implementations
 bootstrap/             Pre-compiled IRIS interpreter (JSON)
 lean/                  Lean 4 kernel formalization (47 theorems, 0 sorry)

@@ -9,7 +9,7 @@ let test_unwrap_none : Int =
   unwrap_or None 99
 
 let test_map : Int =
-  let doubled = map (Some(21)) (\x -> x * 2) in
+  let doubled = option_map (Some(21)) (\x -> x * 2) in
   unwrap_or doubled 0
 
 let test_is_some : Bool =
@@ -29,11 +29,11 @@ let test_and_then_none : Int =
 
 -- filter: predicate HOF
 let test_filter_pass : Bool =
-  let result = filter (Some(42)) (\x -> x > 10) in
+  let result = option_filter (Some(42)) (\x -> x > 10) in
   is_some result
 
 let test_filter_fail : Bool =
-  let result = filter (Some(3)) (\x -> x > 10) in
+  let result = option_filter (Some(3)) (\x -> x > 10) in
   is_none result
 
 -- unwrap_or_else: lazy default via closure
@@ -42,5 +42,5 @@ let test_unwrap_or_else : Int =
 
 -- map on None returns None
 let test_map_none : Bool =
-  let result = map None (\x -> x + 1) in
+  let result = option_map None (\x -> x + 1) in
   is_none result

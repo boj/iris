@@ -24,17 +24,17 @@ let eval_module_tests module_id =
 
 -- Test file manifest
 let test_files = (
-  "programs/testing/test_analyzer.iris",
-  "programs/testing/test_capability_wiring.iris",
-  "programs/testing/test_codec.iris",
-  "programs/testing/test_deploy.iris",
-  "programs/testing/test_effects.iris",
-  "programs/testing/test_evolution.iris",
-  "programs/testing/test_jit.iris",
-  "programs/testing/test_lsp.iris",
-  "programs/testing/test_meta.iris",
-  "programs/testing/test_repr.iris",
-  "programs/testing/test_vm.iris"
+  "src/iris-programs/testing/test_analyzer.iris",
+  "src/iris-programs/testing/test_capability_wiring.iris",
+  "src/iris-programs/testing/test_codec.iris",
+  "src/iris-programs/testing/test_deploy.iris",
+  "src/iris-programs/testing/test_effects.iris",
+  "src/iris-programs/testing/test_evolution.iris",
+  "src/iris-programs/testing/test_jit.iris",
+  "src/iris-programs/testing/test_lsp.iris",
+  "src/iris-programs/testing/test_meta.iris",
+  "src/iris-programs/testing/test_repr.iris",
+  "src/iris-programs/testing/test_vm.iris"
 )
 
 -- Main entry point: compile and run all test files.

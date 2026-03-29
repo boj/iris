@@ -601,6 +601,19 @@ impl<'g> Checker<'g> {
                 reason: format!("root node {root:?} has no proof tree"),
             })?;
 
+        // Verify graph-level cost annotation against the root's proven cost.
+        if let Some(warning) = check_graph_cost(self.graph, root_thm) {
+            if self.tier >= VerifyTier::Tier2 {
+                return Err(CheckError::MalformedGraph {
+                    reason: format!(
+                        "graph cost violation: declared {:?}, proven {:?}",
+                        warning.declared, warning.proven,
+                    ),
+                });
+            }
+            self.cost_warnings.push(warning);
+        }
+
         Ok((root_proof.clone(), root_thm.clone()))
     }
 
@@ -1305,6 +1318,40 @@ fn check_cost_annotation(
     None
 }
 
+/// Verify the graph-level cost annotation (`graph.cost`) against the root
+/// node's proven cost.  This bridges user-written `[cost: Linear(n)]`
+/// annotations to the kernel's cost propagation.
+fn check_graph_cost(
+    graph: &SemanticGraph,
+    root_thm: &Theorem,
+) -> Option<CostWarning> {
+    // Skip if the user didn't annotate a cost (Unknown = no annotation).
+    if matches!(graph.cost, CostBound::Unknown) {
+        return None;
+    }
+
+    let declared = &graph.cost;
+    let proven = root_thm.cost();
+
+    // The proven cost must be <= the declared cost.  If it is, the
+    // annotation is valid (the program is at most as expensive as claimed).
+    if cost_checker::cost_leq(proven, declared) {
+        return None;
+    }
+
+    // If declared <= proven but not the other way, the annotation is too
+    // tight — the program is more expensive than claimed.
+    Some(CostWarning {
+        node: graph.root,
+        declared: declared.clone(),
+        proven: proven.clone(),
+        reason: format!(
+            "graph cost annotation {:?} is too tight: proven cost is {:?}",
+            declared, proven
+        ),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // GradedChecker — continues past failures for partial credit
 // ---------------------------------------------------------------------------
@@ -1434,15 +1481,34 @@ impl<'g> GradedChecker<'g> {
             }
         }
 
+        // Build a partial proof from the root if it was proven.
+        let partial_proof = self.proof_trees.get(&self.graph.root).cloned();
+
+        // Verify graph-level cost annotation against the root's proven cost.
+        if let Some(root_thm) = self.proven.get(&self.graph.root) {
+            if let Some(warning) = check_graph_cost(self.graph, root_thm) {
+                if self.tier >= VerifyTier::Tier2 {
+                    self.failures.push((
+                        self.graph.root,
+                        CheckError::MalformedGraph {
+                            reason: format!(
+                                "graph cost violation: declared {:?}, proven {:?}",
+                                warning.declared, warning.proven,
+                            ),
+                        },
+                    ));
+                } else {
+                    self.cost_warnings.push(warning);
+                }
+            }
+        }
+
         let satisfied = total - self.failures.len();
         let score = if total > 0 {
             satisfied as f32 / total as f32
         } else {
             1.0
         };
-
-        // Build a partial proof from the root if it was proven.
-        let partial_proof = self.proof_trees.get(&self.graph.root).cloned();
 
         VerificationReport {
             total_obligations: total,
