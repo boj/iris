@@ -75,9 +75,7 @@
 //!    construct `Theorem` values, so soundness reduces to the correctness of
 //!    these 20 rules.
 
-use crate::syntax::kernel::cost_checker;
 use crate::syntax::kernel::error::KernelError;
-#[cfg(feature = "lean-kernel")]
 use crate::syntax::kernel::lean_bridge;
 use crate::syntax::kernel::theorem::{Context, Judgment, Theorem};
 
@@ -132,37 +130,15 @@ impl Kernel {
         name: BinderId,
         node_id: NodeId,
     ) -> Result<Theorem, KernelError> {
-        // When lean-kernel is enabled, delegate to the Lean implementation
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_assume(ctx, name, node_id)
-                .ok_or(KernelError::BinderNotFound {
-                    rule: "assume",
-                    binder: name,
-                })?;
-            return Ok(Theorem {
-                proof_hash: proof_hash_leaf("assume", judgment.node_id, judgment.type_ref),
-                judgment,
-            });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let type_id = ctx.lookup(name).ok_or(KernelError::BinderNotFound {
+        let judgment = lean_bridge::lean_assume(ctx, name, node_id)
+            .ok_or(KernelError::BinderNotFound {
                 rule: "assume",
                 binder: name,
             })?;
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: ctx.clone(),
-                    node_id,
-                    type_ref: type_id,
-                    cost: CostBound::Zero,
-                },
-                proof_hash: proof_hash_leaf("assume", node_id, type_id),
-            })
-        }
+        Ok(Theorem {
+            proof_hash: proof_hash_leaf("assume", judgment.node_id, judgment.type_ref),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -284,24 +260,12 @@ impl Kernel {
     /// Produces a theorem asserting `node_id = node_id` (represented as the
     /// node having its own type, at zero cost, in an empty context).
     pub fn refl(node_id: NodeId, type_id: TypeId) -> Theorem {
-        #[cfg(feature = "lean-kernel")]
-        {
-            if let Some(judgment) = lean_bridge::lean_refl(&Context::empty(), node_id, type_id) {
-                return Theorem {
-                    proof_hash: proof_hash_leaf("refl", node_id, type_id),
-                    judgment,
-                };
-            }
-        }
-
+        // refl is unconditional — lean_refl always succeeds.
+        let judgment = lean_bridge::lean_refl(&Context::empty(), node_id, type_id)
+            .expect("refl is unconditional and should never fail");
         Theorem {
-            judgment: Judgment {
-                context: Context::empty(),
-                node_id,
-                type_ref: type_id,
-                cost: CostBound::Zero,
-            },
             proof_hash: proof_hash_leaf("refl", node_id, type_id),
+            judgment,
         }
     }
 
@@ -364,43 +328,16 @@ impl Kernel {
     /// with the same type `T`, produce a theorem about node `a` with the cost
     /// of `thm2` (the "target" end of the chain).
     pub fn trans(thm1: &Theorem, thm2: &Theorem) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_trans(&thm1.judgment, &thm2.judgment)
-                .ok_or(KernelError::TypeMismatch {
-                    expected: thm1.judgment.type_ref,
-                    actual: thm2.judgment.type_ref,
-                    context: "trans",
-                })?;
-            return Ok(Theorem {
-                proof_hash: proof_hash("trans", &[thm1.proof_hash(), thm2.proof_hash()]),
-                judgment,
-            });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if thm1.judgment.type_ref != thm2.judgment.type_ref {
-                return Err(KernelError::TypeMismatch {
-                    expected: thm1.judgment.type_ref,
-                    actual: thm2.judgment.type_ref,
-                    context: "trans",
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm1.judgment.context.clone(),
-                    node_id: thm1.judgment.node_id,
-                    type_ref: thm2.judgment.type_ref,
-                    cost: thm2.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash(
-                    "trans",
-                    &[thm1.proof_hash(), thm2.proof_hash()],
-                ),
-            })
-        }
+        let judgment = lean_bridge::lean_trans(&thm1.judgment, &thm2.judgment)
+            .ok_or(KernelError::TypeMismatch {
+                expected: thm1.judgment.type_ref,
+                actual: thm2.judgment.type_ref,
+                context: "trans",
+            })?;
+        Ok(Theorem {
+            proof_hash: proof_hash("trans", &[thm1.proof_hash(), thm2.proof_hash()]),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -574,38 +511,15 @@ impl Kernel {
         thm: &Theorem,
         new_cost: CostBound,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_cost_subsume(&thm.judgment, &new_cost)
-                .ok_or(KernelError::CostViolation {
-                    required: new_cost.clone(),
-                    actual: thm.judgment.cost.clone(),
-                })?;
-            return Ok(Theorem {
-                proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
-                judgment,
-            });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if !cost_checker::cost_leq(&thm.judgment.cost, &new_cost) {
-                return Err(KernelError::CostViolation {
-                    required: new_cost,
-                    actual: thm.judgment.cost.clone(),
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: thm.judgment.node_id,
-                    type_ref: thm.judgment.type_ref,
-                    cost: new_cost,
-                },
-                proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
-            })
-        }
+        let judgment = lean_bridge::lean_cost_subsume(&thm.judgment, &new_cost)
+            .ok_or(KernelError::CostViolation {
+                required: new_cost.clone(),
+                actual: thm.judgment.cost.clone(),
+            })?;
+        Ok(Theorem {
+            proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -628,38 +542,15 @@ impl Kernel {
         hasher.update(format!("{k2:?}").as_bytes());
         let hash = *hasher.finalize().as_bytes();
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_cost_leq_rule(k1, k2)
-                .ok_or(KernelError::CostViolation {
-                    required: k2.clone(),
-                    actual: k1.clone(),
-                })?;
-            return Ok(Theorem {
-                proof_hash: hash,
-                judgment,
-            });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if !cost_checker::cost_leq(k1, k2) {
-                return Err(KernelError::CostViolation {
-                    required: k2.clone(),
-                    actual: k1.clone(),
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: Context::empty(),
-                    node_id: NodeId(0),
-                    type_ref: TypeId(0),
-                    cost: k2.clone(),
-                },
-                proof_hash: hash,
-            })
-        }
+        let judgment = lean_bridge::lean_cost_leq_rule(k1, k2)
+            .ok_or(KernelError::CostViolation {
+                required: k2.clone(),
+                actual: k1.clone(),
+            })?;
+        Ok(Theorem {
+            proof_hash: hash,
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -961,49 +852,12 @@ impl Kernel {
         body_thm: &Theorem,
     ) -> Result<Theorem, KernelError> {
         let ph = proof_hash("let_bind", &[bound_thm.proof_hash(), body_thm.proof_hash()]);
-
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_let_bind(
-                ctx, let_node, binder_name, &bound_thm.judgment, &body_thm.judgment,
-            ).ok_or(KernelError::ContextMismatch {
-                rule: "let_bind",
-            })?;
-            return Ok(Theorem { proof_hash: ph, judgment });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // bound_thm must be in ctx.
-            if bound_thm.judgment.context != *ctx {
-                return Err(KernelError::ContextMismatch {
-                    rule: "let_bind (bound)",
-                });
-            }
-
-            // body_thm must be in ctx extended with the binder.
-            let extended = ctx.extend(binder_name, bound_thm.judgment.type_ref);
-            if body_thm.judgment.context != extended {
-                return Err(KernelError::ContextMismatch {
-                    rule: "let_bind (body)",
-                });
-            }
-
-            let cost = CostBound::Sum(
-                Box::new(bound_thm.judgment.cost.clone()),
-                Box::new(body_thm.judgment.cost.clone()),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: ctx.clone(),
-                    node_id: let_node,
-                    type_ref: body_thm.judgment.type_ref,
-                    cost,
-                },
-                proof_hash: ph,
-            })
-        }
+        let judgment = lean_bridge::lean_let_bind(
+            ctx, let_node, binder_name, &bound_thm.judgment, &body_thm.judgment,
+        ).ok_or(KernelError::ContextMismatch {
+            rule: "let_bind",
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1026,55 +880,14 @@ impl Kernel {
         sub_hashes.extend(arm_thms.iter().map(|a| a.proof_hash()));
         let ph = proof_hash("match_elim", &sub_hashes);
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let arm_judgments: Vec<Judgment> = arm_thms.iter().map(|a| a.judgment.clone()).collect();
-            let judgment = lean_bridge::lean_match_elim(
-                &scrutinee_thm.judgment, &arm_judgments, match_node,
-            ).ok_or(KernelError::InvalidRule {
-                rule: "match_elim",
-                reason: "Lean kernel rejected match_elim".to_string(),
-            })?;
-            return Ok(Theorem { proof_hash: ph, judgment });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if arm_thms.is_empty() {
-                return Err(KernelError::InvalidRule {
-                    rule: "match_elim",
-                    reason: "no match arms".to_string(),
-                });
-            }
-
-            let result_type = arm_thms[0].judgment.type_ref;
-            for (_i, arm) in arm_thms.iter().enumerate().skip(1) {
-                if arm.judgment.type_ref != result_type {
-                    return Err(KernelError::TypeMismatch {
-                        expected: result_type,
-                        actual: arm.judgment.type_ref,
-                        context: "match_elim (arm type mismatch)",
-                    });
-                }
-            }
-
-            let arm_costs: Vec<CostBound> =
-                arm_thms.iter().map(|a| a.judgment.cost.clone()).collect();
-            let cost = CostBound::Sum(
-                Box::new(scrutinee_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sup(arm_costs)),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: scrutinee_thm.judgment.context.clone(),
-                    node_id: match_node,
-                    type_ref: result_type,
-                    cost,
-                },
-                proof_hash: ph,
-            })
-        }
+        let arm_judgments: Vec<Judgment> = arm_thms.iter().map(|a| a.judgment.clone()).collect();
+        let judgment = lean_bridge::lean_match_elim(
+            &scrutinee_thm.judgment, &arm_judgments, match_node,
+        ).ok_or(KernelError::InvalidRule {
+            rule: "match_elim",
+            reason: "kernel rejected match_elim".to_string(),
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1101,43 +914,13 @@ impl Kernel {
             ],
         );
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_fold_rule(
-                &base_thm.judgment, &step_thm.judgment, &input_thm.judgment, fold_node,
-            ).ok_or(KernelError::InvalidRule {
-                rule: "fold_rule",
-                reason: "Lean kernel rejected fold_rule".to_string(),
-            })?;
-            return Ok(Theorem { proof_hash: ph, judgment });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Result type comes from the base case.
-            let result_type = base_thm.judgment.type_ref;
-
-            let cost = CostBound::Sum(
-                Box::new(input_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sum(
-                    Box::new(base_thm.judgment.cost.clone()),
-                    Box::new(CostBound::Mul(
-                        Box::new(step_thm.judgment.cost.clone()),
-                        Box::new(input_thm.judgment.cost.clone()),
-                    )),
-                )),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: base_thm.judgment.context.clone(),
-                    node_id: fold_node,
-                    type_ref: result_type,
-                    cost,
-                },
-                proof_hash: ph,
-            })
-        }
+        let judgment = lean_bridge::lean_fold_rule(
+            &base_thm.judgment, &step_thm.judgment, &input_thm.judgment, fold_node,
+        ).ok_or(KernelError::InvalidRule {
+            rule: "fold_rule",
+            reason: "kernel rejected fold_rule".to_string(),
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1247,47 +1030,14 @@ impl Kernel {
             ],
         );
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_guard_rule(
-                &pred_thm.judgment, &then_thm.judgment, &else_thm.judgment, guard_node,
-            ).ok_or(KernelError::TypeMismatch {
-                expected: then_thm.judgment.type_ref,
-                actual: else_thm.judgment.type_ref,
-                context: "guard_rule (then vs else)",
-            })?;
-            return Ok(Theorem { proof_hash: ph, judgment });
-        }
-
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Then and else must have the same result type.
-            if then_thm.judgment.type_ref != else_thm.judgment.type_ref {
-                return Err(KernelError::TypeMismatch {
-                    expected: then_thm.judgment.type_ref,
-                    actual: else_thm.judgment.type_ref,
-                    context: "guard_rule (then vs else)",
-                });
-            }
-
-            let cost = CostBound::Sum(
-                Box::new(pred_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sup(vec![
-                    then_thm.judgment.cost.clone(),
-                    else_thm.judgment.cost.clone(),
-                ])),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: pred_thm.judgment.context.clone(),
-                    node_id: guard_node,
-                    type_ref: then_thm.judgment.type_ref,
-                    cost,
-                },
-                proof_hash: ph,
-            })
-        }
+        let judgment = lean_bridge::lean_guard_rule(
+            &pred_thm.judgment, &then_thm.judgment, &else_thm.judgment, guard_node,
+        ).ok_or(KernelError::TypeMismatch {
+            expected: then_thm.judgment.type_ref,
+            actual: else_thm.judgment.type_ref,
+            context: "guard_rule (then vs else)",
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 }
 
@@ -1862,7 +1612,9 @@ mod tests {
         let scrutinee = Kernel::refl(NodeId(3), TypeId(1));
 
         let err = Kernel::match_elim(&scrutinee, &[arm1, arm2], NodeId(4)).unwrap_err();
-        assert!(matches!(err, KernelError::TypeMismatch { .. }));
+        // The lean bridge returns None for arm type mismatches, which the
+        // kernel wraps as InvalidRule.
+        assert!(matches!(err, KernelError::InvalidRule { .. }));
     }
 
     #[test]

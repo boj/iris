@@ -304,6 +304,10 @@ structure Judgment where
   type_ref : TypeId
   cost     : CostBound
 
+instance : Inhabited CostBound := ⟨CostBound.Zero⟩
+instance : Inhabited Context := ⟨⟨[]⟩⟩
+instance : Inhabited Judgment := ⟨⟨default, default, default, default⟩⟩
+
 -- ===========================================================================
 -- CostLeq — the partial order on CostBound
 -- Mirrors `cost_leq` in `src/iris-kernel/src/cost_checker.rs`

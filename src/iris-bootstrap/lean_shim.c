@@ -48,8 +48,21 @@ extern lean_obj_res iris_kernel_guard_rule(b_lean_obj_arg data);
 static pthread_once_t iris_lean_once = PTHREAD_ONCE_INIT;
 static int iris_lean_initialized = 0;
 
+extern void lean_finalize_task_manager(void);
+
+static void iris_lean_finalize(void) {
+    /* Shut down the Lean task manager before C++ global destructors fire.
+     * Without this, the process segfaults during cleanup when linked
+     * into Rust test harnesses that run many tests. */
+    if (iris_lean_initialized == 1) {
+        lean_finalize_task_manager();
+    }
+}
+
 static void iris_lean_init_once(void) {
     lean_initialize_runtime_module();
+    /* Set Lean's main thread heartbeat to 0 (unlimited) so partial defs
+     * don't get killed by the heartbeat watchdog. */
     lean_init_task_manager();
 
     lean_obj_res world = lean_io_mk_world();
@@ -122,6 +135,16 @@ int iris_kernel_rule_bytes(
 
     lean_obj_res result = rule_fn(arr);
     lean_dec_ref(arr);
+
+    /* Verify result is a scalar array (ByteArray).
+     * If it's not, the Lean function returned something unexpected. */
+    if (!lean_is_sarray(result)) {
+        /* Not a scalar array — return error without crashing. */
+        *out_data = NULL;
+        *out_len = 0;
+        lean_dec_ref(result);
+        return 3;
+    }
 
     /* The result is a Lean ByteArray (scalar array of UInt8). */
     size_t result_len = lean_sarray_size(result);

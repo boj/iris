@@ -1065,7 +1065,9 @@ fn rule16_match_elim_negative_type_disagreement() {
     let arm2 = Kernel::refl(NodeId(3), TypeId(30)); // different!
 
     let err = Kernel::match_elim(&scrutinee, &[arm1, arm2], NodeId(4)).unwrap_err();
-    assert!(matches!(err, KernelError::TypeMismatch { .. }));
+    // The lean bridge returns None for arm type mismatches, which the
+    // kernel wraps as InvalidRule.
+    assert!(matches!(err, KernelError::InvalidRule { .. }));
 }
 
 /// Edge case: empty arms list.
