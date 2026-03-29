@@ -6,6 +6,7 @@
 //! the autopoietic closure: IRIS programs evolving IRIS programs.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use rand::Rng;
@@ -354,7 +355,7 @@ impl IrisRuntime {
         inputs: &[Value],
     ) -> Option<Vec<Value>> {
         let iris_inputs = vec![
-            Value::Program(Box::new(program.clone())),
+            Value::Program(Rc::new(program.clone())),
             Value::tuple(inputs.to_vec()),
         ];
 
@@ -507,9 +508,9 @@ impl IrisRuntime {
         let node_b = ids_b[rng.gen_range(0..ids_b.len())];
 
         let inputs = vec![
-            Value::Program(Box::new(a.clone())),
+            Value::Program(Rc::new(a.clone())),
             Value::Int(node_a.0 as i64),
-            Value::Program(Box::new(b.clone())),
+            Value::Program(Rc::new(b.clone())),
             Value::Int(node_b.0 as i64),
         ];
 
@@ -586,14 +587,14 @@ impl IrisRuntime {
         let new_opcode = opcodes[rng.gen_range(0..opcodes.len())];
 
         let inputs = vec![
-            Value::Program(Box::new(program.clone())),
+            Value::Program(Rc::new(program.clone())),
             Value::Int(new_opcode as i64),
         ];
 
         match interpreter::interpret(&self.replace_prim, &inputs, None) {
             Ok((outputs, _)) => {
                 if let Some(Value::Program(p)) = outputs.into_iter().next() {
-                    Some(*p)
+                    Some(std::rc::Rc::try_unwrap(p).unwrap_or_else(|rc| (*rc).clone()))
                 } else {
                     None
                 }
@@ -614,14 +615,14 @@ impl IrisRuntime {
 
         // Step 1: add a node
         let inputs = vec![
-            Value::Program(Box::new(program.clone())),
+            Value::Program(Rc::new(program.clone())),
             Value::Int(new_opcode as i64),
         ];
 
         let with_node = match interpreter::interpret(&self.add_node, &inputs, None) {
             Ok((outputs, _)) => {
                 if let Some(Value::Program(p)) = outputs.into_iter().next() {
-                    *p
+                    std::rc::Rc::try_unwrap(p).unwrap_or_else(|rc| (*rc).clone())
                 } else {
                     return None;
                 }
@@ -647,7 +648,7 @@ impl IrisRuntime {
         }
 
         let connect_inputs = vec![
-            Value::Program(Box::new(with_node.clone())),
+            Value::Program(Rc::new(with_node.clone())),
             Value::Int(root_id),     // source (root)
             Value::Int(new_node_id), // target (new node)
             Value::Int(rng.gen_range(0..3) as i64), // port
@@ -656,7 +657,7 @@ impl IrisRuntime {
         match interpreter::interpret(&self.connect, &connect_inputs, None) {
             Ok((outputs, _)) => {
                 if let Some(Value::Program(p)) = outputs.into_iter().next() {
-                    Some(*p)
+                    Some(std::rc::Rc::try_unwrap(p).unwrap_or_else(|rc| (*rc).clone()))
                 } else {
                     Some(with_node)
                 }
@@ -1003,7 +1004,7 @@ mod tests {
 
         // Replace add -> sub using IRIS
         let inputs = vec![
-            Value::Program(Box::new(program)),
+            Value::Program(Rc::new(program)),
             Value::Int(0x01), // sub
         ];
         let (outputs, _) = interpreter::interpret(&rt.replace_prim, &inputs, None).unwrap();

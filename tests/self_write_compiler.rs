@@ -21,6 +21,7 @@
 //! entirely in IRIS: analyze → decide → transform.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -451,7 +452,7 @@ fn analysis_add_3_5_is_foldable() {
     let analyzer = build_is_root_foldable_add();
     let target = make_binop_graph(0x00, 3, 5); // add(3, 5)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
 
     assert_eq!(
@@ -466,7 +467,7 @@ fn analysis_mul_2_3_is_not_foldable_add() {
     let analyzer = build_is_root_foldable_add();
     let target = make_binop_graph(0x02, 2, 3); // mul(2, 3)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
 
     assert_eq!(
@@ -481,7 +482,7 @@ fn analysis_sub_10_7_is_not_foldable_add() {
     let analyzer = build_is_root_foldable_add();
     let target = make_binop_graph(0x01, 10, 7); // sub(10, 7)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
 
     assert_eq!(
@@ -496,7 +497,7 @@ fn analysis_lit_is_not_foldable() {
     let analyzer = build_is_root_foldable_add();
     let target = make_lit_graph(42); // Lit(42) — already folded
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
 
     assert_eq!(
@@ -515,7 +516,7 @@ fn analysis_add_with_input_is_foldable_add() {
     let analyzer = build_is_root_foldable_add();
     let target = make_add_with_input_graph(); // add(x, 5)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
 
     assert_eq!(
@@ -532,7 +533,7 @@ fn fold_add_3_5_gives_8() {
     let folder = build_constant_fold_program();
     let target = make_binop_graph(0x00, 3, 5); // add(3, 5)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
 
     assert_eq!(
@@ -547,7 +548,7 @@ fn fold_mul_4_7_gives_28() {
     let folder = build_constant_fold_program();
     let target = make_binop_graph(0x02, 4, 7); // mul(4, 7)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
 
     assert_eq!(
@@ -562,7 +563,7 @@ fn fold_sub_10_3_gives_7() {
     let folder = build_constant_fold_program();
     let target = make_binop_graph(0x01, 10, 3); // sub(10, 3)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
 
     assert_eq!(
@@ -577,7 +578,7 @@ fn fold_lit_42_gives_42() {
     let folder = build_constant_fold_program();
     let target = make_lit_graph(42); // Lit(42) — already a constant
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
 
     assert_eq!(
@@ -594,7 +595,7 @@ fn analyze_and_fold_add_3_5() {
     let combined = build_analyze_and_fold();
     let target = make_binop_graph(0x00, 3, 5); // add(3, 5)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&combined, &inputs, None).unwrap();
 
     assert_eq!(
@@ -609,7 +610,7 @@ fn analyze_and_fold_lit_not_foldable() {
     let combined = build_analyze_and_fold();
     let target = make_lit_graph(42); // Lit(42) — root is not Prim
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&combined, &inputs, None).unwrap();
 
     assert_eq!(
@@ -646,7 +647,7 @@ fn folded_result_matches_direct_execution() {
         );
 
         // Constant folding via IRIS meta-program
-        let inputs = vec![Value::Program(Box::new(target))];
+        let inputs = vec![Value::Program(Rc::new(target))];
         let (folded_result, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
 
         assert_eq!(
@@ -668,7 +669,7 @@ fn end_to_end_compiler_pipeline() {
     let target = make_binop_graph(0x00, 3, 5);
 
     // Step 1: Analysis — is this program's root a Prim(add)?
-    let inputs = vec![Value::Program(Box::new(target.clone()))];
+    let inputs = vec![Value::Program(Rc::new(target.clone()))];
     let (analysis_result, _) = interpreter::interpret(&analyzer, &inputs, None).unwrap();
     assert_eq!(
         analysis_result,
@@ -680,7 +681,7 @@ fn end_to_end_compiler_pipeline() {
     let is_foldable = matches!(analysis_result.first(), Some(Value::Int(1)));
     assert!(is_foldable, "analysis should indicate foldable");
 
-    let inputs = vec![Value::Program(Box::new(target.clone()))];
+    let inputs = vec![Value::Program(Rc::new(target.clone()))];
     let (fold_result, _) = interpreter::interpret(&folder, &inputs, None).unwrap();
     assert_eq!(
         fold_result,

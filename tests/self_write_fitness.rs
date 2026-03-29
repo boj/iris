@@ -9,6 +9,7 @@
 //! logic for each, and returns the count of passed tests.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -383,7 +384,7 @@ fn single_case_pass() {
     let add_program = make_add_program();
 
     let inputs = vec![
-        Value::Program(Box::new(add_program)),
+        Value::Program(Rc::new(add_program)),
         Value::tuple(vec![Value::Int(3), Value::Int(5)]),
         Value::Int(8),
     ];
@@ -400,7 +401,7 @@ fn single_case_fail() {
     let add_program = make_add_program();
 
     let inputs = vec![
-        Value::Program(Box::new(add_program)),
+        Value::Program(Rc::new(add_program)),
         Value::tuple(vec![Value::Int(3), Value::Int(5)]),
         Value::Int(9),
     ];
@@ -433,7 +434,7 @@ fn multi_case_all_pass() {
     ]);
 
     let inputs = vec![
-        Value::Program(Box::new(add_program)),
+        Value::Program(Rc::new(add_program)),
         test_cases,
     ];
 
@@ -468,7 +469,7 @@ fn multi_case_partial_pass() {
     ]);
 
     let inputs = vec![
-        Value::Program(Box::new(add_program)),
+        Value::Program(Rc::new(add_program)),
         test_cases,
     ];
 

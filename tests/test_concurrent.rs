@@ -6,6 +6,7 @@
 //! and that parallel execution uses multiple threads.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -137,7 +138,7 @@ fn make_literal_graph(v: i64) -> SemanticGraph {
 fn unwrap_outputs(outputs: Vec<Value>) -> Vec<Value> {
     if outputs.len() == 1 {
         if let Value::Tuple(inner) = outputs.into_iter().next().unwrap() {
-            return inner;
+            return Rc::try_unwrap(inner).unwrap_or_else(|rc| (*rc).clone());
         }
     }
     // If not a single Tuple, return as-is (e.g. single Int from spawn+await).
@@ -149,7 +150,7 @@ fn unwrap_outputs(outputs: Vec<Value>) -> Vec<Value> {
 fn unwrap_outputs_flexible(outputs: Vec<Value>) -> Vec<Value> {
     if outputs.len() == 1 {
         match outputs.into_iter().next().unwrap() {
-            Value::Tuple(inner) => inner,
+            Value::Tuple(inner) => Rc::try_unwrap(inner).unwrap_or_else(|rc| (*rc).clone()),
             other => vec![other],
         }
     } else {
@@ -180,7 +181,7 @@ impl EffectHandler for ProgramProvider {
                 // First arg is the index (or return all values as Tuple).
                 if request.args.is_empty() {
                     // No index: return all values as Tuple.
-                    return Ok(Value::Tuple(self.values.clone()));
+                    return Ok(Value::tuple(self.values.clone()));
                 }
                 let idx = match &request.args[0] {
                     Value::Int(i) => *i as usize,
@@ -239,10 +240,10 @@ fn test_par_eval_four_independent() {
     let prog4 = make_literal_graph(42);   // 42
 
     let handler = ProgramProvider::new(vec![
-        Value::Program(Box::new(prog1)),
-        Value::Program(Box::new(prog2)),
-        Value::Program(Box::new(prog3)),
-        Value::Program(Box::new(prog4)),
+        Value::Program(Rc::new(prog1)),
+        Value::Program(Rc::new(prog2)),
+        Value::Program(Rc::new(prog3)),
+        Value::Program(Rc::new(prog4)),
     ]);
 
     // Graph: par_eval(Effect(0x10) -> Tuple of Programs)
@@ -449,7 +450,7 @@ fn test_spawn_and_await() {
     // where Effect(0xF0, 0) returns a Program that computes add(17, 25) = 42.
 
     let prog = make_add_graph(17, 25);
-    let handler = ProgramProvider::new(vec![Value::Program(Box::new(prog))]);
+    let handler = ProgramProvider::new(vec![Value::Program(Rc::new(prog))]);
 
     let mut nodes: HashMap<NodeId, Node> = HashMap::new();
 
@@ -645,8 +646,8 @@ fn test_parallel_state_isolation() {
     }
 
     let handler = ProgramProvider::new(vec![
-        Value::Program(Box::new(make_set_get_program(100))),
-        Value::Program(Box::new(make_set_get_program(200))),
+        Value::Program(Rc::new(make_set_get_program(100))),
+        Value::Program(Rc::new(make_set_get_program(200))),
     ]);
 
     // Graph: par_eval(Effect(0x10) -> Tuple of Programs)
@@ -810,9 +811,9 @@ fn test_par_eval_uses_multiple_threads() {
                 EffectTag::Custom(0xF0) => {
                     // Return 4 trivial programs (each returns a literal).
                     let programs: Vec<Value> = (0..4)
-                        .map(|i| Value::Program(Box::new(make_literal_graph(i))))
+                        .map(|i| Value::Program(Rc::new(make_literal_graph(i))))
                         .collect();
-                    Ok(Value::Tuple(programs))
+                    Ok(Value::tuple(programs))
                 }
                 EffectTag::Custom(0xF1) => {
                     // Increment thread counter (called from each parallel sub-eval).
@@ -864,7 +865,7 @@ fn test_par_eval_single_program() {
     // par_eval with a single Program (not wrapped in Tuple) should work.
     let prog = make_mul_graph(6, 7); // 42
 
-    let handler = ProgramProvider::new(vec![Value::Program(Box::new(prog))]);
+    let handler = ProgramProvider::new(vec![Value::Program(Rc::new(prog))]);
 
     // Graph: par_eval(Effect(0xF0, index=0))
     let mut nodes: HashMap<NodeId, Node> = HashMap::new();

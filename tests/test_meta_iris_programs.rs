@@ -5,6 +5,8 @@
 //!   - If the file contains test_ bindings: run them (assert positive result).
 //!   - Otherwise: verify compilation, find key fragments, evaluate with inputs.
 
+use std::rc::Rc;
+
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
 use iris_types::eval::Value;
@@ -129,7 +131,7 @@ fn test_graph_inspect_on_new_graph() {
     let simple_src = "let identity x : Int -> Int [cost: Const(1)] = x";
     let (simple_frags, _) = compile_with_registry(simple_src);
     let simple_graph = &simple_frags[0].1;
-    let prog = Value::Program(Box::new(simple_graph.clone()));
+    let prog = Value::Program(Rc::new(simple_graph.clone()));
 
     let result = eval(inspect, &[prog], &reg);
     // inspect returns (root, kind, nodes) where nodes is a Tuple of node IDs

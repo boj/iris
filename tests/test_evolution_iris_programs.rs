@@ -12,6 +12,7 @@
 //! Zero Rust-only logic tests: everything goes through the IRIS pipeline.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
@@ -299,7 +300,7 @@ fn test_wrap_in_map_adds_2_nodes() {
     let fold_nid = base.root.0 as i64;
     let result = run(
         &graph,
-        &[Value::Program(Box::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
+        &[Value::Program(Rc::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
         &reg,
     );
     match result {
@@ -322,7 +323,7 @@ fn test_wrap_in_filter_adds_2_nodes() {
     let fold_nid = base.root.0 as i64;
     let result = run(
         &graph,
-        &[Value::Program(Box::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
+        &[Value::Program(Rc::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
         &reg,
     );
     match result {
@@ -345,7 +346,7 @@ fn test_insert_zip_adds_3_nodes() {
     let fold_nid = base.root.0 as i64;
     let result = run(
         &graph,
-        &[Value::Program(Box::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
+        &[Value::Program(Rc::new(base.clone())), Value::Int(fold_nid), Value::Int(42)],
         &reg,
     );
     match result {
@@ -396,7 +397,7 @@ fn test_duplicate_subgraph_adds_1_node() {
     let target_nid = base.root.0 as i64;
     let result = run(
         &graph,
-        &[Value::Program(Box::new(base.clone())), Value::Int(target_nid)],
+        &[Value::Program(Rc::new(base.clone())), Value::Int(target_nid)],
         &reg,
     );
     match result {
@@ -443,7 +444,7 @@ fn test_mutation_annotate_cost() {
     // cost_level=2 -> CostTerm::Annotated(CostBound::Constant(2))
     let result = run(
         &graph,
-        &[Value::Program(Box::new(base)), Value::Int(root_id), Value::Int(2)],
+        &[Value::Program(Rc::new(base)), Value::Int(root_id), Value::Int(2)],
         &reg,
     );
     match result {
@@ -495,7 +496,7 @@ fn test_crossover_empty_parent_b() {
     let result = run_bootstrap(
         CROSSOVER_SRC,
         "remove_dangling_edges",
-        &[Value::Program(Box::new(make_fold_add_base()))],
+        &[Value::Program(Rc::new(make_fold_add_base()))],
     );
     match result {
         Value::Program(g) => {
@@ -520,7 +521,7 @@ fn test_crossover_stats() {
     let result = run_bootstrap(
         CROSSOVER_SRC,
         "collect_subgraph",
-        &[Value::Program(Box::new(base)), Value::Int(root_id), Value::Int(2)],
+        &[Value::Program(Rc::new(base)), Value::Int(root_id), Value::Int(2)],
     );
     // collect_subgraph returns a tuple of node IDs
     match result {
@@ -548,9 +549,9 @@ fn test_crossover_large_target_fraction() {
     let result = run(
         &graph,
         &[
-            Value::Program(Box::new(donor)),
+            Value::Program(Rc::new(donor)),
             Value::Int(10),
-            Value::Program(Box::new(child)),
+            Value::Program(Rc::new(child)),
             Value::Int(20),
             Value::Int(0), // donor_kind = Prim
         ],
@@ -576,7 +577,7 @@ fn test_crossover_bfs_collects_connected() {
     let result = run_bootstrap(
         CROSSOVER_SRC,
         "collect_subgraph",
-        &[Value::Program(Box::new(base)), Value::Int(root_id), Value::Int(1)],
+        &[Value::Program(Rc::new(base)), Value::Int(root_id), Value::Int(1)],
     );
     match result {
         Value::Tuple(parts) => {
@@ -593,7 +594,7 @@ fn test_crossover_bfs_collects_connected() {
 fn test_dangling_edge_detection() {
     let (graph, reg) = compile_named_with_registry(CROSSOVER_SRC, "remove_dangling_edges");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base.clone()))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base.clone()))], &reg);
     match result {
         Value::Program(g) => {
             assert_eq!(g.nodes.len(), base.nodes.len(), "no nodes should be removed from clean graph");
@@ -611,7 +612,7 @@ fn test_dangling_edge_detection() {
 fn test_seed_zip_fold_structure() {
     let (graph, reg) = compile_named_with_registry(ZIP_FOLD_SRC, "generate_zip_fold");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 5, "zip_fold should have at least 5 nodes, got {}", g.nodes.len());
@@ -624,7 +625,7 @@ fn test_seed_zip_fold_structure() {
 fn test_seed_filter_fold_structure() {
     let (graph, reg) = compile_named_with_registry(FILTER_FOLD_SRC, "generate_filter_fold");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 5, "filter_fold should have at least 5 nodes, got {}", g.nodes.len());
@@ -637,7 +638,7 @@ fn test_seed_filter_fold_structure() {
 fn test_seed_zip_map_fold_structure() {
     let (graph, reg) = compile_named_with_registry(ZIP_MAP_FOLD_SRC, "generate_zip_map_fold");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 6, "zip_map_fold should have at least 6 nodes, got {}", g.nodes.len());
@@ -650,7 +651,7 @@ fn test_seed_zip_map_fold_structure() {
 fn test_seed_comparison_fold_max() {
     let (graph, reg) = compile_named_with_registry(COMPARISON_FOLD_SRC, "generate_fold_max_extreme");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 4, "max_extreme fold should have at least 4 nodes, got {}", g.nodes.len());
@@ -666,7 +667,7 @@ fn test_seed_comparison_fold_max() {
 fn test_seed_comparison_fold_min() {
     let (graph, reg) = compile_named_with_registry(COMPARISON_FOLD_SRC, "generate_fold_min_extreme");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 4, "min_extreme fold should have at least 4 nodes, got {}", g.nodes.len());
@@ -679,7 +680,7 @@ fn test_seed_comparison_fold_min() {
 fn test_seed_conditional_fold_count() {
     let (graph, reg) = compile_named_with_registry(CONDITIONAL_FOLD_SRC, "generate_count_matching");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base)), Value::Int(35)], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base)), Value::Int(35)], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 7, "count_matching should have at least 7 nodes, got {}", g.nodes.len());
@@ -692,7 +693,7 @@ fn test_seed_conditional_fold_count() {
 fn test_seed_conditional_fold_sum_filtered() {
     let (graph, reg) = compile_named_with_registry(CONDITIONAL_FOLD_SRC, "generate_sum_filtered");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base)), Value::Int(35)], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base)), Value::Int(35)], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 5, "sum_filtered should have at least 5 nodes, got {}", g.nodes.len());
@@ -705,7 +706,7 @@ fn test_seed_conditional_fold_sum_filtered() {
 fn test_seed_conditional_fold_transform_sum() {
     let (graph, reg) = compile_named_with_registry(CONDITIONAL_FOLD_SRC, "generate_transform_sum");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base)), Value::Int(6)], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base)), Value::Int(6)], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 5, "transform_sum should have at least 5 nodes, got {}", g.nodes.len());
@@ -719,7 +720,7 @@ fn test_seed_iterate_fibonacci() {
     let (frags, _) = compile_with_registry(ITERATE_SRC);
     let graph = frags.iter().find(|(n, _)| n == "generate_fibonacci").unwrap().1.clone();
     let base = make_fold_add_base();
-    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Box::new(base))]).unwrap();
+    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Rc::new(base))]).unwrap();
     match result {
         Value::Program(g) => {
             let has_unfold = g.nodes.values().any(|n| n.kind == NodeKind::Unfold);
@@ -735,7 +736,7 @@ fn test_seed_iterate_fibonacci_base_cases() {
     let (frags, _) = compile_with_registry(ITERATE_SRC);
     let graph = frags.iter().find(|(n, _)| n == "generate_fibonacci").unwrap().1.clone();
     let base = make_fold_add_base();
-    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Box::new(base))]).unwrap();
+    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Rc::new(base))]).unwrap();
     match result {
         Value::Program(g) => {
             let has_prim = g.nodes.values().any(|n| n.kind == NodeKind::Prim);
@@ -751,7 +752,7 @@ fn test_seed_iterate_gcd_structure() {
     let (frags, _) = compile_with_registry(ITERATE_SRC);
     let graph = frags.iter().find(|(n, _)| n == "generate_gcd").unwrap().1.clone();
     let base = make_fold_add_base();
-    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Box::new(base))]).unwrap();
+    let result = iris_bootstrap::evaluate(&graph, &[Value::Program(Rc::new(base))]).unwrap();
     match result {
         Value::Program(g) => {
             let has_unfold = g.nodes.values().any(|n| n.kind == NodeKind::Unfold);
@@ -765,7 +766,7 @@ fn test_seed_iterate_gcd_structure() {
 fn test_seed_pairwise_fold_is_sorted() {
     let (graph, reg) = compile_named_with_registry(PAIRWISE_FOLD_SRC, "generate_is_sorted");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 8, "is_sorted should have at least 8 nodes, got {}", g.nodes.len());
@@ -783,7 +784,7 @@ fn test_seed_pairwise_fold_not_sorted() {
     let result = run(
         &graph,
         &[
-            Value::Program(Box::new(base)),
+            Value::Program(Rc::new(base)),
             Value::Int(36),  // le opcode
             Value::Int(2),   // mul fold_opcode
         ],
@@ -801,7 +802,7 @@ fn test_seed_pairwise_fold_not_sorted() {
 fn test_seed_pairwise_diff() {
     let (graph, reg) = compile_named_with_registry(PAIRWISE_FOLD_SRC, "generate_pairwise_diff");
     let base = make_fold_add_base();
-    let result = run(&graph, &[Value::Program(Box::new(base))], &reg);
+    let result = run(&graph, &[Value::Program(Rc::new(base))], &reg);
     match result {
         Value::Program(g) => {
             assert!(g.nodes.len() >= 7, "pairwise_diff should have at least 7 nodes, got {}", g.nodes.len());

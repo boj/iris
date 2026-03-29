@@ -3297,7 +3297,7 @@ pub fn bootstrap_eval(
     //   1. program: Program (the target graph)
     //   2. inputs: Tuple (the inputs to the target)
     let interp_inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::tuple(inputs.to_vec()),
     ];
     evaluate(interpreter, &interp_inputs)
@@ -3578,6 +3578,13 @@ impl<'a> BootstrapCtx<'a> {
         for &aid in &arg_ids {
             args.push(self.eval_node(aid, depth + 1)?.into_value()?);
         }
+
+        // Graph mutation ops: pass owned args so Rc::try_unwrap can avoid
+        // cloning when the Program Rc has refcount == 1.
+        if matches!(opcode, 0x84 | 0x85 | 0x86 | 0x87 | 0x88 | 0x8B | 0x8C | 0x8D | 0xEF | 0xF1) {
+            return self.dispatch_graph_mutation(opcode, args);
+        }
+
         self.dispatch_prim(opcode, node_id, &args)
     }
 
@@ -3697,7 +3704,7 @@ impl<'a> BootstrapCtx<'a> {
             0xCB => self.prim_map_keys(args)?,
             0xCC => self.prim_map_values(args)?,
             0xCD => self.prim_map_size(args)?,
-            0x80 => Value::Program(Box::new(self.graph.clone())),
+            0x80 => Value::Program(Rc::new(self.graph.clone())),
             0x81 => self.prim_graph_nodes(args)?,
             0x82 => self.prim_graph_get_kind(args)?,
             0x83 => self.prim_graph_get_prim_op(args)?,
@@ -3954,6 +3961,18 @@ impl<'a> BootstrapCtx<'a> {
     // Prim helpers
     // -----------------------------------------------------------------------
 
+    /// Borrow the inner SemanticGraph without cloning (for read-only ops).
+    fn borrow_program(v: &Value) -> Option<&SemanticGraph> {
+        v.as_program()
+    }
+
+    /// Extract an owned SemanticGraph for mutation, cloning only if shared.
+    fn extract_program_owned(v: Value) -> Option<SemanticGraph> {
+        v.into_program()
+    }
+
+    /// Legacy extract (clones unconditionally). Use borrow_program or
+    /// extract_program_owned instead where possible.
     fn extract_program(v: &Value) -> Option<SemanticGraph> {
         match v {
             Value::Program(g) => Some(g.as_ref().clone()),
@@ -4213,6 +4232,13 @@ impl<'a> BootstrapCtx<'a> {
     // -----------------------------------------------------------------------
 
     /// Extract a Program reference from a value, handling Tuple(Program) wrapping.
+    /// Borrow the inner graph without cloning, with typed error (read-only ops).
+    fn borrow_program_ref<'v>(val: &'v Value, context: &str) -> Result<&'v SemanticGraph, BootstrapError> {
+        Self::borrow_program(val).ok_or_else(|| {
+            BootstrapError::TypeError(format!("{}: expected Program", context))
+        })
+    }
+
     fn extract_program_ref(val: &Value, context: &str) -> Result<SemanticGraph, BootstrapError> {
         match val {
             Value::Program(g) => Ok(g.as_ref().clone()),
@@ -4229,7 +4255,7 @@ impl<'a> BootstrapCtx<'a> {
         if args.len() != 1 {
             return Err(BootstrapError::TypeError("graph_edges: expected 1 arg".into()));
         }
-        let graph = Self::extract_program_ref(&args[0], "graph_edges")?;
+        let graph = Self::borrow_program_ref(&args[0], "graph_edges")?;
         let edges: Vec<Value> = graph
             .edges
             .iter()
@@ -4246,7 +4272,7 @@ impl<'a> BootstrapCtx<'a> {
         if args.len() != 2 {
             return Err(BootstrapError::TypeError("graph_get_kind: expected 2 args".into()));
         }
-        let graph = Self::extract_program_ref(&args[0], "graph_get_kind")?;
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_kind")?;
         let node_id = match &args[1] {
             Value::Int(n) => NodeId(*n as u64),
             _ => return Err(BootstrapError::TypeError("graph_get_kind: expected Int node id".into())),
@@ -4261,7 +4287,7 @@ impl<'a> BootstrapCtx<'a> {
         if args.len() != 2 {
             return Err(BootstrapError::TypeError("graph_get_prim_op: expected 2 args".into()));
         }
-        let graph = Self::extract_program_ref(&args[0], "graph_get_prim_op")?;
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_prim_op")?;
         let node_id = match &args[1] {
             Value::Int(n) => NodeId(*n as u64),
             _ => return Err(BootstrapError::TypeError("graph_get_prim_op: expected Int node id".into())),
@@ -4281,7 +4307,7 @@ impl<'a> BootstrapCtx<'a> {
         if args.is_empty() {
             return Err(BootstrapError::TypeError("graph_get_root: expected 1 arg".into()));
         }
-        let graph = Self::extract_program_ref(&args[0], "graph_get_root")?;
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_root")?;
         Ok(Value::Int(graph.root.0 as i64))
     }
 
@@ -4289,7 +4315,7 @@ impl<'a> BootstrapCtx<'a> {
         if args.len() != 1 {
             return Err(BootstrapError::TypeError("graph_nodes: expected 1 arg".into()));
         }
-        let graph = Self::extract_program_ref(&args[0], "graph_nodes")?;
+        let graph = Self::borrow_program_ref(&args[0], "graph_nodes")?;
         let mut sorted_keys: Vec<_> = graph.nodes.keys().collect();
         sorted_keys.sort();
         let ids: Vec<Value> = sorted_keys
@@ -4400,7 +4426,7 @@ impl<'a> BootstrapCtx<'a> {
         };
         let mut new_graph = graph;
         new_graph.edges.retain(|e| !(e.source == source && e.target == target));
-        Ok(Value::Program(Box::new(new_graph)))
+        Ok(Value::Program(Rc::new(new_graph)))
     }
 
     fn prim_graph_replace_subtree(&self, args: &[Value]) -> Result<Value, BootstrapError> {
@@ -4423,7 +4449,7 @@ impl<'a> BootstrapCtx<'a> {
             if graph.root == old_id {
                 graph.root = new_id;
             }
-            Ok(Value::Program(Box::new(graph)))
+            Ok(Value::Program(Rc::new(graph)))
         } else if args.len() == 4 {
             // 4-arg form: (target_prog, target_node, source_prog, source_node)
             // Copy subtree from source_prog rooted at source_node into target_prog,
@@ -4480,7 +4506,7 @@ impl<'a> BootstrapCtx<'a> {
                 target.root = source_node;
             }
 
-            Ok(Value::Program(Box::new(target)))
+            Ok(Value::Program(Rc::new(target)))
         } else {
             Err(BootstrapError::TypeError("graph_replace_subtree: expected 3 or 4 args".into()))
         }
@@ -6316,7 +6342,7 @@ impl<'a> BootstrapCtx<'a> {
         };
 
         match evolve_fn(test_cases, max_gens, self.self_eval_depth as u32) {
-            Ok(graph) => Ok(Value::Program(Box::new(graph))),
+            Ok(graph) => Ok(Value::Program(Rc::new(graph))),
             Err(msg) => Err(BootstrapError::TypeError(format!("evolve_subprogram: {}", msg))),
         }
     }
@@ -6355,7 +6381,305 @@ impl<'a> BootstrapCtx<'a> {
             resolution: iris_types::graph::Resolution::Implementation,
             hash: iris_types::hash::SemanticHash([0; 32]),
         };
-        Ok(Value::Program(Box::new(graph)))
+        Ok(Value::Program(Rc::new(graph)))
+    }
+
+    // -------------------------------------------------------------------
+    // Graph mutation dispatch: takes owned args for zero-clone COW
+    // -------------------------------------------------------------------
+
+    fn dispatch_graph_mutation(
+        &mut self,
+        opcode: u8,
+        mut args: Vec<Value>,
+    ) -> Result<RtValue, BootstrapError> {
+        if args.is_empty() {
+            return Err(BootstrapError::TypeError("graph mutation: no args".into()).into());
+        }
+        // Take the Program arg by value — Rc::try_unwrap avoids clone
+        // when refcount == 1 (the common case in sequential mutations).
+        let prog_val = std::mem::replace(&mut args[0], Value::Unit);
+        let rest = &args[1..];
+
+        // Hot path: add_node_rt, set_prim_op, connect (crossover inner loop)
+        match opcode {
+            0x85 => {
+                let graph = prog_val.into_program().ok_or_else(|| {
+                    BootstrapError::TypeError("graph_add_node_rt: expected Program".into())
+                })?;
+                return Ok(RtValue::Val(self.graph_add_node_rt_cow(graph, rest)?));
+            }
+            0x84 => {
+                let graph = prog_val.into_program().ok_or_else(|| {
+                    BootstrapError::TypeError("graph_set_prim_op: expected Program".into())
+                })?;
+                return Ok(RtValue::Val(self.graph_set_prim_op_cow(graph, rest)?));
+            }
+            0x86 => {
+                let graph = prog_val.into_program().ok_or_else(|| {
+                    BootstrapError::TypeError("graph_connect: expected Program".into())
+                })?;
+                return Ok(RtValue::Val(self.graph_connect_cow(graph, rest)?));
+            }
+            _ => {}
+        }
+
+        // Cold path: less frequent ops — put the value back and use legacy
+        args[0] = prog_val;
+        let result = match opcode {
+            0x87 => self.prim_graph_disconnect(&args)?,
+            0x88 => self.prim_graph_replace_subtree(&args)?,
+            0x8B => self.prim_graph_add_guard_rt(&args)?,
+            0x8C => self.prim_graph_add_ref_rt(&args)?,
+            0x8D => self.prim_graph_set_cost(&args)?,
+            0xEF => self.prim_graph_set_lit_value(&args)?,
+            0xF1 => self.prim_graph_set_field_index(&args)?,
+            _ => unreachable!(),
+        };
+        Ok(RtValue::Val(result))
+    }
+
+    /// graph_add_node_rt with pre-extracted graph (zero-clone COW path).
+    fn graph_add_node_rt_cow(
+        &self,
+        mut graph: SemanticGraph,
+        args: &[Value],
+    ) -> Result<Value, BootstrapError> {
+        if args.is_empty() {
+            return Err(BootstrapError::TypeError(
+                "graph_add_node_rt: expected kind arg".into(),
+            ));
+        }
+        let kind_u8 = match &args[0] {
+            Value::Int(n) => *n as u8,
+            _ => return Err(BootstrapError::TypeError(
+                "graph_add_node_rt: expected Int kind".into(),
+            )),
+        };
+        let type_sig = graph
+            .type_env
+            .types
+            .keys()
+            .next()
+            .copied()
+            .unwrap_or(TypeId(0));
+        let extra_opcode = args.get(1).and_then(|v| match v {
+            Value::Int(n) => Some(*n as u8),
+            _ => None,
+        });
+        let (kind, payload, arity) = match kind_u8 {
+            0x00 => (NodeKind::Prim, NodePayload::Prim { opcode: extra_opcode.unwrap_or(0) }, 2),
+            0x01 => (NodeKind::Apply, NodePayload::Apply, 2),
+            0x02 => (
+                NodeKind::Lambda,
+                NodePayload::Lambda {
+                    binder: BinderId(graph.nodes.len() as u32 + 1000),
+                    captured_count: 0,
+                },
+                1,
+            ),
+            0x03 => (NodeKind::Let, NodePayload::Let, 2),
+            0x04 => (
+                NodeKind::Match,
+                NodePayload::Match { arm_count: 0, arm_patterns: vec![] },
+                1,
+            ),
+            0x05 => (
+                NodeKind::Lit,
+                NodePayload::Lit { type_tag: 0x00, value: vec![] },
+                0,
+            ),
+            0x06 => (
+                NodeKind::Ref,
+                NodePayload::Ref { fragment_id: FragmentId([0; 32]) },
+                0,
+            ),
+            0x07 => (
+                NodeKind::Neural,
+                NodePayload::Neural {
+                    guard_spec: iris_types::guard::GuardSpec {
+                        input_type: type_sig,
+                        output_type: type_sig,
+                        preconditions: vec![],
+                        postconditions: vec![],
+                        error_bound: iris_types::guard::ErrorBound::Exact,
+                        fallback: None,
+                    },
+                    weight_blob: iris_types::guard::BlobRef { hash: [0; 32], size: 0 },
+                },
+                1,
+            ),
+            0x08 => (
+                NodeKind::Fold,
+                NodePayload::Fold { recursion_descriptor: vec![0x00] },
+                3,
+            ),
+            0x09 => (
+                NodeKind::Unfold,
+                NodePayload::Unfold { recursion_descriptor: vec![0x00] },
+                2,
+            ),
+            0x0A => (NodeKind::Effect, NodePayload::Effect { effect_tag: 0 }, 1),
+            0x0B => (NodeKind::Tuple, NodePayload::Tuple, 0),
+            0x0C => (NodeKind::Inject, NodePayload::Inject { tag_index: 0 }, 1),
+            0x0D => (NodeKind::Project, NodePayload::Project { field_index: 0 }, 1),
+            0x0E => (
+                NodeKind::TypeAbst,
+                NodePayload::TypeAbst { bound_var_id: iris_types::types::BoundVar(0) },
+                1,
+            ),
+            0x0F => (
+                NodeKind::TypeApp,
+                NodePayload::TypeApp { type_arg: type_sig },
+                2,
+            ),
+            0x10 => (
+                NodeKind::LetRec,
+                NodePayload::LetRec {
+                    binder: BinderId(graph.nodes.len() as u32 + 2000),
+                    decrease: iris_types::types::DecreaseWitness::Sized(
+                        iris_types::types::LIATerm::Const(0),
+                        iris_types::types::LIATerm::Const(0),
+                    ),
+                },
+                2,
+            ),
+            0x11 => (
+                NodeKind::Guard,
+                NodePayload::Guard {
+                    predicate_node: NodeId(0),
+                    body_node: NodeId(0),
+                    fallback_node: NodeId(0),
+                },
+                3,
+            ),
+            0x12 => (
+                NodeKind::Rewrite,
+                NodePayload::Rewrite {
+                    rule_id: iris_types::graph::RewriteRuleId([0; 32]),
+                    body: NodeId(0),
+                },
+                1,
+            ),
+            0x13 => (
+                NodeKind::Extern,
+                NodePayload::Extern { name: [0; 32], type_sig },
+                0,
+            ),
+            _ => {
+                let opcode = extra_opcode.unwrap_or(kind_u8);
+                (NodeKind::Prim, NodePayload::Prim { opcode }, 2)
+            }
+        };
+
+        let salt = graph.nodes.len() as u64 + 1;
+        let mut node = Node {
+            id: NodeId(0),
+            kind,
+            type_sig,
+            cost: CostTerm::Unit,
+            arity,
+            resolution_depth: 2,
+            salt,
+            payload,
+        };
+        node.id = compute_node_id(&node);
+        let mut new_id = node.id;
+        while graph.nodes.contains_key(&new_id) {
+            node.salt += 1;
+            node.id = compute_node_id(&node);
+            new_id = node.id;
+        }
+        graph.nodes.insert(new_id, node);
+
+        Ok(Value::tuple(vec![
+            Value::Program(Rc::new(graph)),
+            Value::Int(new_id.0 as i64),
+        ]))
+    }
+
+    /// graph_set_prim_op with pre-extracted graph (zero-clone COW path).
+    fn graph_set_prim_op_cow(
+        &self,
+        mut graph: SemanticGraph,
+        args: &[Value],
+    ) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "graph_set_prim_op: expected node_id and opcode".into(),
+            ));
+        }
+        let node_id = NodeId(match &args[0] {
+            Value::Int(n) => *n as u64,
+            _ => return Err(BootstrapError::TypeError("expected Int".into())),
+        });
+        let new_opcode = match &args[1] {
+            Value::Int(n) => *n as u8,
+            _ => return Err(BootstrapError::TypeError("expected Int".into())),
+        };
+
+        if let Some(mut node) = graph.nodes.remove(&node_id) {
+            let old_id = node.id;
+            if node.kind == NodeKind::Effect {
+                node.payload = NodePayload::Effect { effect_tag: new_opcode };
+            } else {
+                node.payload = NodePayload::Prim { opcode: new_opcode };
+            }
+            node.id = compute_node_id(&node);
+            let mut new_id = node.id;
+            while graph.nodes.contains_key(&new_id) {
+                node.salt += 1;
+                node.id = compute_node_id(&node);
+                new_id = node.id;
+            }
+            graph.nodes.insert(new_id, node);
+            for edge in &mut graph.edges {
+                if edge.source == old_id { edge.source = new_id; }
+                if edge.target == old_id { edge.target = new_id; }
+            }
+            if graph.root == old_id { graph.root = new_id; }
+            return Ok(Value::tuple(vec![
+                Value::Program(Rc::new(graph)),
+                Value::Int(new_id.0 as i64),
+            ]));
+        }
+
+        Ok(Value::tuple(vec![
+            Value::Program(Rc::new(graph)),
+            Value::Int(node_id.0 as i64),
+        ]))
+    }
+
+    /// graph_connect with pre-extracted graph (zero-clone COW path).
+    fn graph_connect_cow(
+        &self,
+        mut graph: SemanticGraph,
+        args: &[Value],
+    ) -> Result<Value, BootstrapError> {
+        if args.len() != 3 {
+            return Err(BootstrapError::TypeError(
+                "graph_connect: expected source, target, port".into(),
+            ));
+        }
+        let source = NodeId(match &args[0] {
+            Value::Int(n) => *n as u64,
+            _ => return Err(BootstrapError::TypeError("expected Int".into())),
+        });
+        let target = NodeId(match &args[1] {
+            Value::Int(n) => *n as u64,
+            _ => return Err(BootstrapError::TypeError("expected Int".into())),
+        });
+        let port = match &args[2] {
+            Value::Int(n) => *n as u8,
+            _ => return Err(BootstrapError::TypeError("expected Int".into())),
+        };
+        graph.edges.push(Edge {
+            source,
+            target,
+            port,
+            label: EdgeLabel::Argument,
+        });
+        Ok(Value::Program(Rc::new(graph)))
     }
 
     fn prim_graph_add_node_rt(&self, args: &[Value]) -> Result<Value, BootstrapError> {
@@ -6550,7 +6874,7 @@ impl<'a> BootstrapCtx<'a> {
         graph.nodes.insert(new_id, node);
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(new_id.0 as i64),
         ]))
     }
@@ -6609,13 +6933,13 @@ impl<'a> BootstrapCtx<'a> {
             }
 
             return Ok(Value::tuple(vec![
-                Value::Program(Box::new(graph)),
+                Value::Program(Rc::new(graph)),
                 Value::Int(new_id.0 as i64),
             ]));
         }
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(node_id.0 as i64),
         ]))
     }
@@ -6649,7 +6973,7 @@ impl<'a> BootstrapCtx<'a> {
             label: EdgeLabel::Argument,
         });
 
-        Ok(Value::Program(Box::new(graph)))
+        Ok(Value::Program(Rc::new(graph)))
     }
 
     fn prim_graph_add_guard_rt(&self, args: &[Value]) -> Result<Value, BootstrapError> {
@@ -6735,7 +7059,7 @@ impl<'a> BootstrapCtx<'a> {
         });
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(new_id.0 as i64),
         ]))
     }
@@ -6797,7 +7121,7 @@ impl<'a> BootstrapCtx<'a> {
         graph.nodes.insert(new_id, node);
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(new_id.0 as i64),
         ]))
     }
@@ -6828,7 +7152,7 @@ impl<'a> BootstrapCtx<'a> {
                 n => CostTerm::Annotated(iris_types::cost::CostBound::Constant(n as u64)),
             };
         }
-        Ok(Value::Program(Box::new(graph)))
+        Ok(Value::Program(Rc::new(graph)))
     }
 
     /// 0x90 graph_get_node_cost: Read a node's cost annotation.
@@ -6904,7 +7228,7 @@ impl<'a> BootstrapCtx<'a> {
         if let Some(node) = graph.nodes.get_mut(&node_id) {
             node.type_sig = tid;
         }
-        Ok(Value::Program(Box::new(graph)))
+        Ok(Value::Program(Rc::new(graph)))
     }
 
     /// 0x92 graph_get_node_type: Read a node's type_sig and return a type tag.
@@ -7019,7 +7343,7 @@ impl<'a> BootstrapCtx<'a> {
             _ => return Err(BootstrapError::TypeError("expected Int".into())),
         });
         graph.root = node_id;
-        Ok(Value::Program(Box::new(graph)))
+        Ok(Value::Program(Rc::new(graph)))
     }
 
     fn prim_graph_set_lit_value(&self, args: &[Value]) -> Result<Value, BootstrapError> {
@@ -7118,13 +7442,13 @@ impl<'a> BootstrapCtx<'a> {
             }
 
             return Ok(Value::tuple(vec![
-                Value::Program(Box::new(graph)),
+                Value::Program(Rc::new(graph)),
                 Value::Int(new_id.0 as i64),
             ]));
         }
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(node_id.0 as i64),
         ]))
     }
@@ -7162,13 +7486,13 @@ impl<'a> BootstrapCtx<'a> {
             if graph.root == old_id { graph.root = new_id; }
 
             return Ok(Value::tuple(vec![
-                Value::Program(Box::new(graph)),
+                Value::Program(Rc::new(graph)),
                 Value::Int(new_id.0 as i64),
             ]));
         }
 
         Ok(Value::tuple(vec![
-            Value::Program(Box::new(graph)),
+            Value::Program(Rc::new(graph)),
             Value::Int(node_id.0 as i64),
         ]))
     }
@@ -7624,14 +7948,10 @@ impl<'a> BootstrapCtx<'a> {
         if args.is_empty() {
             return Err(BootstrapError::TypeError("graph_eval: expected at least 1 arg".into()));
         }
-        let graph = match &args[0] {
-            Value::Program(g) => g.as_ref().clone(),
-            Value::Tuple(inner) => match inner.first() {
-                Some(Value::Program(g)) => g.as_ref().clone(),
-                _ => return Err(BootstrapError::TypeError("graph_eval: expected Program".into())),
-            },
-            _ => return Err(BootstrapError::TypeError("graph_eval: expected Program".into())),
-        };
+        // Borrow from Rc — zero-cost for read-only evaluation.
+        let graph = Self::borrow_program(&args[0]).ok_or_else(|| {
+            BootstrapError::TypeError("graph_eval: expected Program".into())
+        })?;
 
         if self.self_eval_depth >= MAX_SELF_EVAL_DEPTH {
             return Err(BootstrapError::RecursionLimit {
@@ -7650,7 +7970,7 @@ impl<'a> BootstrapCtx<'a> {
         };
 
         let remaining_steps = self.max_steps.saturating_sub(self.step_count);
-        let mut sub_ctx = BootstrapCtx::new(&graph, &eval_inputs, remaining_steps, self.registry);
+        let mut sub_ctx = BootstrapCtx::new(graph, &eval_inputs, remaining_steps, self.registry);
         sub_ctx.self_eval_depth = self.self_eval_depth + 1;
 
         let result = sub_ctx.eval_node(graph.root, 0)?;

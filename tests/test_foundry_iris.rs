@@ -7,6 +7,8 @@
 //! - solve.iris: tier budgets and serialization helpers
 //! - foundry.iris: tier constants, population/generation maps, stubs
 
+use std::rc::Rc;
+
 use iris_exec::effect_runtime::RuntimeEffectHandler;
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
@@ -670,7 +672,7 @@ fn compile_single_function(src: &str) -> SemanticGraph {
 fn test_integration_eval_on_problem_add_all_pass() {
     let f = compile_iris("src/iris-programs/foundry/bootstrap_problems.iris");
     let add_graph = compile_single_function("let add x y : Int -> Int -> Int = x + y");
-    let candidate = Value::Program(Box::new(add_graph));
+    let candidate = Value::Program(Rc::new(add_graph));
     let test_cases = Value::tuple(vec![
         Value::tuple(vec![Value::tuple(vec![Value::Int(1), Value::Int(2)]), Value::Int(3)]),
         Value::tuple(vec![Value::tuple(vec![Value::Int(0), Value::Int(0)]), Value::Int(0)]),
@@ -685,7 +687,7 @@ fn test_integration_eval_on_problem_add_all_pass() {
 fn test_integration_eval_on_problem_mul_partial_pass() {
     let f = compile_iris("src/iris-programs/foundry/bootstrap_problems.iris");
     let mul_graph = compile_single_function("let mul x y : Int -> Int -> Int = x * y");
-    let candidate = Value::Program(Box::new(mul_graph));
+    let candidate = Value::Program(Rc::new(mul_graph));
     // mul(1,2)=2≠3, mul(0,0)=0==0✓, mul(-1,1)=-1≠0, mul(100,200)=20000≠300
     let test_cases = Value::tuple(vec![
         Value::tuple(vec![Value::tuple(vec![Value::Int(1), Value::Int(2)]), Value::Int(3)]),
@@ -701,7 +703,7 @@ fn test_integration_eval_on_problem_mul_partial_pass() {
 fn test_integration_eval_on_problem_double_dedicated() {
     let f = compile_iris("src/iris-programs/foundry/bootstrap_problems.iris");
     let dbl_graph = compile_single_function("let double x : Int -> Int = x * 2");
-    let candidate = Value::Program(Box::new(dbl_graph));
+    let candidate = Value::Program(Rc::new(dbl_graph));
     let test_cases = Value::tuple(vec![
         Value::tuple(vec![Value::tuple(vec![Value::Int(3)]), Value::Int(6)]),
         Value::tuple(vec![Value::tuple(vec![Value::Int(0)]), Value::Int(0)]),
@@ -716,7 +718,7 @@ fn test_integration_eval_on_problem_double_dedicated() {
 fn test_integration_eval_on_problem_zero_pass() {
     let f = compile_iris("src/iris-programs/foundry/bootstrap_problems.iris");
     let add_graph = compile_single_function("let add x y : Int -> Int -> Int = x + y");
-    let candidate = Value::Program(Box::new(add_graph));
+    let candidate = Value::Program(Rc::new(add_graph));
     let test_cases = Value::tuple(vec![
         Value::tuple(vec![Value::tuple(vec![Value::Int(1), Value::Int(2)]), Value::Int(999)]),
         Value::tuple(vec![Value::tuple(vec![Value::Int(3), Value::Int(4)]), Value::Int(999)]),
@@ -751,7 +753,7 @@ fn test_integration_type_sig_hash_nullary() {
 fn test_integration_library_size_real_graph() {
     let f = compile_iris("src/iris-programs/foundry/fragment_library.iris");
     let graph = compile_single_function("let id x : Int -> Int = x");
-    let lib = Value::Program(Box::new(graph));
+    let lib = Value::Program(Rc::new(graph));
     let size = run_int(&f, "library_size", &[lib]);
     assert!(size > 0, "library_size should be positive for a real compiled graph");
 }
@@ -766,7 +768,7 @@ fn test_integration_library_register_search_roundtrip() {
     // Create a fresh library graph
     let lib_src = "let lib_seed x = x";
     let lib_graph = compile_single_function(lib_src);
-    let library = Value::Program(Box::new(lib_graph));
+    let library = Value::Program(Rc::new(lib_graph));
 
     // Use a small hash that fits in u8 (graph_set_prim_op truncates to u8)
     let type_hash: i64 = 42;
@@ -791,7 +793,7 @@ fn test_integration_library_register_search_roundtrip() {
 fn test_integration_library_register_search_miss() {
     let f = compile_iris("src/iris-programs/foundry/fragment_library.iris");
     let lib_graph = compile_single_function("let seed x = x");
-    let library = Value::Program(Box::new(lib_graph));
+    let library = Value::Program(Rc::new(lib_graph));
 
     // Register with hash 42
     let updated_lib = run(&f, "register", &[library, Value::Int(0), Value::Int(42)]);
@@ -811,7 +813,7 @@ fn test_integration_library_register_search_miss() {
 fn test_integration_library_record_hit() {
     let f = compile_iris("src/iris-programs/foundry/fragment_library.iris");
     let lib_graph = compile_single_function("let seed x = x");
-    let library = Value::Program(Box::new(lib_graph));
+    let library = Value::Program(Rc::new(lib_graph));
 
     // Register with hash 100
     let lib = run(&f, "register", &[library, Value::Int(0), Value::Int(100)]);
@@ -839,7 +841,7 @@ fn test_integration_foundry_evaluate_candidate_real_add() {
 
     // Compile a real add program
     let add_graph = compile_single_function("let add x y = x + y");
-    let candidate = Value::Program(Box::new(add_graph));
+    let candidate = Value::Program(Rc::new(add_graph));
 
     // Build test cases as Tuple of (inputs, expected) pairs
     let test_cases = Value::tuple(vec![
@@ -859,7 +861,7 @@ fn test_integration_foundry_evaluate_candidate_partial() {
 
     // Compile a double function — won't match add test cases
     let dbl_graph = compile_single_function("let dbl x y = x + x");
-    let candidate = Value::Program(Box::new(dbl_graph));
+    let candidate = Value::Program(Rc::new(dbl_graph));
 
     // Test cases for add
     let test_cases = Value::tuple(vec![
@@ -886,8 +888,8 @@ fn test_integration_foundry_library_search_finds_best() {
 
     // Library: tuple of (program, fitness) pairs
     let library = Value::tuple(vec![
-        Value::tuple(vec![Value::Program(Box::new(add_graph)), Value::Int(500)]),
-        Value::tuple(vec![Value::Program(Box::new(mul_graph)), Value::Int(900)]),
+        Value::tuple(vec![Value::Program(Rc::new(add_graph)), Value::Int(500)]),
+        Value::tuple(vec![Value::Program(Rc::new(mul_graph)), Value::Int(900)]),
     ]);
 
     let result = run(&f, "library_search", &[library, Value::Int(0)]);
@@ -914,7 +916,7 @@ fn test_integration_foundry_solve_instant_library_hit() {
 
     // Library with a high-fitness entry
     let library = Value::tuple(vec![
-        Value::tuple(vec![Value::Program(Box::new(add_graph)), Value::Int(950)]),
+        Value::tuple(vec![Value::Program(Rc::new(add_graph)), Value::Int(950)]),
     ]);
 
     // Spec doesn't matter for library search (library_search just finds best fitness)

@@ -33,7 +33,7 @@ fn int(v: i64) -> Value {
 }
 
 fn tup(vs: Vec<Value>) -> Value {
-    Value::Tuple(vs)
+    Value::tuple(vs)
 }
 
 fn ints(vs: &[i64]) -> Value {

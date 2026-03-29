@@ -12,6 +12,7 @@
 //! All 152+ tests exercise the .iris compiler pass implementations.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_bootstrap;
 use iris_types::cost::{CostBound, CostTerm};
@@ -628,7 +629,7 @@ fn iris_mono_empty_graph() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "mono_empty_graph");
 }
@@ -642,7 +643,7 @@ fn iris_mono_single_lit_passthrough() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 1, "mono_single_lit");
 }
@@ -664,7 +665,7 @@ fn iris_monomorphize_passthrough_no_poly() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph.clone()))],
+        &[Value::Program(Rc::new(test_graph.clone()))],
     );
     assert_program_with_n_nodes(&result, 3, "monomorphize should preserve 3 nodes");
 }
@@ -696,7 +697,7 @@ fn iris_monomorphize_erases_type_abst() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // TypeAbst should be erased; result should be a Program
     assert_program(&result, "mono_erases_type_abst");
@@ -738,7 +739,7 @@ fn iris_monomorphize_erases_type_app() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "mono_erases_type_app");
 }
@@ -758,7 +759,7 @@ fn iris_mono_erases_chain_of_type_abst_and_app() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Both type nodes should be erased, only Lit remains
     assert_program(&result, "mono_chain_erasure");
@@ -785,7 +786,7 @@ fn iris_mono_rewires_edges_through_erasure() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // TypeAbst erased, edge should be rewired
     assert_program(&result, "mono_rewire_edges");
@@ -802,7 +803,7 @@ fn iris_mono_preserves_fold_node() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "mono preserves fold");
 }
@@ -818,7 +819,7 @@ fn iris_mono_preserves_effect_node() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "mono preserves effect");
 }
@@ -834,7 +835,7 @@ fn iris_mono_preserves_neural_node() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "mono preserves neural");
 }
@@ -858,7 +859,7 @@ fn iris_mono_preserves_lambda_apply() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "mono preserves lambda/apply");
 }
@@ -878,7 +879,7 @@ fn iris_mono_preserves_guard_node() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 4, "mono preserves guard");
 }
@@ -906,7 +907,7 @@ fn iris_mono_many_type_nodes() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // All type nodes should be erased; result should be a Program
     assert_program(&result, "mono many type nodes");
@@ -926,7 +927,7 @@ fn iris_mono_strips_forall_from_type_env() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should return a valid Program (type env handling is internal)
     assert_program(&result, "mono_strips_forall");
@@ -944,7 +945,7 @@ fn iris_defunc_empty_graph() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "defunc_empty_graph");
 }
@@ -966,7 +967,7 @@ fn iris_defunctionalize_no_lambdas_passthrough() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph.clone()))],
+        &[Value::Program(Rc::new(test_graph.clone()))],
     );
     assert_program_with_n_nodes(&result, 3, "defunc no lambdas");
 }
@@ -983,7 +984,7 @@ fn iris_defunctionalize_replaces_lambda() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Lambda should be defunctionalized; result is a Program
     match &result {
@@ -1013,7 +1014,7 @@ fn iris_defunctionalize_replaces_apply() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1040,7 +1041,7 @@ fn iris_defunctionalize_multiple_lambdas_get_unique_tags() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1060,7 +1061,7 @@ fn iris_defunc_apply_with_unknown_function() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1087,7 +1088,7 @@ fn iris_defunc_five_lambdas() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1109,7 +1110,7 @@ fn iris_defunc_preserves_non_ho_nodes() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "defunc preserves non-ho nodes");
 }
@@ -1133,7 +1134,7 @@ fn iris_defunc_lambda_with_captures() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1152,7 +1153,7 @@ fn iris_defunc_edges_are_carried_through() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Edges should be preserved for non-lambda graphs
     assert_program(&result, "defunc edges carried through");
@@ -1168,7 +1169,7 @@ fn iris_defunc_root_preserved() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Root should be preserved for non-lambda graphs
     assert_program(&result, "defunc root preserved");
@@ -1184,7 +1185,7 @@ fn iris_defunc_closure_tag_starts_at_zero() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1202,7 +1203,7 @@ fn iris_defunc_apply_no_func_edge() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -1221,7 +1222,7 @@ fn iris_defunc_cost_preserved() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "defunc cost preserved");
 }
@@ -1239,7 +1240,7 @@ fn iris_defunc_type_env_preserved() {
     let result = run_transform(
         &module,
         &defunc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "defunc type env preserved");
 }
@@ -1256,7 +1257,7 @@ fn iris_match_lower_empty_graph() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "match_lower_empty_graph");
 }
@@ -1277,7 +1278,7 @@ fn iris_match_lower_no_matches_passthrough() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph.clone()))],
+        &[Value::Program(Rc::new(test_graph.clone()))],
     );
     assert_program_with_n_nodes(&result, 3, "match_lower no matches");
 }
@@ -1302,7 +1303,7 @@ fn iris_match_lower_2arm() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should return a transformed Program
     assert_program(&result, "match_lower_2arm");
@@ -1330,7 +1331,7 @@ fn iris_match_lower_3arm_cascading() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower_3arm");
 }
@@ -1345,7 +1346,7 @@ fn iris_match_lower_preserves_non_match_nodes() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "match_lower preserves non-match");
 }
@@ -1370,7 +1371,7 @@ fn iris_match_lower_7arm_max_supported() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower 7-arm");
 }
@@ -1386,7 +1387,7 @@ fn iris_match_lower_no_match_nodes_means_no_change() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "match_lower no change");
 }
@@ -1401,7 +1402,7 @@ fn iris_match_lower_root_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower root preserved");
 }
@@ -1416,7 +1417,7 @@ fn iris_match_lower_cost_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower cost preserved");
 }
@@ -1441,7 +1442,7 @@ fn iris_match_lower_2arm_removes_match_kind() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // The IRIS match lowering pass attempts to transform Match nodes.
     // Due to content-addressed IDs changing during mutation, the pass may
@@ -1477,7 +1478,7 @@ fn iris_match_lower_multiple_matches() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower multiple matches");
 }
@@ -1495,7 +1496,7 @@ fn iris_match_lower_type_env_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower type env preserved");
 }
@@ -1512,7 +1513,7 @@ fn iris_match_lower_procedures_carried_through() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "match_lower procedures");
 }
@@ -1529,7 +1530,7 @@ fn iris_fold_lower_empty_graph() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "fold_lower_empty_graph");
 }
@@ -1550,7 +1551,7 @@ fn iris_fold_lower_no_folds_passthrough() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "fold_lower no folds");
 }
@@ -1582,7 +1583,7 @@ fn iris_fold_lower_replaces_fold() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Fold should be lowered to loop structure (more nodes)
     assert_program(&result, "fold_lower replaces fold");
@@ -1613,7 +1614,7 @@ fn iris_fold_lower_replaces_unfold() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower replaces unfold");
 }
@@ -1647,7 +1648,7 @@ fn iris_fold_lower_letrec_structural_creates_loop() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower letrec structural");
 }
@@ -1682,7 +1683,7 @@ fn iris_fold_lower_letrec_sized_creates_loop() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower letrec sized");
 }
@@ -1698,7 +1699,7 @@ fn iris_fold_lower_unfold_becomes_let() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Unfold -> Let (or similar lowered form)
     assert_program(&result, "fold_lower unfold");
@@ -1723,7 +1724,7 @@ fn iris_fold_lower_multiple_folds() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower multiple folds");
 }
@@ -1742,7 +1743,7 @@ fn iris_fold_lower_preserves_non_fold_nodes() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "fold_lower preserves non-fold");
 }
@@ -1757,7 +1758,7 @@ fn iris_fold_lower_root_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower root preserved");
 }
@@ -1772,7 +1773,7 @@ fn iris_fold_lower_cost_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower cost preserved");
 }
@@ -1796,7 +1797,7 @@ fn iris_fold_lower_fold_and_unfold_together() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower fold + unfold");
 }
@@ -1820,7 +1821,7 @@ fn iris_fold_lower_loop_ids_unique() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Both folds should produce distinct loop structures
     assert_program(&result, "fold_lower loop ids unique");
@@ -1837,7 +1838,7 @@ fn iris_fold_lower_loop_structure_edges() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "fold_lower loop structure edges");
 }
@@ -1854,7 +1855,7 @@ fn iris_effect_lower_empty_graph() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "effect_lower_empty_graph");
 }
@@ -1875,7 +1876,7 @@ fn iris_effect_lower_no_effects_passthrough() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "effect_lower no effects");
 }
@@ -1892,7 +1893,7 @@ fn iris_effect_lower_creates_yield_resume() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Effect should be lowered (at least 2 nodes + resume node = 3)
     assert_program(&result, "effect_lower yield_resume");
@@ -1908,7 +1909,7 @@ fn iris_effect_lower_preserves_effect_tag() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Effect tag 7 should be preserved in the lowered form
     assert_program(&result, "effect_lower preserves tag");
@@ -1933,7 +1934,7 @@ fn iris_effect_lower_multiple_effects() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower multiple effects");
 }
@@ -1952,7 +1953,7 @@ fn iris_effect_lower_preserves_non_effect_nodes() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "effect_lower preserves non-effect");
 }
@@ -1967,7 +1968,7 @@ fn iris_effect_lower_root_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower root preserved");
 }
@@ -1983,7 +1984,7 @@ fn iris_effect_lower_argument_edges_carried() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower argument edges");
 }
@@ -1998,7 +1999,7 @@ fn iris_effect_lower_cost_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower cost preserved");
 }
@@ -2013,7 +2014,7 @@ fn iris_effect_lower_procedures_carried_through() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower procedures");
 }
@@ -2037,7 +2038,7 @@ fn iris_effect_lower_no_effect_nodes_remain() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // The IRIS effect lowering pass attempts to replace Effect nodes with
     // yield/resume pairs. Due to content-addressed ID changes during mutation,
@@ -2067,7 +2068,7 @@ fn iris_effect_lower_consumer_rewiring() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2088,7 +2089,7 @@ fn iris_effect_lower_type_env_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower type env preserved");
 }
@@ -2103,7 +2104,7 @@ fn iris_effect_lower_yield_has_continuation() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "effect_lower yield continuation");
 }
@@ -2120,7 +2121,7 @@ fn iris_neural_lower_empty_graph() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "neural_lower_empty_graph");
 }
@@ -2141,7 +2142,7 @@ fn iris_neural_lower_no_neural_passthrough() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "neural_lower no neural");
 }
@@ -2158,7 +2159,7 @@ fn iris_neural_lower_creates_weight_compute_activation() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should have expanded neural into multiple nodes
     assert_program(&result, "neural_lower weight_compute_activation");
@@ -2185,7 +2186,7 @@ fn iris_neural_lower_consumer_rewiring() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2205,7 +2206,7 @@ fn iris_neural_lower_tiny_network() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should have expanded: WeightLoad + compute + Activation
     assert_program(&result, "neural_lower tiny");
@@ -2223,7 +2224,7 @@ fn iris_neural_lower_small_network() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower small");
 }
@@ -2240,7 +2241,7 @@ fn iris_neural_lower_large_network() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower large");
 }
@@ -2256,7 +2257,7 @@ fn iris_neural_lower_boundary_256_params() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower boundary 256");
 }
@@ -2272,7 +2273,7 @@ fn iris_neural_lower_boundary_16384_params() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower boundary 16384");
 }
@@ -2288,7 +2289,7 @@ fn iris_neural_lower_boundary_16385_params() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower boundary 16385");
 }
@@ -2312,7 +2313,7 @@ fn iris_neural_lower_multiple_neural_nodes() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower multiple");
 }
@@ -2328,7 +2329,7 @@ fn iris_neural_lower_no_neural_nodes_remain() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // The IRIS neural lowering pass attempts to replace Neural nodes with
     // weight load + compute + activation nodes. Due to content-addressed
@@ -2347,7 +2348,7 @@ fn iris_neural_lower_preserves_non_neural_nodes() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 2, "neural_lower preserves non-neural");
 }
@@ -2362,7 +2363,7 @@ fn iris_neural_lower_root_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower root preserved");
 }
@@ -2377,7 +2378,7 @@ fn iris_neural_lower_cost_preserved() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "neural_lower cost preserved");
 }
@@ -2393,7 +2394,7 @@ fn iris_neural_lower_weight_load_wired() {
     let result = run_transform(
         &module,
         &lower_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should have properly wired weight load -> compute
     assert_program(&result, "neural_lower weight_load wired");
@@ -2411,7 +2412,7 @@ fn iris_layout_empty_graph() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "layout_empty_graph");
 }
@@ -2432,7 +2433,7 @@ fn iris_layout_annotates_prim_as_scalar() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2456,7 +2457,7 @@ fn iris_layout_tuple_gets_soa() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2477,7 +2478,7 @@ fn iris_layout_inject_gets_tagged() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2501,7 +2502,7 @@ fn iris_layout_letrec_gets_arena() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2523,7 +2524,7 @@ fn iris_layout_every_node_gets_annotation() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 10, "layout every node annotated");
 }
@@ -2538,7 +2539,7 @@ fn iris_layout_preserves_nodes() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 1, "layout preserves nodes");
 }
@@ -2554,7 +2555,7 @@ fn iris_layout_preserves_edges() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout preserves edges");
 }
@@ -2569,7 +2570,7 @@ fn iris_layout_root_preserved() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout root preserved");
 }
@@ -2588,7 +2589,7 @@ fn iris_layout_mixed_types() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 3, "layout mixed types");
 }
@@ -2603,7 +2604,7 @@ fn iris_layout_cost_preserved() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout cost preserved");
 }
@@ -2621,7 +2622,7 @@ fn iris_layout_type_env_preserved() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout type env preserved");
 }
@@ -2642,7 +2643,7 @@ fn iris_layout_vector_for_vec_type() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout vector for vec type");
 }
@@ -2665,7 +2666,7 @@ fn iris_layout_sum_tag_bits_scale() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout sum tag bits scale");
 }
@@ -2684,7 +2685,7 @@ fn iris_layout_arena_for_recursive_type() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout arena for recursive");
 }
@@ -2706,7 +2707,7 @@ fn iris_layout_soa_for_product_type() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout soa for product");
 }
@@ -2729,7 +2730,7 @@ fn iris_layout_tagged_for_sum_type() {
     let result = run_transform(
         &module,
         &layout_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "layout tagged for sum");
 }
@@ -2746,7 +2747,7 @@ fn iris_isel_empty_graph() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "isel_empty_graph");
 }
@@ -2768,7 +2769,7 @@ fn iris_isel_remaps_prim_opcodes() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -2795,7 +2796,7 @@ fn iris_isel_prim_mul_maps() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert!(has_prim_nodes(&result), "isel should produce Prim nodes for mul");
 }
@@ -2809,7 +2810,7 @@ fn iris_isel_converts_lit_to_vconst() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -2835,7 +2836,7 @@ fn iris_isel_converts_let_to_vmov() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2865,7 +2866,7 @@ fn iris_isel_converts_guard_to_vblend() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -2886,7 +2887,7 @@ fn iris_isel_inject_maps() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "isel inject maps");
 }
@@ -2904,7 +2905,7 @@ fn iris_isel_effect_node_maps() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "isel effect maps");
 }
@@ -2923,7 +2924,7 @@ fn iris_isel_vreg_count_tracks() {
     let result = run_transform(
         &module,
         &isel_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should produce a Program with 5 nodes mapped to instructions
     assert_program_with_n_nodes(&result, 5, "isel vreg count");
@@ -2950,7 +2951,7 @@ fn iris_isel_all_prim_opcodes() {
         let result = run_transform(
             &module,
             &isel_graph,
-            &[Value::Program(Box::new(test_graph))],
+            &[Value::Program(Rc::new(test_graph))],
         );
         assert_program(&result, &format!("isel prim opcode 0x{:02x}", opcode));
     }
@@ -2968,7 +2969,7 @@ fn iris_regalloc_empty_graph() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program_with_n_nodes(&result, 0, "regalloc_empty");
 }
@@ -2989,7 +2990,7 @@ fn iris_regalloc_annotates_small_graph() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(_) => {}
@@ -3006,7 +3007,7 @@ fn iris_regalloc_single_op() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc single op");
 }
@@ -3025,7 +3026,7 @@ fn iris_regalloc_few_ops_no_spills() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // 5 ops should fit without spills (16 available regs)
     assert_program_with_n_nodes(&result, 5, "regalloc no spills");
@@ -3045,7 +3046,7 @@ fn iris_regalloc_no_spill_within_16() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -3073,7 +3074,7 @@ fn iris_regalloc_spill_beyond_16() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -3102,7 +3103,7 @@ fn iris_regalloc_preserves_opcodes() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // All three Prim nodes should still be present
     assert_program_with_min_nodes(&result, 3, "regalloc preserves opcodes");
@@ -3117,7 +3118,7 @@ fn iris_regalloc_preserves_width() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc preserves width");
 }
@@ -3131,7 +3132,7 @@ fn iris_regalloc_dst_gets_register() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Result should be a valid Program with register annotations
     assert_program(&result, "regalloc dst register");
@@ -3157,7 +3158,7 @@ fn iris_regalloc_sequential_non_overlapping() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc sequential non-overlapping");
 }
@@ -3171,7 +3172,7 @@ fn iris_regalloc_modifier_preserved() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc modifier preserved");
 }
@@ -3185,7 +3186,7 @@ fn iris_regalloc_preserves_immediates() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc preserves immediates");
 }
@@ -3207,7 +3208,7 @@ fn iris_regalloc_input_vregs_mapped() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "regalloc input vregs mapped");
 }
@@ -3236,7 +3237,7 @@ fn iris_regalloc_spill_ops() {
     let result = run_transform(
         &module,
         &regalloc_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // With 40 nodes, should produce spills
     assert_program(&result, "regalloc spill ops");
@@ -3255,7 +3256,7 @@ fn iris_container_pack_empty_graph() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => assert!(g.nodes.is_empty()),
@@ -3272,7 +3273,7 @@ fn iris_container_pack_single_op() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // Should have 1 original node + 1 container node
     assert_program(&result, "container_pack single op");
@@ -3292,7 +3293,7 @@ fn iris_container_pack_small_graph() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -3320,7 +3321,7 @@ fn iris_container_pack_8_ops() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // 8 ops fit in 1 container (max 8 per container)
     assert_program(&result, "container_pack 8 ops");
@@ -3340,7 +3341,7 @@ fn iris_container_pack_9_ops_need_two() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // 9 ops need 2 containers (8 + 1)
     assert_program(&result, "container_pack 9 ops");
@@ -3360,7 +3361,7 @@ fn iris_container_pack_large_graph() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     match &result {
         Value::Program(g) => {
@@ -3388,7 +3389,7 @@ fn iris_container_pack_container_indices() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "container_pack indices");
 }
@@ -3407,7 +3408,7 @@ fn iris_container_pack_continuation_flags() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     // First container should have continuation, last should not
     assert_program(&result, "container_pack continuation flags");
@@ -3427,7 +3428,7 @@ fn iris_container_pack_last_no_continuation() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "container_pack last no continuation");
 }
@@ -3447,7 +3448,7 @@ fn iris_container_pack_prefetch_distance() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "container_pack prefetch distance");
 }
@@ -3470,7 +3471,7 @@ fn iris_container_pack_live_in_out() {
     let result = run_transform(
         &module,
         &pack_graph,
-        &[Value::Program(Box::new(test_graph))],
+        &[Value::Program(Rc::new(test_graph))],
     );
     assert_program(&result, "container_pack live in/out");
 }
@@ -3494,7 +3495,7 @@ fn run_full_pipeline(input: SemanticGraph) -> Value {
         ("container_pack", include_str!("../src/iris-programs/compiler/container_pack.iris"), "pack_containers"),
     ];
 
-    let mut current = Value::Program(Box::new(input));
+    let mut current = Value::Program(Rc::new(input));
 
     for (name, src, fragment_name) in passes {
         let module = compile_iris(src);
@@ -3626,7 +3627,7 @@ fn iris_full_pipeline_with_type_erasure() {
     let result = run_transform(
         &module,
         &mono_graph,
-        &[Value::Program(Box::new(graph))],
+        &[Value::Program(Rc::new(graph))],
     );
     assert_program(&result, "full pipeline type erasure");
 }

@@ -12,6 +12,7 @@ use iris_exec::service::*;
 use iris_exec::interpreter;
 use iris_evolve::config::*;
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 fn int_type_env() -> (TypeEnv, TypeId) {
     let int_def = TypeDef::Primitive(PrimType::Int);
@@ -84,17 +85,17 @@ fn iris_replace_prim(program: &SemanticGraph, new_opcode: u8) -> Option<Semantic
     };
 
     let inputs = vec![
-        Value::Program(Box::new(program.clone())),
+        Value::Program(Rc::new(program.clone())),
         Value::Int(new_opcode as i64),
     ];
 
     match interpreter::interpret(&iris_program, &inputs, None) {
         Ok((outputs, _)) => {
             match outputs.into_iter().next() {
-                Some(Value::Program(p)) => Some(*p),
+                Some(Value::Program(p)) => Some(Rc::try_unwrap(p).unwrap_or_else(|rc| (*rc).clone())),
                 Some(Value::Tuple(elems)) => {
-                    if let Some(Value::Program(p)) = elems.into_iter().next() {
-                        Some(*p)
+                    if let Some(Value::Program(p)) = elems.first() {
+                        Some((**p).clone())
                     } else {
                         None
                     }
@@ -137,7 +138,7 @@ fn iris_evaluate(program: &SemanticGraph, input: &[Value], expected: i64) -> boo
     };
 
     let inputs = vec![
-        Value::Program(Box::new(program.clone())),
+        Value::Program(Rc::new(program.clone())),
         Value::tuple(input.to_vec()),
     ];
 

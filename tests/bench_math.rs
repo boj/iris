@@ -284,7 +284,7 @@ fn factorial_test_cases() -> Vec<TestCase> {
             // Input as a tuple [1, 2, ..., n] so fold can iterate over it
             let list: Vec<Value> = (1..=n).map(Value::Int).collect();
             TestCase {
-                inputs: vec![Value::Tuple(list)],
+                inputs: vec![Value::tuple(list)],
                 expected_output: Some(vec![Value::Int(expected)]),
                 initial_state: None,
                 expected_state: None,
@@ -298,7 +298,7 @@ fn factorial_bench_inputs() -> Vec<Vec<Value>> {
         .map(|i| {
             let n = (i % 8) as i64;
             let list: Vec<Value> = (1..=n).map(Value::Int).collect();
-            vec![Value::Tuple(list)]
+            vec![Value::tuple(list)]
         })
         .collect()
 }
@@ -328,7 +328,7 @@ fn fibonacci_test_cases() -> Vec<TestCase> {
             // as a list of n elements (the values don't matter — the length encodes n).
             let list: Vec<Value> = (0..n).map(Value::Int).collect();
             TestCase {
-                inputs: vec![Value::Tuple(list)],
+                inputs: vec![Value::tuple(list)],
                 expected_output: Some(vec![Value::Int(expected)]),
                 initial_state: None,
                 expected_state: None,
@@ -342,7 +342,7 @@ fn fibonacci_bench_inputs() -> Vec<Vec<Value>> {
         .map(|i| {
             let n = (i % 9) as i64;
             let list: Vec<Value> = (0..n).map(Value::Int).collect();
-            vec![Value::Tuple(list)]
+            vec![Value::tuple(list)]
         })
         .collect()
 }
@@ -379,7 +379,7 @@ fn power_test_cases() -> Vec<TestCase> {
             // Represent as a list of n copies of x: fold(1, mul, [x, x, ..., x])
             let list: Vec<Value> = (0..n).map(|_| Value::Int(x)).collect();
             TestCase {
-                inputs: vec![Value::Tuple(list)],
+                inputs: vec![Value::tuple(list)],
                 expected_output: Some(vec![Value::Int(expected)]),
                 initial_state: None,
                 expected_state: None,
@@ -394,7 +394,7 @@ fn power_bench_inputs() -> Vec<Vec<Value>> {
             let x = (i % 5 + 1) as i64;
             let n = (i % 6) as i64;
             let list: Vec<Value> = (0..n).map(|_| Value::Int(x)).collect();
-            vec![Value::Tuple(list)]
+            vec![Value::tuple(list)]
         })
         .collect()
 }
@@ -405,7 +405,7 @@ fn power_rust(inputs: &[Value]) -> Value {
             return Value::Int(1);
         }
         let mut result = 1i64;
-        for e in elems {
+        for e in elems.iter() {
             if let Value::Int(x) = e {
                 result *= x;
             }
@@ -479,7 +479,7 @@ fn sum_of_squares_test_cases() -> Vec<TestCase> {
         .map(|(n, expected)| {
             let list: Vec<Value> = (1..=n).map(Value::Int).collect();
             TestCase {
-                inputs: vec![Value::Tuple(list)],
+                inputs: vec![Value::tuple(list)],
                 expected_output: Some(vec![Value::Int(expected)]),
                 initial_state: None,
                 expected_state: None,
@@ -493,7 +493,7 @@ fn sum_of_squares_bench_inputs() -> Vec<Vec<Value>> {
         .map(|i| {
             let n = (i % 10 + 1) as i64;
             let list: Vec<Value> = (1..=n).map(Value::Int).collect();
-            vec![Value::Tuple(list)]
+            vec![Value::tuple(list)]
         })
         .collect()
 }
@@ -557,7 +557,7 @@ fn dot_product_bench_inputs() -> Vec<Vec<Value>> {
             let len = (i % 5 + 2) as i64;
             let a: Vec<Value> = (0..len).map(|j| Value::Int(j + 1)).collect();
             let b: Vec<Value> = (0..len).map(|j| Value::Int(j * 2 + 1)).collect();
-            vec![Value::Tuple(a), Value::Tuple(b)]
+            vec![Value::tuple(a), Value::tuple(b)]
         })
         .collect()
 }
@@ -624,7 +624,7 @@ fn manhattan_bench_inputs() -> Vec<Vec<Value>> {
             let len = (i % 5 + 1) as i64;
             let a: Vec<Value> = (0..len).map(|j| Value::Int(j * 3)).collect();
             let b: Vec<Value> = (0..len).map(|j| Value::Int(j * 3 + (i as i64 % 7))).collect();
-            vec![Value::Tuple(a), Value::Tuple(b)]
+            vec![Value::tuple(a), Value::tuple(b)]
         })
         .collect()
 }
@@ -692,7 +692,7 @@ fn min_of_list_bench_inputs() -> Vec<Vec<Value>> {
             let list: Vec<Value> = (0..len)
                 .map(|j| Value::Int((j * 17 + i as i64 * 3) % 100 - 50))
                 .collect();
-            vec![Value::Tuple(list)]
+            vec![Value::tuple(list)]
         })
         .collect()
 }
@@ -734,6 +734,7 @@ fn format_value(v: &Value) -> String {
         Value::Future(_) => "Future".to_string(),
         Value::Thunk(_, _) => "Thunk".to_string(),
         Value::String(s) => format!("{:?}", s),
+        Value::Range(s, e) => format!("{}..{}", s, e),
     }
 }
 

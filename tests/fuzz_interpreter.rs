@@ -238,7 +238,7 @@ fn random_inputs(rng: &mut impl Rng, count: usize) -> Vec<Value> {
             _ => {
                 // Random tuple of ints.
                 let len = rng.gen_range(1..=5);
-                Value::Tuple(
+                Value::tuple(
                     (0..len)
                         .map(|_| Value::Int(rng.gen_range(-50..=50)))
                         .collect(),

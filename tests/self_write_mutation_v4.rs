@@ -16,6 +16,7 @@
 //! After this milestone: **16/16 mutation operators self-written in IRIS.**
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::component::{ComponentRegistry, MutationComponent};
@@ -185,7 +186,7 @@ fn iris_wrap_in_guard_creates_guard_node() {
     let target = make_binop_graph(0x00, 3, 4); // add(3, 4) = 7
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // predicate: lit(3)
         Value::Int(1),  // body: add node (root)
         Value::Int(20), // fallback: lit(4)
@@ -255,7 +256,7 @@ fn iris_wrap_in_guard_preserves_original_computation() {
 
     let iris_wrap = build_iris_wrap_in_guard_program();
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(10), // predicate
         Value::Int(1),  // body (root = sub)
         Value::Int(20), // fallback
@@ -296,7 +297,7 @@ fn register_iris_wrap_in_guard_as_component() {
 
     let target = make_binop_graph(0x00, 5, 7);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // predicate
         Value::Int(1),  // body
         Value::Int(20), // fallback
@@ -442,7 +443,7 @@ fn iris_add_guard_condition_interposes_guard() {
     let target = make_binop_graph(0x00, 3, 4);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // parent_id (root add node)
         Value::Int(20), // predicate_id (lit(4))
         Value::Int(10), // body_id (lit(3) -- being guarded)
@@ -519,7 +520,7 @@ fn register_iris_add_guard_condition_as_component() {
 
     let target = make_binop_graph(0x02, 6, 3); // mul(6, 3)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // parent
         Value::Int(20), // predicate
         Value::Int(10), // body
@@ -637,7 +638,7 @@ fn iris_insert_ref_creates_ref_node() {
     let target = make_binop_graph(0x00, 3, 4);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // parent_id
         Value::Int(10), // old_node_id (lit(3))
         Value::Int(42), // fragment_id
@@ -699,7 +700,7 @@ fn iris_insert_ref_with_different_fragment_ids() {
     // Test with fragment_id = 999
     let target = make_binop_graph(0x02, 6, 3); // mul(6, 3)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),   // parent
         Value::Int(20),  // old_node (lit(3))
         Value::Int(999), // fragment_id
@@ -758,7 +759,7 @@ fn register_iris_insert_ref_as_component() {
 
     let target = make_binop_graph(0x00, 5, 7);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // parent
         Value::Int(10), // old node
         Value::Int(77), // fragment_id
@@ -831,7 +832,7 @@ fn iris_annotate_cost_sets_unit() {
 
     // Set root node's cost to Unit (0).
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // root node
         Value::Int(0), // CostTerm::Unit
     ];
@@ -862,7 +863,7 @@ fn iris_annotate_cost_sets_inherited() {
     let target = make_binop_graph(0x01, 10, 3); // sub(10, 3)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // root node
         Value::Int(1), // CostTerm::Inherited
     ];
@@ -891,7 +892,7 @@ fn iris_annotate_cost_sets_constant() {
 
     // Set cost to Annotated(Constant(100)).
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),   // root node
         Value::Int(100), // CostTerm::Annotated(Constant(100))
     ];
@@ -924,7 +925,7 @@ fn iris_annotate_cost_on_leaf_node() {
 
     // Set cost on the leaf node lit(5) at id=10.
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10),  // lit(5) node
         Value::Int(50),  // Constant(50)
     ];
@@ -973,7 +974,7 @@ fn register_iris_annotate_cost_as_component() {
 
     let target = make_binop_graph(0x00, 10, 20);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(42), // Constant(42)
     ];
@@ -1037,7 +1038,7 @@ fn compose_annotate_cost_then_wrap_in_guard() {
     // Step 1: Annotate cost on root.
     let iris_cost = build_iris_annotate_cost_program();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),   // root
         Value::Int(200), // Constant(200)
     ];
@@ -1064,7 +1065,7 @@ fn compose_annotate_cost_then_wrap_in_guard() {
 
     let iris_wrap = build_iris_wrap_in_guard_program();
     let inputs = vec![
-        Value::Program(Box::new(cost_annotated)),
+        Value::Program(Rc::new(cost_annotated)),
         Value::Int(other_id), // predicate
         Value::Int(root_id),  // body
         Value::Int(other_id), // fallback
@@ -1101,7 +1102,7 @@ fn compose_insert_ref_then_annotate_cost() {
     // Step 1: Insert ref replacing lit(3) at port 1.
     let iris_ref = build_iris_insert_ref_program();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // parent
         Value::Int(20), // old node (lit(3))
         Value::Int(77), // fragment_id
@@ -1124,7 +1125,7 @@ fn compose_insert_ref_then_annotate_cost() {
     // Step 2: Annotate cost on the ref node.
     let iris_cost = build_iris_annotate_cost_program();
     let inputs = vec![
-        Value::Program(Box::new(ref_modified)),
+        Value::Program(Rc::new(ref_modified)),
         Value::Int(ref_node_id.0 as i64),
         Value::Int(500), // Constant(500)
     ];

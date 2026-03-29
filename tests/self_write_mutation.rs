@@ -11,6 +11,7 @@
 //! enables continuous self-improvement.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::component::{ComponentRegistry, MutationComponent, SeedComponent};
@@ -260,7 +261,7 @@ fn iris_mutation_program_changes_sub_to_add() {
 
     // Run the IRIS mutation program with (target_program, new_opcode=0x00)
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(0x00), // add opcode
     ];
 
@@ -296,7 +297,7 @@ fn iris_mutation_program_changes_add_to_mul() {
     let target = make_binop_graph(0x00, 4, 7); // add(4, 7)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x02), // mul opcode
     ];
 
@@ -324,7 +325,7 @@ fn iris_mutation_program_changes_mul_to_sub() {
     let target = make_binop_graph(0x02, 10, 3); // mul(10, 3)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01), // sub opcode
     ];
 
@@ -376,7 +377,7 @@ fn iris_mutation_matches_rust_modify_root_opcode() {
 
         // IRIS program result
         let inputs = vec![
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(*new_op as i64),
         ];
         let (outputs, _) = interpreter::interpret(&iris_mutator, &inputs, None).unwrap();
@@ -430,7 +431,7 @@ fn modified_programs_execute_correctly() {
     // sub(5,3) -> add(5,3): expected 8
     let target = make_binop_graph(0x01, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00),
     ];
     let (outputs, _) = interpreter::interpret(&iris_mutator, &inputs, None).unwrap();
@@ -451,7 +452,7 @@ fn modified_programs_execute_correctly() {
     // add(10,20) -> mul(10,20): expected 200
     let target = make_binop_graph(0x00, 10, 20);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x02),
     ];
     let (outputs, _) = interpreter::interpret(&iris_mutator, &inputs, None).unwrap();
@@ -489,7 +490,7 @@ fn chained_mutations_three_cycles() {
 
     // Mutate sub -> add
     let inputs = vec![
-        Value::Program(Box::new(program)),
+        Value::Program(Rc::new(program)),
         Value::Int(prim_id),
         Value::Int(0x00),
     ];
@@ -511,7 +512,7 @@ fn chained_mutations_three_cycles() {
 
     // Mutate add -> mul (using the new Prim node ID)
     let inputs = vec![
-        Value::Program(Box::new(program2)),
+        Value::Program(Rc::new(program2)),
         Value::Int(prim2_id),
         Value::Int(0x02),
     ];
@@ -648,7 +649,7 @@ fn register_iris_mutation_as_component() {
     // Execute it via the component's program field
     let target = make_binop_graph(0x01, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00),
     ];
     let (outputs, _) =
@@ -689,7 +690,7 @@ fn iris_mutation_on_unary_program() {
     // neg(5) -> abs(5): change opcode 0x05 to 0x06
     let target = make_unary_graph(0x05, -5); // neg(-5) = 5
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x06), // abs opcode
     ];
     let (outputs, _) = interpreter::interpret(&iris_mutator, &inputs, None).unwrap();
@@ -717,7 +718,7 @@ fn iris_mutation_same_opcode_is_identity() {
     let target = make_binop_graph(0x00, 3, 4); // add(3, 4)
 
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(0x00), // same opcode
     ];
     let (outputs, _) = interpreter::interpret(&iris_mutator, &inputs, None).unwrap();
@@ -764,7 +765,7 @@ fn iris_mutation_program_is_introspectable() {
     let edges = vec![make_edge(1, 10, 0, EdgeLabel::Argument)];
     let inspector = make_graph(nodes, edges, 1);
 
-    let inputs = vec![Value::Program(Box::new(iris_mutator.clone()))];
+    let inputs = vec![Value::Program(Rc::new(iris_mutator.clone()))];
     let (outputs, _) = interpreter::interpret(&inspector, &inputs, None).unwrap();
 
     match &outputs[0] {
@@ -829,7 +830,7 @@ fn iris_insert_node_adds_prim_node() {
     assert_eq!(target.nodes.len(), 3, "original has 3 nodes");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00), // kind=Prim (then use graph_set_prim_op for specific opcode)
     ];
 
@@ -874,7 +875,7 @@ fn iris_insert_node_preserves_original_nodes() {
     let original_node_ids: Vec<NodeId> = target.nodes.keys().copied().collect();
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00), // add opcode
     ];
 
@@ -920,7 +921,7 @@ fn iris_insert_node_matches_rust_semantics() {
         let original_count = target.nodes.len();
 
         let inputs = vec![
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(kind_val as i64),
         ];
 
@@ -967,7 +968,7 @@ fn register_iris_insert_node_as_component() {
     // Execute via component
     let target = make_binop_graph(0x00, 1, 1);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x03),
     ];
     let (outputs, _) =
@@ -1055,7 +1056,7 @@ fn iris_connect_wires_disconnected_nodes() {
 
     // Connect node 1 -> node 10 on port 0
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source: the add node
         Value::Int(10), // target: lit(42)
         Value::Int(0),  // port 0
@@ -1079,7 +1080,7 @@ fn iris_connect_builds_working_program() {
     // Wire up add(42, 58) by connecting both arguments
     // First connection: add -> lit(42) on port 0
     let inputs1 = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(10),
         Value::Int(0),
@@ -1089,7 +1090,7 @@ fn iris_connect_builds_working_program() {
 
     // Second connection: add -> lit(58) on port 1
     let inputs2 = vec![
-        Value::Program(Box::new(step1)),
+        Value::Program(Rc::new(step1)),
         Value::Int(1),
         Value::Int(20),
         Value::Int(1),
@@ -1113,7 +1114,7 @@ fn iris_connect_adds_to_existing_edges() {
 
     // Add a third edge (even though it's redundant, the graph allows it)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source
         Value::Int(10), // target
         Value::Int(2),  // port 2
@@ -1148,7 +1149,7 @@ fn register_iris_connect_as_component() {
     // Execute via component: connect two disconnected nodes
     let target = make_disconnected_graph();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(10),
         Value::Int(0),
@@ -1187,7 +1188,7 @@ fn iris_seed_generator_builds_program_from_scratch() {
 
     // Use IRIS connect to wire: add -> lit42 on port 0
     let inputs1 = vec![
-        Value::Program(Box::new(disconnected)),
+        Value::Program(Rc::new(disconnected)),
         Value::Int(1),  // source: add node
         Value::Int(10), // target: lit(42)
         Value::Int(0),  // port 0
@@ -1197,7 +1198,7 @@ fn iris_seed_generator_builds_program_from_scratch() {
 
     // Use IRIS connect to wire: add -> lit58 on port 1
     let inputs2 = vec![
-        Value::Program(Box::new(step1)),
+        Value::Program(Rc::new(step1)),
         Value::Int(1),  // source: add node
         Value::Int(20), // target: lit(58)
         Value::Int(1),  // port 1
@@ -1237,7 +1238,7 @@ fn iris_seed_generator_with_insert_and_connect() {
 
     // Step 1: Add a Prim node (kind=0x00), then set opcode to neg (0x05)
     let inputs = vec![
-        Value::Program(Box::new(seed)),
+        Value::Program(Rc::new(seed)),
         Value::Int(0x00), // kind=Prim
     ];
     let (out, _) = interpreter::interpret(&iris_inserter, &inputs, None).unwrap();
@@ -1257,7 +1258,7 @@ fn iris_seed_generator_with_insert_and_connect() {
     // Set opcode to neg (0x05) using graph_set_prim_op
     let iris_set_op = build_iris_mutation_direct_program();
     let inputs = vec![
-        Value::Program(Box::new(step1_prog)),
+        Value::Program(Rc::new(step1_prog)),
         Value::Int(new_node_id),
         Value::Int(0x05), // neg opcode
     ];
@@ -1280,7 +1281,7 @@ fn iris_seed_generator_with_insert_and_connect() {
 
     // Step 2: Connect the neg node -> lit(99) on port 0
     let inputs = vec![
-        Value::Program(Box::new(step1)),
+        Value::Program(Rc::new(step1)),
         Value::Int(new_node_id), // source: neg node
         Value::Int(10),          // target: lit(99)
         Value::Int(0),           // port 0
@@ -1511,7 +1512,7 @@ fn iris_compose_mutations_replace_insert_connect() {
     // Use 0x20 for insert since values >= 0x14 create Prim nodes via fallback
     // We use root id=1 as the connect source (it's the Prim node in make_binop_graph)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01), // replace: change add -> sub
         Value::Int(0x20), // insert: add a Prim node with opcode 0x20
         Value::Int(1),    // connect source: original root id
@@ -1567,7 +1568,7 @@ fn iris_compose_step_by_step_matches_single_program() {
     // Step-by-step execution
     // Step 1: replace_prim — change add -> sub
     let inputs1 = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(0x01),
     ];
     let (out1, _) = interpreter::interpret(&iris_replace, &inputs1, None).unwrap();
@@ -1575,7 +1576,7 @@ fn iris_compose_step_by_step_matches_single_program() {
 
     // Step 2: insert_node — add a Prim node (use 0x20 >= 0x14 for Prim fallback)
     let inputs2 = vec![
-        Value::Program(Box::new(after_replace.clone())),
+        Value::Program(Rc::new(after_replace.clone())),
         Value::Int(0x20),
     ];
     let (out2, _) = interpreter::interpret(&iris_insert, &inputs2, None).unwrap();
@@ -1601,7 +1602,7 @@ fn iris_compose_step_by_step_matches_single_program() {
         .id;
 
     let inputs3 = vec![
-        Value::Program(Box::new(after_insert)),
+        Value::Program(Rc::new(after_insert)),
         Value::Int(sub_node_id.0 as i64),
         Value::Int(new_node_id),
         Value::Int(2),
@@ -1611,7 +1612,7 @@ fn iris_compose_step_by_step_matches_single_program() {
 
     // Composed execution (single program)
     let inputs_composed = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01), // replace: add -> sub
         Value::Int(0x20), // insert: Prim(0x20) via fallback
         Value::Int(1),    // connect source (original root)
@@ -1711,7 +1712,7 @@ fn composed_mutation_output_is_executable() {
 
     // Compose: replace sub->add, insert mul node, connect
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00), // replace: sub -> add
         Value::Int(0x02), // insert: mul node
         Value::Int(1),    // connect source
@@ -1748,7 +1749,7 @@ fn all_iris_mutation_operators_summary() {
     let replace = build_iris_mutation_program();
     let target = make_binop_graph(0x00, 2, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x02),
     ];
     let (out, _) = interpreter::interpret(&replace, &inputs, None).unwrap();
@@ -1764,7 +1765,7 @@ fn all_iris_mutation_operators_summary() {
     let insert = build_iris_insert_node_program();
     let target = make_binop_graph(0x00, 2, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01),
     ];
     let (out, _) = interpreter::interpret(&insert, &inputs, None).unwrap();
@@ -1782,7 +1783,7 @@ fn all_iris_mutation_operators_summary() {
     let connect = build_iris_connect_program();
     let target = make_disconnected_graph();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(10),
         Value::Int(0),
@@ -1797,7 +1798,7 @@ fn all_iris_mutation_operators_summary() {
     let compose = build_iris_compose_program();
     let target = make_binop_graph(0x00, 1, 1);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01),
         Value::Int(0x02),
         Value::Int(1),

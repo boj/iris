@@ -432,6 +432,59 @@ criterion_group!(
 #[cfg(feature = "jit")]
 criterion_main!(jit_benches);
 
+// ---------------------------------------------------------------------------
+// Rc COW benchmarks: graph_eval repeated + sequential mutations
+// ---------------------------------------------------------------------------
+
+/// Benchmark sequential graph mutations: graph_add_node_rt called N times.
+/// This simulates the crossover transplant pattern where nodes are added one by one.
+/// With Rc COW, only the first mutation clones; subsequent ones reuse.
+fn bench_graph_eval_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rc_cow");
+
+    // Build a graph that calls graph_add_node_rt(program, 0)
+    let add_node_graph = {
+        let mut nodes = HashMap::new();
+        let root = make_node(1, NodeKind::Prim, NodePayload::Prim { opcode: 0x85 });
+        nodes.insert(root.0, root.1);
+        let prog_input = make_node(2, NodeKind::Lit, NodePayload::Lit {
+            type_tag: 0xFF, value: 0i64.to_le_bytes().to_vec(),
+        });
+        nodes.insert(prog_input.0, prog_input.1);
+        let kind_lit = make_node(3, NodeKind::Lit, NodePayload::Lit {
+            type_tag: 0x00, value: 0i64.to_le_bytes().to_vec(),
+        });
+        nodes.insert(kind_lit.0, kind_lit.1);
+        SemanticGraph {
+            root: NodeId(1),
+            nodes,
+            edges: vec![
+                Edge { source: NodeId(1), target: NodeId(2), port: 0, label: EdgeLabel::Argument },
+                Edge { source: NodeId(1), target: NodeId(3), port: 1, label: EdgeLabel::Argument },
+            ],
+            type_env: TypeEnv { types: BTreeMap::new() },
+            cost: CostBound::Unknown,
+            resolution: Resolution::Implementation,
+            hash: SemanticHash([0; 32]),
+        }
+    };
+
+    let base = lit_graph(0);
+
+    // Sequential mutations: 4 add_node calls passing result forward
+    group.bench_function("seq_add_node_x4", |b| {
+        b.iter(|| {
+            let v0 = Value::Program(std::rc::Rc::new(base.clone()));
+            let v1 = iris_bootstrap::evaluate(black_box(&add_node_graph), black_box(&[v0])).unwrap();
+            let v2 = iris_bootstrap::evaluate(black_box(&add_node_graph), black_box(&[v1])).unwrap();
+            let v3 = iris_bootstrap::evaluate(black_box(&add_node_graph), black_box(&[v2])).unwrap();
+            let _v4 = iris_bootstrap::evaluate(black_box(&add_node_graph), black_box(&[v3])).unwrap();
+        });
+    });
+
+    group.finish();
+}
+
 #[cfg(not(feature = "jit"))]
 criterion_group!(
     benches,
@@ -443,6 +496,7 @@ criterion_group!(
     bench_syntax_compile,
     bench_syntax_compile_large,
     bench_benchmarks_game,
+    bench_graph_eval_batch,
 );
 
 #[cfg(not(feature = "jit"))]

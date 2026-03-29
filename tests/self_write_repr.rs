@@ -10,6 +10,7 @@
 //! as IRIS programs that can analyze other programs.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -989,7 +990,7 @@ fn count_fragment_size_3node() {
     let estimator = build_count_fragment_size();
     let target = make_binop_graph(0x00, 3, 5); // 3 nodes
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&estimator, &inputs, None).unwrap();
 
     assert_eq!(outputs.len(), 1);
@@ -1006,7 +1007,7 @@ fn count_fragment_size_1node() {
     let estimator = build_count_fragment_size();
     let target = make_lit_graph(42); // 1 node
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&estimator, &inputs, None).unwrap();
 
     assert_eq!(outputs.len(), 1);
@@ -1023,7 +1024,7 @@ fn count_fragment_size_7node() {
     let estimator = build_count_fragment_size();
     let target = make_5node_graph(2, 3, 4, 5); // 7 nodes (3 prim + 4 lit)
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&estimator, &inputs, None).unwrap();
 
     assert_eq!(outputs.len(), 1);
@@ -1042,10 +1043,10 @@ fn signature_same_program_same_result() {
     let signer = build_compute_graph_signature();
     let target = make_binop_graph(0x00, 3, 5);
 
-    let inputs1 = vec![Value::Program(Box::new(target.clone()))];
+    let inputs1 = vec![Value::Program(Rc::new(target.clone()))];
     let (out1, _) = interpreter::interpret(&signer, &inputs1, None).unwrap();
 
-    let inputs2 = vec![Value::Program(Box::new(target))];
+    let inputs2 = vec![Value::Program(Rc::new(target))];
     let (out2, _) = interpreter::interpret(&signer, &inputs2, None).unwrap();
 
     assert_eq!(out1, out2, "same program must produce same signature");
@@ -1061,13 +1062,13 @@ fn signature_different_opcode_different_result() {
 
     let (out_add, _) = interpreter::interpret(
         &signer,
-        &[Value::Program(Box::new(add_prog))],
+        &[Value::Program(Rc::new(add_prog))],
         None,
     )
     .unwrap();
     let (out_mul, _) = interpreter::interpret(
         &signer,
-        &[Value::Program(Box::new(mul_prog))],
+        &[Value::Program(Rc::new(mul_prog))],
         None,
     )
     .unwrap();
@@ -1088,13 +1089,13 @@ fn signature_different_structure_different_result() {
 
     let (out_3, _) = interpreter::interpret(
         &signer,
-        &[Value::Program(Box::new(three_node))],
+        &[Value::Program(Rc::new(three_node))],
         None,
     )
     .unwrap();
     let (out_1, _) = interpreter::interpret(
         &signer,
-        &[Value::Program(Box::new(one_node))],
+        &[Value::Program(Rc::new(one_node))],
         None,
     )
     .unwrap();
@@ -1114,7 +1115,7 @@ fn resolve_at_level_2_shows_all() {
     let target = make_3node_with_resolution(0x00, 0x01, 42);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(2), // level 2 = implementation
     ];
     let (outputs, _) = interpreter::interpret(&resolver, &inputs, None).unwrap();
@@ -1136,7 +1137,7 @@ fn resolve_at_level_0_shows_fewer() {
     let resolved = iris_types::resolution::resolve(&full_graph, Resolution::Intent);
 
     let inputs = vec![
-        Value::Program(Box::new(resolved)),
+        Value::Program(Rc::new(resolved)),
         Value::Int(0), // level 0 = intent
     ];
     let (outputs, _) = interpreter::interpret(&resolver, &inputs, None).unwrap();
@@ -1165,13 +1166,13 @@ fn resolve_at_level_1_shows_more_than_0() {
 
     let (out_0, _) = interpreter::interpret(
         &resolver,
-        &[Value::Program(Box::new(resolved_0)), Value::Int(0)],
+        &[Value::Program(Rc::new(resolved_0)), Value::Int(0)],
         None,
     )
     .unwrap();
     let (out_1, _) = interpreter::interpret(
         &resolver,
-        &[Value::Program(Box::new(resolved_1)), Value::Int(1)],
+        &[Value::Program(Rc::new(resolved_1)), Value::Int(1)],
         None,
     )
     .unwrap();
@@ -1204,8 +1205,8 @@ fn compare_identical_programs() {
 
     // Same structure: 3 nodes, root is Prim(add)
     let inputs = vec![
-        Value::Program(Box::new(prog_a)),
-        Value::Program(Box::new(prog_b)),
+        Value::Program(Rc::new(prog_a)),
+        Value::Program(Rc::new(prog_b)),
     ];
     let (outputs, _) = interpreter::interpret(&comparator, &inputs, None).unwrap();
 
@@ -1225,8 +1226,8 @@ fn compare_different_programs_different_root_kind() {
     let lit_prog = make_lit_graph(42);              // root is Lit
 
     let inputs = vec![
-        Value::Program(Box::new(prim_prog)),
-        Value::Program(Box::new(lit_prog)),
+        Value::Program(Rc::new(prim_prog)),
+        Value::Program(Rc::new(lit_prog)),
     ];
     let (outputs, _) = interpreter::interpret(&comparator, &inputs, None).unwrap();
 
@@ -1246,8 +1247,8 @@ fn compare_different_node_count() {
     let seven_node = make_5node_graph(2, 3, 4, 5);    // 7 nodes
 
     let inputs = vec![
-        Value::Program(Box::new(three_node)),
-        Value::Program(Box::new(seven_node)),
+        Value::Program(Rc::new(three_node)),
+        Value::Program(Rc::new(seven_node)),
     ];
     let (outputs, _) = interpreter::interpret(&comparator, &inputs, None).unwrap();
 
@@ -1266,7 +1267,7 @@ fn fragment_metadata_binop_program() {
     let meta = build_fragment_metadata();
     let target = make_binop_graph(0x00, 3, 5); // 3 nodes, root=Prim, no fold, no guard
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&meta, &inputs, None).unwrap();
 
     assert_eq!(outputs.len(), 1);
@@ -1296,7 +1297,7 @@ fn fragment_metadata_fold_program() {
     let meta = build_fragment_metadata();
     let target = make_fold_program();
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&meta, &inputs, None).unwrap();
 
     let fields = match &outputs[0] {
@@ -1315,7 +1316,7 @@ fn fragment_metadata_guard_program() {
     let meta = build_fragment_metadata();
     let target = make_guard_program();
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&meta, &inputs, None).unwrap();
 
     let fields = match &outputs[0] {
@@ -1334,7 +1335,7 @@ fn fragment_metadata_lit_program() {
     let meta = build_fragment_metadata();
     let target = make_lit_graph(42); // 1 node, root=Lit
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&meta, &inputs, None).unwrap();
 
     let fields = match &outputs[0] {

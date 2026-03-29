@@ -27,6 +27,7 @@
 //! compilation only. Functions without dedup conflicts run end-to-end.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 
 use iris_exec::interpreter;
@@ -574,7 +575,7 @@ fn test_iris_lowerer_produces_graph() {
         let out = run_with_limit(
             lil,
             &[
-                Value::Program(Box::new(target_program)),
+                Value::Program(Rc::new(target_program)),
                 Value::Int(42),
             ],
             100_000,
@@ -599,7 +600,7 @@ fn test_iris_lowerer_produces_graph() {
         let out = run_with_limit(
             lb,
             &[
-                Value::Program(Box::new(target_program)),
+                Value::Program(Rc::new(target_program)),
                 Value::Int(0), // add
             ],
             100_000,
@@ -624,7 +625,7 @@ fn test_iris_lowerer_produces_graph() {
         let out = run_with_limit(
             lir,
             &[
-                Value::Program(Box::new(target_program)),
+                Value::Program(Rc::new(target_program)),
                 Value::Int(0),
             ],
             100_000,
@@ -648,7 +649,7 @@ fn test_iris_lowerer_produces_graph() {
         let out = run_with_limit(
             lr,
             &[
-                Value::Program(Box::new(target_program)),
+                Value::Program(Rc::new(target_program)),
                 Value::Int(1),
             ],
             100_000,
@@ -746,7 +747,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -758,7 +759,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -770,7 +771,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -782,7 +783,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -794,7 +795,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -806,7 +807,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![Value::Int(10), Value::Int(20)]),
         ],
     );
@@ -818,7 +819,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -830,7 +831,7 @@ fn test_iris_interpreter_runs_program() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -961,7 +962,7 @@ fn test_full_self_hosting_pipeline() {
     let lower_result = run_with_limit(
         lower_int_lit,
         &[
-            Value::Program(Box::new(empty_program)),
+            Value::Program(Rc::new(empty_program)),
             Value::Int(3),
         ],
         100_000,
@@ -994,7 +995,7 @@ fn test_full_self_hosting_pipeline() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
     );
@@ -1007,9 +1008,9 @@ fn test_full_self_hosting_pipeline() {
     let out = run_with_limit(
         &interp,
         &[
-            Value::Program(Box::new(interp.clone())),
+            Value::Program(Rc::new(interp.clone())),
             Value::tuple(vec![
-                Value::Program(Box::new(lit_program)),
+                Value::Program(Rc::new(lit_program)),
                 Value::tuple(vec![]),
             ]),
         ],
@@ -1024,7 +1025,7 @@ fn test_full_self_hosting_pipeline() {
     let out = run(
         &interp,
         &[
-            Value::Program(Box::new(rust_compiled)),
+            Value::Program(Rc::new(rust_compiled)),
             Value::tuple(vec![Value::Int(13), Value::Int(29)]),
         ],
     );
@@ -1114,12 +1115,12 @@ fn test_meta_circular_matches_rust() {
         let iris_inputs = if tp.inputs.is_empty() {
             Value::tuple(vec![])
         } else {
-            Value::Tuple(tp.inputs.clone())
+            Value::tuple(tp.inputs.clone())
         };
         let iris_out = run_with_limit(
             &interp,
             &[
-                Value::Program(Box::new(tp.graph.clone())),
+                Value::Program(Rc::new(tp.graph.clone())),
                 iris_inputs,
             ],
             100_000,
