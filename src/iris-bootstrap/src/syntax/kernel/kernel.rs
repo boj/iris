@@ -75,9 +75,7 @@
 //!    construct `Theorem` values, so soundness reduces to the correctness of
 //!    these 20 rules.
 
-use crate::syntax::kernel::cost_checker;
 use crate::syntax::kernel::error::KernelError;
-#[cfg(feature = "lean-kernel")]
 use crate::syntax::kernel::lean_bridge;
 use crate::syntax::kernel::theorem::{Context, Judgment, Theorem};
 
@@ -132,32 +130,15 @@ impl Kernel {
         name: BinderId,
         node_id: NodeId,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_assume(ctx, name, node_id)?;
-            let ph = proof_hash_leaf("assume", judgment.node_id, judgment.type_ref);
-            return Ok(Theorem {
-                judgment,
-                proof_hash: ph,
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let type_id = ctx.lookup(name).ok_or(KernelError::BinderNotFound {
+        let judgment = lean_bridge::lean_assume(ctx, name, node_id)
+            .ok_or(KernelError::BinderNotFound {
                 rule: "assume",
                 binder: name,
             })?;
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: ctx.clone(),
-                    node_id,
-                    type_ref: type_id,
-                    cost: CostBound::Zero,
-                },
-                proof_hash: proof_hash_leaf("assume", node_id, type_id),
-            })
-        }
+        Ok(Theorem {
+            proof_hash: proof_hash_leaf("assume", judgment.node_id, judgment.type_ref),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -179,47 +160,29 @@ impl Kernel {
         body_thm: &Theorem,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_intro(
-                ctx,
-                lam_node,
-                binder_name,
-                binder_type,
-                &body_thm.judgment,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("intro", &[body_thm.proof_hash()]),
-            });
+        // The body theorem's context must be ctx extended with the binder.
+        let extended = ctx.extend(binder_name, binder_type);
+        if body_thm.judgment.context != extended {
+            return Err(KernelError::ContextMismatch { rule: "intro" });
         }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // The body theorem's context must be ctx extended with the binder.
-            let extended = ctx.extend(binder_name, binder_type);
-            if body_thm.judgment.context != extended {
-                return Err(KernelError::ContextMismatch { rule: "intro" });
-            }
 
-            // Build the Arrow type id. We need it registered in the type_env.
-            let body_type = body_thm.judgment.type_ref;
-            let body_cost = body_thm.judgment.cost.clone();
-            let arrow_def = TypeDef::Arrow(binder_type, body_type, body_cost);
+        // Build the Arrow type id. We need it registered in the type_env.
+        let body_type = body_thm.judgment.type_ref;
+        let body_cost = body_thm.judgment.cost.clone();
+        let arrow_def = TypeDef::Arrow(binder_type, body_type, body_cost);
 
-            // Find or verify the arrow type exists in the graph's type_env.
-            let arrow_id = find_type_id(&graph.type_env, &arrow_def)?;
+        // Find or verify the arrow type exists in the graph's type_env.
+        let arrow_id = find_type_id(&graph.type_env, &arrow_def)?;
 
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: ctx.clone(),
-                    node_id: lam_node,
-                    type_ref: arrow_id,
-                    cost: CostBound::Zero,
-                },
-                proof_hash: proof_hash("intro", &[body_thm.proof_hash()]),
-            })
-        }
+        Ok(Theorem {
+            judgment: Judgment {
+                context: ctx.clone(),
+                node_id: lam_node,
+                type_ref: arrow_id,
+                cost: CostBound::Zero,
+            },
+            proof_hash: proof_hash("intro", &[body_thm.proof_hash()]),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -239,72 +202,53 @@ impl Kernel {
         app_node: NodeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_elim(
-                &fn_thm.judgment,
-                &arg_thm.judgment,
-                app_node,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "elim",
-                    &[fn_thm.proof_hash(), arg_thm.proof_hash()],
-                ),
-            });
+        // Contexts must match.
+        if fn_thm.judgment.context != arg_thm.judgment.context {
+            return Err(KernelError::ContextMismatch { rule: "elim" });
         }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Contexts must match.
-            if fn_thm.judgment.context != arg_thm.judgment.context {
-                return Err(KernelError::ContextMismatch { rule: "elim" });
-            }
 
-            // fn_thm must have an Arrow type.
-            let fn_type_def = lookup_type(&graph.type_env, fn_thm.judgment.type_ref)?;
-            let (param_type, return_type, body_cost) = match fn_type_def {
-                TypeDef::Arrow(a, b, k) => (a, b, k),
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: fn_thm.judgment.type_ref,
-                        expected: "Arrow",
-                    });
-                }
-            };
-
-            // Argument type must match the function's parameter type.
-            if arg_thm.judgment.type_ref != *param_type {
-                return Err(KernelError::TypeMismatch {
-                    expected: *param_type,
-                    actual: arg_thm.judgment.type_ref,
-                    context: "elim (argument type)",
+        // fn_thm must have an Arrow type.
+        let fn_type_def = lookup_type(&graph.type_env, fn_thm.judgment.type_ref)?;
+        let (param_type, return_type, body_cost) = match fn_type_def {
+            TypeDef::Arrow(a, b, k) => (a, b, k),
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: fn_thm.judgment.type_ref,
+                    expected: "Arrow",
                 });
             }
+        };
 
-            // Total cost: Sum(k_arg, Sum(k_fn, k_body))
-            let total_cost = CostBound::Sum(
-                Box::new(arg_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sum(
-                    Box::new(fn_thm.judgment.cost.clone()),
-                    Box::new(body_cost.clone()),
-                )),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: fn_thm.judgment.context.clone(),
-                    node_id: app_node,
-                    type_ref: *return_type,
-                    cost: total_cost,
-                },
-                proof_hash: proof_hash(
-                    "elim",
-                    &[fn_thm.proof_hash(), arg_thm.proof_hash()],
-                ),
-            })
+        // Argument type must match the function's parameter type.
+        if arg_thm.judgment.type_ref != *param_type {
+            return Err(KernelError::TypeMismatch {
+                expected: *param_type,
+                actual: arg_thm.judgment.type_ref,
+                context: "elim (argument type)",
+            });
         }
+
+        // Total cost: Sum(k_arg, Sum(k_fn, k_body))
+        let total_cost = CostBound::Sum(
+            Box::new(arg_thm.judgment.cost.clone()),
+            Box::new(CostBound::Sum(
+                Box::new(fn_thm.judgment.cost.clone()),
+                Box::new(body_cost.clone()),
+            )),
+        );
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: fn_thm.judgment.context.clone(),
+                node_id: app_node,
+                type_ref: *return_type,
+                cost: total_cost,
+            },
+            proof_hash: proof_hash(
+                "elim",
+                &[fn_thm.proof_hash(), arg_thm.proof_hash()],
+            ),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -316,25 +260,12 @@ impl Kernel {
     /// Produces a theorem asserting `node_id = node_id` (represented as the
     /// node having its own type, at zero cost, in an empty context).
     pub fn refl(node_id: NodeId, type_id: TypeId) -> Theorem {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_refl(node_id, type_id);
-            return Theorem {
-                proof_hash: proof_hash_leaf("refl", node_id, type_id),
-                judgment,
-            };
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            Theorem {
-                judgment: Judgment {
-                    context: Context::empty(),
-                    node_id,
-                    type_ref: type_id,
-                    cost: CostBound::Zero,
-                },
-                proof_hash: proof_hash_leaf("refl", node_id, type_id),
-            }
+        // refl is unconditional — lean_refl always succeeds.
+        let judgment = lean_bridge::lean_refl(&Context::empty(), node_id, type_id)
+            .expect("refl is unconditional and should never fail");
+        Theorem {
+            proof_hash: proof_hash_leaf("refl", node_id, type_id),
+            judgment,
         }
     }
 
@@ -359,47 +290,32 @@ impl Kernel {
         other_node: NodeId,
         eq_witness: &Theorem,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_symm(
-                &thm.judgment,
-                other_node,
-                &eq_witness.judgment,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("symm", &[thm.proof_hash(), eq_witness.proof_hash()]),
+        // The equality witness must be about the target node.
+        if eq_witness.judgment.node_id != other_node {
+            return Err(KernelError::NotEqual {
+                left: thm.judgment.node_id,
+                right: other_node,
             });
         }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // The equality witness must be about the target node.
-            if eq_witness.judgment.node_id != other_node {
-                return Err(KernelError::NotEqual {
-                    left: thm.judgment.node_id,
-                    right: other_node,
-                });
-            }
 
-            // The equality witness must have the same type as the source theorem.
-            if eq_witness.judgment.type_ref != thm.judgment.type_ref {
-                return Err(KernelError::TypeMismatch {
-                    expected: thm.judgment.type_ref,
-                    actual: eq_witness.judgment.type_ref,
-                    context: "symm (equality witness type)",
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: other_node,
-                    type_ref: thm.judgment.type_ref,
-                    cost: thm.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash("symm", &[thm.proof_hash(), eq_witness.proof_hash()]),
-            })
+        // The equality witness must have the same type as the source theorem.
+        if eq_witness.judgment.type_ref != thm.judgment.type_ref {
+            return Err(KernelError::TypeMismatch {
+                expected: thm.judgment.type_ref,
+                actual: eq_witness.judgment.type_ref,
+                context: "symm (equality witness type)",
+            });
         }
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: thm.judgment.context.clone(),
+                node_id: other_node,
+                type_ref: thm.judgment.type_ref,
+                cost: thm.judgment.cost.clone(),
+            },
+            proof_hash: proof_hash("symm", &[thm.proof_hash(), eq_witness.proof_hash()]),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -412,40 +328,16 @@ impl Kernel {
     /// with the same type `T`, produce a theorem about node `a` with the cost
     /// of `thm2` (the "target" end of the chain).
     pub fn trans(thm1: &Theorem, thm2: &Theorem) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_trans(&thm1.judgment, &thm2.judgment)?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "trans",
-                    &[thm1.proof_hash(), thm2.proof_hash()],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if thm1.judgment.type_ref != thm2.judgment.type_ref {
-                return Err(KernelError::TypeMismatch {
-                    expected: thm1.judgment.type_ref,
-                    actual: thm2.judgment.type_ref,
-                    context: "trans",
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm1.judgment.context.clone(),
-                    node_id: thm1.judgment.node_id,
-                    type_ref: thm2.judgment.type_ref,
-                    cost: thm2.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash(
-                    "trans",
-                    &[thm1.proof_hash(), thm2.proof_hash()],
-                ),
-            })
-        }
+        let judgment = lean_bridge::lean_trans(&thm1.judgment, &thm2.judgment)
+            .ok_or(KernelError::TypeMismatch {
+                expected: thm1.judgment.type_ref,
+                actual: thm2.judgment.type_ref,
+                context: "trans",
+            })?;
+        Ok(Theorem {
+            proof_hash: proof_hash("trans", &[thm1.proof_hash(), thm2.proof_hash()]),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -461,46 +353,28 @@ impl Kernel {
         arg_thm: &Theorem,
         app_node: NodeId,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_congr(
-                &fn_thm.judgment,
-                &arg_thm.judgment,
-                app_node,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "congr",
-                    &[fn_thm.proof_hash(), arg_thm.proof_hash()],
-                ),
-            });
+        if fn_thm.judgment.context != arg_thm.judgment.context {
+            return Err(KernelError::ContextMismatch { rule: "congr" });
         }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if fn_thm.judgment.context != arg_thm.judgment.context {
-                return Err(KernelError::ContextMismatch { rule: "congr" });
-            }
 
-            // The result type comes from the function theorem; cost is the sum.
-            let total_cost = CostBound::Sum(
-                Box::new(fn_thm.judgment.cost.clone()),
-                Box::new(arg_thm.judgment.cost.clone()),
-            );
+        // The result type comes from the function theorem; cost is the sum.
+        let total_cost = CostBound::Sum(
+            Box::new(fn_thm.judgment.cost.clone()),
+            Box::new(arg_thm.judgment.cost.clone()),
+        );
 
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: fn_thm.judgment.context.clone(),
-                    node_id: app_node,
-                    type_ref: fn_thm.judgment.type_ref,
-                    cost: total_cost,
-                },
-                proof_hash: proof_hash(
-                    "congr",
-                    &[fn_thm.proof_hash(), arg_thm.proof_hash()],
-                ),
-            })
-        }
+        Ok(Theorem {
+            judgment: Judgment {
+                context: fn_thm.judgment.context.clone(),
+                node_id: app_node,
+                type_ref: fn_thm.judgment.type_ref,
+                cost: total_cost,
+            },
+            proof_hash: proof_hash(
+                "congr",
+                &[fn_thm.proof_hash(), arg_thm.proof_hash()],
+            ),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -521,121 +395,109 @@ impl Kernel {
         graph: &SemanticGraph,
         node_id: NodeId,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_type_check_node(ctx, graph, node_id)?;
-            // Compute proof hash based on node kind, matching the Rust path.
-            let node = graph.nodes.get(&node_id)
-                .ok_or(KernelError::NodeNotFound(node_id))?;
-            let hash_rule = match node.kind {
-                NodeKind::Lit => "type_check_lit",
-                NodeKind::Prim => "type_check_prim",
-                NodeKind::Tuple => "type_check_tuple",
-                NodeKind::Inject => "type_check_inject",
-                NodeKind::Project => "type_check_project",
-                NodeKind::Ref => "type_check_ref",
-                _ => "type_check_node",
-            };
-            return Ok(Theorem {
-                proof_hash: proof_hash_leaf(hash_rule, node_id, node.type_sig),
-                judgment,
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let node = graph
-                .nodes
-                .get(&node_id)
-                .ok_or(KernelError::NodeNotFound(node_id))?;
+        let node = graph
+            .nodes
+            .get(&node_id)
+            .ok_or(KernelError::NodeNotFound(node_id))?;
 
-            // Verify the type_sig references a valid type in the environment.
-            let _type_def = lookup_type(&graph.type_env, node.type_sig)?;
+        // Verify the type_sig references a valid type in the environment.
+        let _type_def = lookup_type(&graph.type_env, node.type_sig)?;
 
-            // Determine the cost from the node's annotation.
-            let cost = match &node.cost {
-                iris_types::cost::CostTerm::Unit => CostBound::Constant(1),
-                iris_types::cost::CostTerm::Inherited => graph.cost.clone(),
-                iris_types::cost::CostTerm::Annotated(c) => c.clone(),
-            };
+        // Determine the cost from the node's annotation.
+        let cost = match &node.cost {
+            iris_types::cost::CostTerm::Unit => CostBound::Constant(1),
+            iris_types::cost::CostTerm::Inherited => graph.cost.clone(),
+            iris_types::cost::CostTerm::Annotated(c) => c.clone(),
+        };
 
-            // For leaf nodes, we can produce the theorem directly.
-            // For composite nodes, this provides the "frame" — the checker
-            // must combine it with sub-theorems using intro/elim/etc.
-            match node.kind {
-                NodeKind::Lit => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost: CostBound::Zero,
-                        },
-                        proof_hash: proof_hash_leaf("type_check_lit", node_id, node.type_sig),
-                    })
-                }
-                NodeKind::Prim => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost: CostBound::Constant(1),
-                        },
-                        proof_hash: proof_hash_leaf("type_check_prim", node_id, node.type_sig),
-                    })
-                }
-                NodeKind::Tuple => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost: CostBound::Zero,
-                        },
-                        proof_hash: proof_hash_leaf("type_check_tuple", node_id, node.type_sig),
-                    })
-                }
-                NodeKind::Inject => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost: CostBound::Zero,
-                        },
-                        proof_hash: proof_hash_leaf("type_check_inject", node_id, node.type_sig),
-                    })
-                }
-                NodeKind::Project => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost: CostBound::Zero,
-                        },
-                        proof_hash: proof_hash_leaf("type_check_project", node_id, node.type_sig),
-                    })
-                }
-                NodeKind::Ref => {
-                    Ok(Theorem {
-                        judgment: Judgment {
-                            context: ctx.clone(),
-                            node_id,
-                            type_ref: node.type_sig,
-                            cost,
-                        },
-                        proof_hash: proof_hash_leaf("type_check_ref", node_id, node.type_sig),
-                    })
-                }
-                _ => Err(KernelError::InvalidRule {
-                    rule: "type_check_node",
-                    reason: format!(
-                        "composite node kind {:?} cannot be type-checked by annotation; use the appropriate structural rule",
-                        node.kind
-                    ),
-                }),
+        // For leaf nodes, we can produce the theorem directly.
+        // For composite nodes, this provides the "frame" — the checker
+        // must combine it with sub-theorems using intro/elim/etc.
+        match node.kind {
+            NodeKind::Lit => {
+                // Literals have zero cost.
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost: CostBound::Zero,
+                    },
+                    proof_hash: proof_hash_leaf("type_check_lit", node_id, node.type_sig),
+                })
             }
+            NodeKind::Prim => {
+                // Primitives: cost is Unit (1) plus argument costs (handled
+                // by elim). The node-level cost is just the primitive itself.
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost: CostBound::Constant(1),
+                    },
+                    proof_hash: proof_hash_leaf("type_check_prim", node_id, node.type_sig),
+                })
+            }
+            NodeKind::Tuple => {
+                // Tuples: the type_sig should be a Product type. Cost is zero
+                // for the constructor itself (component costs via sub-theorems).
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost: CostBound::Zero,
+                    },
+                    proof_hash: proof_hash_leaf("type_check_tuple", node_id, node.type_sig),
+                })
+            }
+            NodeKind::Inject => {
+                // Sum type injection: cost zero for the tag itself.
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost: CostBound::Zero,
+                    },
+                    proof_hash: proof_hash_leaf("type_check_inject", node_id, node.type_sig),
+                })
+            }
+            NodeKind::Project => {
+                // Product elimination: cost zero for projection itself.
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost: CostBound::Zero,
+                    },
+                    proof_hash: proof_hash_leaf("type_check_project", node_id, node.type_sig),
+                })
+            }
+            NodeKind::Ref => {
+                // Ref is an atomic node (variable reference): trust annotation.
+                Ok(Theorem {
+                    judgment: Judgment {
+                        context: ctx.clone(),
+                        node_id,
+                        type_ref: node.type_sig,
+                        cost,
+                    },
+                    proof_hash: proof_hash_leaf("type_check_ref", node_id, node.type_sig),
+                })
+            }
+            // Composite nodes MUST NOT be type-checked by annotation alone.
+            // The caller must use the appropriate structural rule (intro, elim,
+            // let_bind, match_elim, guard_rule, fold_rule, type_abst, type_app, etc.).
+            _ => Err(KernelError::InvalidRule {
+                rule: "type_check_node",
+                reason: format!(
+                    "composite node kind {:?} cannot be type-checked by annotation; use the appropriate structural rule",
+                    node.kind
+                ),
+            }),
         }
     }
 
@@ -649,33 +511,15 @@ impl Kernel {
         thm: &Theorem,
         new_cost: CostBound,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_cost_subsume(&thm.judgment, new_cost)?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if !cost_checker::cost_leq(&thm.judgment.cost, &new_cost) {
-                return Err(KernelError::CostViolation {
-                    required: new_cost,
-                    actual: thm.judgment.cost.clone(),
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: thm.judgment.node_id,
-                    type_ref: thm.judgment.type_ref,
-                    cost: new_cost,
-                },
-                proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
-            })
-        }
+        let judgment = lean_bridge::lean_cost_subsume(&thm.judgment, &new_cost)
+            .ok_or(KernelError::CostViolation {
+                required: new_cost.clone(),
+                actual: thm.judgment.cost.clone(),
+            })?;
+        Ok(Theorem {
+            proof_hash: proof_hash("cost_subsume", &[thm.proof_hash()]),
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -696,35 +540,17 @@ impl Kernel {
         hasher.update(b"cost_leq");
         hasher.update(format!("{k1:?}").as_bytes());
         hasher.update(format!("{k2:?}").as_bytes());
-        let ph = *hasher.finalize().as_bytes();
+        let hash = *hasher.finalize().as_bytes();
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_cost_leq_rule(k1, k2)?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: ph,
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if !cost_checker::cost_leq(k1, k2) {
-                return Err(KernelError::CostViolation {
-                    required: k2.clone(),
-                    actual: k1.clone(),
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: Context::empty(),
-                    node_id: NodeId(0),
-                    type_ref: TypeId(0),
-                    cost: k2.clone(),
-                },
-                proof_hash: ph,
-            })
-        }
+        let judgment = lean_bridge::lean_cost_leq_rule(k1, k2)
+            .ok_or(KernelError::CostViolation {
+                required: k2.clone(),
+                actual: k1.clone(),
+            })?;
+        Ok(Theorem {
+            proof_hash: hash,
+            judgment,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -745,83 +571,70 @@ impl Kernel {
         refined_type_id: TypeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_refine_intro(
-                &base_thm.judgment,
-                &pred_holds.judgment,
-                refined_type_id,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "refine_intro",
-                    &[base_thm.proof_hash(), pred_holds.proof_hash()],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Verify the refined type exists and wraps the base type.
-            let refined_def = lookup_type(&graph.type_env, refined_type_id)?;
-            match refined_def {
-                TypeDef::Refined(inner_type, _pred) => {
-                    if *inner_type != base_thm.judgment.type_ref {
-                        return Err(KernelError::TypeMismatch {
-                            expected: *inner_type,
-                            actual: base_thm.judgment.type_ref,
-                            context: "refine_intro (base type)",
-                        });
-                    }
-                }
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: refined_type_id,
-                        expected: "Refined",
+        // Verify the refined type exists and wraps the base type.
+        let refined_def = lookup_type(&graph.type_env, refined_type_id)?;
+        match refined_def {
+            TypeDef::Refined(inner_type, _pred) => {
+                if *inner_type != base_thm.judgment.type_ref {
+                    return Err(KernelError::TypeMismatch {
+                        expected: *inner_type,
+                        actual: base_thm.judgment.type_ref,
+                        context: "refine_intro (base type)",
                     });
                 }
             }
-
-            // Validate that pred_holds is about the same node as base_thm.
-            if pred_holds.judgment.node_id != base_thm.judgment.node_id {
-                return Err(KernelError::InvalidRule {
-                    rule: "refine_intro",
-                    reason: format!(
-                        "predicate witness is about node {:?}, but base theorem is about node {:?}; \
-                         the predicate must be proven for the same value being refined",
-                        pred_holds.judgment.node_id, base_thm.judgment.node_id
-                    ),
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: refined_type_id,
+                    expected: "Refined",
                 });
             }
-
-            // Validate that pred_holds has a type related to the refinement.
-            if pred_holds.judgment.type_ref != refined_type_id
-                && pred_holds.judgment.type_ref != base_thm.judgment.type_ref
-            {
-                return Err(KernelError::InvalidRule {
-                    rule: "refine_intro",
-                    reason: format!(
-                        "predicate witness has type {:?}, expected {:?} (refined) or {:?} (base); \
-                         witness must prove the refinement predicate for the value",
-                        pred_holds.judgment.type_ref, refined_type_id, base_thm.judgment.type_ref
-                    ),
-                });
-            }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: base_thm.judgment.context.clone(),
-                    node_id: base_thm.judgment.node_id,
-                    type_ref: refined_type_id,
-                    cost: base_thm.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash(
-                    "refine_intro",
-                    &[base_thm.proof_hash(), pred_holds.proof_hash()],
-                ),
-            })
         }
+
+        // Validate that pred_holds is about the same node as base_thm.
+        // This ensures the predicate witness actually proves the predicate
+        // for the value being refined, not for some unrelated node.
+        if pred_holds.judgment.node_id != base_thm.judgment.node_id {
+            return Err(KernelError::InvalidRule {
+                rule: "refine_intro",
+                reason: format!(
+                    "predicate witness is about node {:?}, but base theorem is about node {:?}; \
+                     the predicate must be proven for the same value being refined",
+                    pred_holds.judgment.node_id, base_thm.judgment.node_id
+                ),
+            });
+        }
+
+        // Validate that pred_holds has a type related to the refinement.
+        // The predicate witness must have either the refined type itself
+        // or the base type (proving the predicate holds for a value of
+        // the base type). This prevents using a completely unrelated
+        // theorem as the predicate witness.
+        if pred_holds.judgment.type_ref != refined_type_id
+            && pred_holds.judgment.type_ref != base_thm.judgment.type_ref
+        {
+            return Err(KernelError::InvalidRule {
+                rule: "refine_intro",
+                reason: format!(
+                    "predicate witness has type {:?}, expected {:?} (refined) or {:?} (base); \
+                     witness must prove the refinement predicate for the value",
+                    pred_holds.judgment.type_ref, refined_type_id, base_thm.judgment.type_ref
+                ),
+            });
+        }
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: base_thm.judgment.context.clone(),
+                node_id: base_thm.judgment.node_id,
+                type_ref: refined_type_id,
+                cost: base_thm.judgment.cost.clone(),
+            },
+            proof_hash: proof_hash(
+                "refine_intro",
+                &[base_thm.proof_hash(), pred_holds.proof_hash()],
+            ),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -836,55 +649,38 @@ impl Kernel {
         thm: &Theorem,
         graph: &SemanticGraph,
     ) -> Result<(Theorem, Theorem), KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let (base_j, pred_j) = lean_bridge::lean_refine_elim(&thm.judgment, graph)?;
-            return Ok((
-                Theorem {
-                    judgment: base_j,
-                    proof_hash: proof_hash("refine_elim_base", &[thm.proof_hash()]),
-                },
-                Theorem {
-                    judgment: pred_j,
-                    proof_hash: proof_hash("refine_elim_pred", &[thm.proof_hash()]),
-                },
-            ));
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let type_def = lookup_type(&graph.type_env, thm.judgment.type_ref)?;
-            let (inner_type, _pred) = match type_def {
-                TypeDef::Refined(inner, pred) => (inner, pred),
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: thm.judgment.type_ref,
-                        expected: "Refined",
-                    });
-                }
-            };
+        let type_def = lookup_type(&graph.type_env, thm.judgment.type_ref)?;
+        let (inner_type, _pred) = match type_def {
+            TypeDef::Refined(inner, pred) => (inner, pred),
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: thm.judgment.type_ref,
+                    expected: "Refined",
+                });
+            }
+        };
 
-            let base_thm = Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: thm.judgment.node_id,
-                    type_ref: *inner_type,
-                    cost: thm.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash("refine_elim_base", &[thm.proof_hash()]),
-            };
+        let base_thm = Theorem {
+            judgment: Judgment {
+                context: thm.judgment.context.clone(),
+                node_id: thm.judgment.node_id,
+                type_ref: *inner_type,
+                cost: thm.judgment.cost.clone(),
+            },
+            proof_hash: proof_hash("refine_elim_base", &[thm.proof_hash()]),
+        };
 
-            let pred_thm = Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: thm.judgment.node_id,
-                    type_ref: thm.judgment.type_ref,
-                    cost: CostBound::Zero,
-                },
-                proof_hash: proof_hash("refine_elim_pred", &[thm.proof_hash()]),
-            };
+        let pred_thm = Theorem {
+            judgment: Judgment {
+                context: thm.judgment.context.clone(),
+                node_id: thm.judgment.node_id,
+                type_ref: thm.judgment.type_ref, // keeps the refined type as witness
+                cost: CostBound::Zero,
+            },
+            proof_hash: proof_hash("refine_elim_pred", &[thm.proof_hash()]),
+        };
 
-            Ok((base_thm, pred_thm))
-        }
+        Ok((base_thm, pred_thm))
     }
 
     // -----------------------------------------------------------------------
@@ -904,77 +700,64 @@ impl Kernel {
         result_node: NodeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_nat_ind(
-                &base.judgment,
-                &step.judgment,
-                result_node,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "nat_ind",
-                    &[base.proof_hash(), step.proof_hash()],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // The step case must have an Arrow type P(n) -> P(n+1).
-            let step_type_def = lookup_type(&graph.type_env, step.judgment.type_ref)?;
-            let step_body_cost = match step_type_def {
-                TypeDef::Arrow(param_type, return_type, body_cost) => {
-                    if *param_type != base.judgment.type_ref {
-                        return Err(KernelError::InductionError {
-                            reason: format!(
-                                "nat_ind: step parameter type {:?} != base type {:?}; \
-                                 step must have type P(n) -> P(n+1)",
-                                param_type, base.judgment.type_ref
-                            ),
-                        });
-                    }
-                    if *return_type != base.judgment.type_ref {
-                        return Err(KernelError::InductionError {
-                            reason: format!(
-                                "nat_ind: step return type {:?} != base type {:?}; \
-                                 step must have type P(n) -> P(n+1)",
-                                return_type, base.judgment.type_ref
-                            ),
-                        });
-                    }
-                    body_cost
-                }
-                _ => {
+        // The step case must have an Arrow type P(n) -> P(n+1).
+        // Specifically: Arrow(base_type, base_type, k) for some cost k.
+        let step_type_def = lookup_type(&graph.type_env, step.judgment.type_ref)?;
+        let step_body_cost = match step_type_def {
+            TypeDef::Arrow(param_type, return_type, body_cost) => {
+                // Parameter type must match the base type (P(n)).
+                if *param_type != base.judgment.type_ref {
                     return Err(KernelError::InductionError {
                         reason: format!(
-                            "nat_ind: step theorem has non-Arrow type {:?}; \
-                             step must have type Arrow(T, T, k) where T is the base type",
-                            step.judgment.type_ref
+                            "nat_ind: step parameter type {:?} != base type {:?}; \
+                             step must have type P(n) -> P(n+1)",
+                            param_type, base.judgment.type_ref
                         ),
                     });
                 }
-            };
+                // Return type must match the base type (P(n+1) has same type).
+                if *return_type != base.judgment.type_ref {
+                    return Err(KernelError::InductionError {
+                        reason: format!(
+                            "nat_ind: step return type {:?} != base type {:?}; \
+                             step must have type P(n) -> P(n+1)",
+                            return_type, base.judgment.type_ref
+                        ),
+                    });
+                }
+                body_cost
+            }
+            _ => {
+                return Err(KernelError::InductionError {
+                    reason: format!(
+                        "nat_ind: step theorem has non-Arrow type {:?}; \
+                         step must have type Arrow(T, T, k) where T is the base type",
+                        step.judgment.type_ref
+                    ),
+                });
+            }
+        };
 
-            let cost = CostBound::Sum(
-                Box::new(base.judgment.cost.clone()),
-                Box::new(step_body_cost.clone()),
-            );
+        // Cost: Sum(base_cost, step_body_cost) — the step cost represents
+        // one iteration; the caller must supply a cost annotation that
+        // bounds the iteration count via cost_subsume.
+        let cost = CostBound::Sum(
+            Box::new(base.judgment.cost.clone()),
+            Box::new(step_body_cost.clone()),
+        );
 
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: base.judgment.context.clone(),
-                    node_id: result_node,
-                    type_ref: base.judgment.type_ref,
-                    cost,
-                },
-                proof_hash: proof_hash(
-                    "nat_ind",
-                    &[base.proof_hash(), step.proof_hash()],
-                ),
-            })
-        }
+        Ok(Theorem {
+            judgment: Judgment {
+                context: base.judgment.context.clone(),
+                node_id: result_node,
+                type_ref: base.judgment.type_ref,
+                cost,
+            },
+            proof_hash: proof_hash(
+                "nat_ind",
+                &[base.proof_hash(), step.proof_hash()],
+            ),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -994,78 +777,62 @@ impl Kernel {
         result_node: NodeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        let sub_hashes: Vec<&[u8; 32]> = cases.iter().map(|c| c.proof_hash()).collect();
+        let type_def = lookup_type(&graph.type_env, ty)?;
+        let variants = match type_def {
+            TypeDef::Sum(variants) => variants,
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: ty,
+                    expected: "Sum",
+                });
+            }
+        };
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let case_judgments: Vec<Judgment> =
-                cases.iter().map(|c| c.judgment.clone()).collect();
-            let judgment = lean_bridge::lean_structural_ind(
-                ty,
-                &case_judgments,
-                result_node,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("structural_ind", &sub_hashes),
+        if cases.len() != variants.len() {
+            return Err(KernelError::InductionError {
+                reason: format!(
+                    "structural_ind: expected {} cases, got {}",
+                    variants.len(),
+                    cases.len()
+                ),
             });
         }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let type_def = lookup_type(&graph.type_env, ty)?;
-            let variants = match type_def {
-                TypeDef::Sum(variants) => variants,
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: ty,
-                        expected: "Sum",
-                    });
-                }
-            };
 
-            if cases.len() != variants.len() {
+        if cases.is_empty() {
+            return Err(KernelError::InductionError {
+                reason: "structural_ind: empty sum type".to_string(),
+            });
+        }
+
+        // All cases must have the same result type.
+        let result_type = cases[0].judgment.type_ref;
+        for (i, case) in cases.iter().enumerate().skip(1) {
+            if case.judgment.type_ref != result_type {
                 return Err(KernelError::InductionError {
                     reason: format!(
-                        "structural_ind: expected {} cases, got {}",
-                        variants.len(),
-                        cases.len()
+                        "case {i} has type {:?}, expected {:?}",
+                        case.judgment.type_ref, result_type
                     ),
                 });
             }
-
-            if cases.is_empty() {
-                return Err(KernelError::InductionError {
-                    reason: "structural_ind: empty sum type".to_string(),
-                });
-            }
-
-            let result_type = cases[0].judgment.type_ref;
-            for (i, case) in cases.iter().enumerate().skip(1) {
-                if case.judgment.type_ref != result_type {
-                    return Err(KernelError::InductionError {
-                        reason: format!(
-                            "case {i} has type {:?}, expected {:?}",
-                            case.judgment.type_ref, result_type
-                        ),
-                    });
-                }
-            }
-
-            let case_costs: Vec<CostBound> =
-                cases.iter().map(|c| c.judgment.cost.clone()).collect();
-            let cost = CostBound::Sup(case_costs);
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: cases[0].judgment.context.clone(),
-                    node_id: result_node,
-                    type_ref: result_type,
-                    cost,
-                },
-                proof_hash: proof_hash("structural_ind", &sub_hashes),
-            })
         }
+
+        // Cost: Sup of all case costs.
+        let case_costs: Vec<CostBound> =
+            cases.iter().map(|c| c.judgment.cost.clone()).collect();
+        let cost = CostBound::Sup(case_costs);
+
+        let sub_hashes: Vec<&[u8; 32]> = cases.iter().map(|c| c.proof_hash()).collect();
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: cases[0].judgment.context.clone(),
+                node_id: result_node,
+                type_ref: result_type,
+                cost,
+            },
+            proof_hash: proof_hash("structural_ind", &sub_hashes),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -1084,58 +851,13 @@ impl Kernel {
         bound_thm: &Theorem,
         body_thm: &Theorem,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_let_bind(
-                ctx,
-                let_node,
-                binder_name,
-                &bound_thm.judgment,
-                &body_thm.judgment,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "let_bind",
-                    &[bound_thm.proof_hash(), body_thm.proof_hash()],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // bound_thm must be in ctx.
-            if bound_thm.judgment.context != *ctx {
-                return Err(KernelError::ContextMismatch {
-                    rule: "let_bind (bound)",
-                });
-            }
-
-            // body_thm must be in ctx extended with the binder.
-            let extended = ctx.extend(binder_name, bound_thm.judgment.type_ref);
-            if body_thm.judgment.context != extended {
-                return Err(KernelError::ContextMismatch {
-                    rule: "let_bind (body)",
-                });
-            }
-
-            let cost = CostBound::Sum(
-                Box::new(bound_thm.judgment.cost.clone()),
-                Box::new(body_thm.judgment.cost.clone()),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: ctx.clone(),
-                    node_id: let_node,
-                    type_ref: body_thm.judgment.type_ref,
-                    cost,
-                },
-                proof_hash: proof_hash(
-                    "let_bind",
-                    &[bound_thm.proof_hash(), body_thm.proof_hash()],
-                ),
-            })
-        }
+        let ph = proof_hash("let_bind", &[bound_thm.proof_hash(), body_thm.proof_hash()]);
+        let judgment = lean_bridge::lean_let_bind(
+            ctx, let_node, binder_name, &bound_thm.judgment, &body_thm.judgment,
+        ).ok_or(KernelError::ContextMismatch {
+            rule: "let_bind",
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1156,58 +878,16 @@ impl Kernel {
     ) -> Result<Theorem, KernelError> {
         let mut sub_hashes: Vec<&[u8; 32]> = vec![scrutinee_thm.proof_hash()];
         sub_hashes.extend(arm_thms.iter().map(|a| a.proof_hash()));
+        let ph = proof_hash("match_elim", &sub_hashes);
 
-        #[cfg(feature = "lean-kernel")]
-        {
-            let arm_judgments: Vec<Judgment> =
-                arm_thms.iter().map(|a| a.judgment.clone()).collect();
-            let judgment = lean_bridge::lean_match_elim(
-                &scrutinee_thm.judgment,
-                &arm_judgments,
-                match_node,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("match_elim", &sub_hashes),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            if arm_thms.is_empty() {
-                return Err(KernelError::InvalidRule {
-                    rule: "match_elim",
-                    reason: "no match arms".to_string(),
-                });
-            }
-
-            let result_type = arm_thms[0].judgment.type_ref;
-            for (_i, arm) in arm_thms.iter().enumerate().skip(1) {
-                if arm.judgment.type_ref != result_type {
-                    return Err(KernelError::TypeMismatch {
-                        expected: result_type,
-                        actual: arm.judgment.type_ref,
-                        context: "match_elim (arm type mismatch)",
-                    });
-                }
-            }
-
-            let arm_costs: Vec<CostBound> =
-                arm_thms.iter().map(|a| a.judgment.cost.clone()).collect();
-            let cost = CostBound::Sum(
-                Box::new(scrutinee_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sup(arm_costs)),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: scrutinee_thm.judgment.context.clone(),
-                    node_id: match_node,
-                    type_ref: result_type,
-                    cost,
-                },
-                proof_hash: proof_hash("match_elim", &sub_hashes),
-            })
-        }
+        let arm_judgments: Vec<Judgment> = arm_thms.iter().map(|a| a.judgment.clone()).collect();
+        let judgment = lean_bridge::lean_match_elim(
+            &scrutinee_thm.judgment, &arm_judgments, match_node,
+        ).ok_or(KernelError::InvalidRule {
+            rule: "match_elim",
+            reason: "kernel rejected match_elim".to_string(),
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1225,58 +905,22 @@ impl Kernel {
         input_thm: &Theorem,
         fold_node: NodeId,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_fold_rule(
-                &base_thm.judgment,
-                &step_thm.judgment,
-                &input_thm.judgment,
-                fold_node,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "fold",
-                    &[
-                        base_thm.proof_hash(),
-                        step_thm.proof_hash(),
-                        input_thm.proof_hash(),
-                    ],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let result_type = base_thm.judgment.type_ref;
+        let ph = proof_hash(
+            "fold",
+            &[
+                base_thm.proof_hash(),
+                step_thm.proof_hash(),
+                input_thm.proof_hash(),
+            ],
+        );
 
-            let cost = CostBound::Sum(
-                Box::new(input_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sum(
-                    Box::new(base_thm.judgment.cost.clone()),
-                    Box::new(CostBound::Mul(
-                        Box::new(step_thm.judgment.cost.clone()),
-                        Box::new(input_thm.judgment.cost.clone()),
-                    )),
-                )),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: base_thm.judgment.context.clone(),
-                    node_id: fold_node,
-                    type_ref: result_type,
-                    cost,
-                },
-                proof_hash: proof_hash(
-                    "fold",
-                    &[
-                        base_thm.proof_hash(),
-                        step_thm.proof_hash(),
-                        input_thm.proof_hash(),
-                    ],
-                ),
-            })
-        }
+        let judgment = lean_bridge::lean_fold_rule(
+            &base_thm.judgment, &step_thm.judgment, &input_thm.judgment, fold_node,
+        ).ok_or(KernelError::InvalidRule {
+            rule: "fold_rule",
+            reason: "kernel rejected fold_rule".to_string(),
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 
     // -----------------------------------------------------------------------
@@ -1290,52 +934,37 @@ impl Kernel {
         forall_type_id: TypeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_type_abst(
-                &body_thm.judgment,
-                forall_type_id,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("type_abst", &[body_thm.proof_hash()]),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Verify the ForAll type is well-formed (exists and has valid refs).
-            assert_type_well_formed(&graph.type_env, forall_type_id, "type_abst")?;
+        // Verify the ForAll type is well-formed (exists and has valid refs).
+        assert_type_well_formed(&graph.type_env, forall_type_id, "type_abst")?;
 
-            let type_def = lookup_type(&graph.type_env, forall_type_id)?;
-            match type_def {
-                TypeDef::ForAll(_, inner) => {
-                    if *inner != body_thm.judgment.type_ref {
-                        return Err(KernelError::TypeMismatch {
-                            expected: *inner,
-                            actual: body_thm.judgment.type_ref,
-                            context: "type_abst",
-                        });
-                    }
-                }
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: forall_type_id,
-                        expected: "ForAll",
+        let type_def = lookup_type(&graph.type_env, forall_type_id)?;
+        match type_def {
+            TypeDef::ForAll(_, inner) => {
+                if *inner != body_thm.judgment.type_ref {
+                    return Err(KernelError::TypeMismatch {
+                        expected: *inner,
+                        actual: body_thm.judgment.type_ref,
+                        context: "type_abst",
                     });
                 }
             }
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: body_thm.judgment.context.clone(),
-                    node_id: body_thm.judgment.node_id,
-                    type_ref: forall_type_id,
-                    cost: body_thm.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash("type_abst", &[body_thm.proof_hash()]),
-            })
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: forall_type_id,
+                    expected: "ForAll",
+                });
+            }
         }
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: body_thm.judgment.context.clone(),
+                node_id: body_thm.judgment.node_id,
+                type_ref: forall_type_id,
+                cost: body_thm.judgment.cost.clone(),
+            },
+            proof_hash: proof_hash("type_abst", &[body_thm.proof_hash()]),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -1354,44 +983,31 @@ impl Kernel {
         result_type_id: TypeId,
         graph: &SemanticGraph,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_type_app(
-                &thm.judgment,
-                result_type_id,
-                graph,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash("type_app", &[thm.proof_hash()]),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            let type_def = lookup_type(&graph.type_env, thm.judgment.type_ref)?;
-            match type_def {
-                TypeDef::ForAll(_, _) => { /* OK */ }
-                _ => {
-                    return Err(KernelError::UnexpectedTypeDef {
-                        type_id: thm.judgment.type_ref,
-                        expected: "ForAll",
-                    });
-                }
+        let type_def = lookup_type(&graph.type_env, thm.judgment.type_ref)?;
+        match type_def {
+            TypeDef::ForAll(_, _) => { /* OK */ }
+            _ => {
+                return Err(KernelError::UnexpectedTypeDef {
+                    type_id: thm.judgment.type_ref,
+                    expected: "ForAll",
+                });
             }
-
-            // Verify the result type exists AND is well-formed.
-            assert_type_well_formed(&graph.type_env, result_type_id, "type_app")?;
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: thm.judgment.context.clone(),
-                    node_id: thm.judgment.node_id,
-                    type_ref: result_type_id,
-                    cost: thm.judgment.cost.clone(),
-                },
-                proof_hash: proof_hash("type_app", &[thm.proof_hash()]),
-            })
         }
+
+        // Verify the result type exists AND is well-formed (all referenced
+        // TypeIds exist in the TypeEnv). This is the critical fix for the
+        // soundness hole identified in docs/council/01-metatheory.md.
+        assert_type_well_formed(&graph.type_env, result_type_id, "type_app")?;
+
+        Ok(Theorem {
+            judgment: Judgment {
+                context: thm.judgment.context.clone(),
+                node_id: thm.judgment.node_id,
+                type_ref: result_type_id,
+                cost: thm.judgment.cost.clone(),
+            },
+            proof_hash: proof_hash("type_app", &[thm.proof_hash()]),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -1405,62 +1021,23 @@ impl Kernel {
         else_thm: &Theorem,
         guard_node: NodeId,
     ) -> Result<Theorem, KernelError> {
-        #[cfg(feature = "lean-kernel")]
-        {
-            let judgment = lean_bridge::lean_guard_rule(
-                &pred_thm.judgment,
-                &then_thm.judgment,
-                &else_thm.judgment,
-                guard_node,
-            )?;
-            return Ok(Theorem {
-                judgment,
-                proof_hash: proof_hash(
-                    "guard",
-                    &[
-                        pred_thm.proof_hash(),
-                        then_thm.proof_hash(),
-                        else_thm.proof_hash(),
-                    ],
-                ),
-            });
-        }
-        #[cfg(not(feature = "lean-kernel"))]
-        {
-            // Then and else must have the same result type.
-            if then_thm.judgment.type_ref != else_thm.judgment.type_ref {
-                return Err(KernelError::TypeMismatch {
-                    expected: then_thm.judgment.type_ref,
-                    actual: else_thm.judgment.type_ref,
-                    context: "guard_rule (then vs else)",
-                });
-            }
+        let ph = proof_hash(
+            "guard",
+            &[
+                pred_thm.proof_hash(),
+                then_thm.proof_hash(),
+                else_thm.proof_hash(),
+            ],
+        );
 
-            let cost = CostBound::Sum(
-                Box::new(pred_thm.judgment.cost.clone()),
-                Box::new(CostBound::Sup(vec![
-                    then_thm.judgment.cost.clone(),
-                    else_thm.judgment.cost.clone(),
-                ])),
-            );
-
-            Ok(Theorem {
-                judgment: Judgment {
-                    context: pred_thm.judgment.context.clone(),
-                    node_id: guard_node,
-                    type_ref: then_thm.judgment.type_ref,
-                    cost,
-                },
-                proof_hash: proof_hash(
-                    "guard",
-                    &[
-                        pred_thm.proof_hash(),
-                        then_thm.proof_hash(),
-                        else_thm.proof_hash(),
-                    ],
-                ),
-            })
-        }
+        let judgment = lean_bridge::lean_guard_rule(
+            &pred_thm.judgment, &then_thm.judgment, &else_thm.judgment, guard_node,
+        ).ok_or(KernelError::TypeMismatch {
+            expected: then_thm.judgment.type_ref,
+            actual: else_thm.judgment.type_ref,
+            context: "guard_rule (then vs else)",
+        })?;
+        Ok(Theorem { proof_hash: ph, judgment })
     }
 }
 
@@ -1469,7 +1046,6 @@ impl Kernel {
 // ---------------------------------------------------------------------------
 
 /// Look up a type definition in the TypeEnv, returning an error if not found.
-#[cfg(not(feature = "lean-kernel"))]
 fn lookup_type(
     type_env: &iris_types::types::TypeEnv,
     type_id: TypeId,
@@ -1482,7 +1058,6 @@ fn lookup_type(
 
 /// Find a TypeId for a given TypeDef in the TypeEnv.
 /// Returns an error if the type is not registered.
-#[cfg(not(feature = "lean-kernel"))]
 fn find_type_id(
     type_env: &iris_types::types::TypeEnv,
     target: &TypeDef,
@@ -1506,7 +1081,6 @@ fn find_type_id(
 ///
 /// The `context` parameter is used for error messages to indicate which rule
 /// triggered the check.
-#[cfg(any(not(feature = "lean-kernel"), test))]
 fn assert_type_well_formed(
     type_env: &iris_types::types::TypeEnv,
     type_id: TypeId,
@@ -1519,7 +1093,6 @@ fn assert_type_well_formed(
 
 /// Recursive helper for `assert_type_well_formed`. Validates that the type
 /// and ALL transitively referenced types exist in the TypeEnv.
-#[cfg(any(not(feature = "lean-kernel"), test))]
 fn assert_type_well_formed_recursive(
     type_env: &iris_types::types::TypeEnv,
     type_id: TypeId,
@@ -1558,7 +1131,6 @@ fn assert_type_well_formed_recursive(
 /// This returns the immediate TypeId children of the definition. For a full
 /// well-formedness check, the caller should verify each returned TypeId also
 /// exists in the TypeEnv.
-#[cfg(any(not(feature = "lean-kernel"), test))]
 fn type_def_references(type_def: &TypeDef) -> Vec<TypeId> {
     match type_def {
         TypeDef::Primitive(_) => vec![],
@@ -2040,7 +1612,9 @@ mod tests {
         let scrutinee = Kernel::refl(NodeId(3), TypeId(1));
 
         let err = Kernel::match_elim(&scrutinee, &[arm1, arm2], NodeId(4)).unwrap_err();
-        assert!(matches!(err, KernelError::TypeMismatch { .. }));
+        // The lean bridge returns None for arm type mismatches, which the
+        // kernel wraps as InvalidRule.
+        assert!(matches!(err, KernelError::InvalidRule { .. }));
     }
 
     #[test]

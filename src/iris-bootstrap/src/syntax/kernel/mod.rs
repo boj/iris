@@ -4,23 +4,18 @@
 //! auditable. The `Theorem` type can only be constructed by the `Kernel`
 //! methods, enforcing logical soundness at the type-system level.
 //!
-//! ## Lean 4 Formalization
+//! ## Lean 4 Kernel
 //!
-//! The kernel inference rules have been formalized in Lean 4 at
-//! `lean/IrisKernel/`. When the `lean-kernel` feature is enabled,
-//! the Rust kernel delegates to the Lean-compiled implementation via
-//! FFI, so the running code IS the formally proven code. Proof hashing
-//! remains in Rust (audit trail, not soundness).
+//! The kernel inference rules are implemented in Lean 4 at
+//! `lean/IrisKernel/`. The Rust `Kernel` struct delegates all 20 rules
+//! to Lean-compiled C via `lean_bridge`. The running code IS the formally
+//! proven code. Proof hashing remains in Rust (audit trail, not soundness).
 //!
 //! - `lean/IrisKernel/Types.lean` — Core types (mirrors Rust types)
 //! - `lean/IrisKernel/Rules.lean` — Derivation inductive (20 rules)
 //! - `lean/IrisKernel/Kernel.lean` — Executable kernel functions
 //! - `lean/IrisKernel/KernelCorrectness.lean` — Correctness proofs
 //! - `lean/IrisKernel/FFI.lean` — C-callable exports
-//!
-//! Feature flags:
-//! - `lean-ffi`: Links with Lean runtime (requires Lean toolchain)
-//! - `lean-kernel`: Delegates kernel rules to Lean (requires lean-ffi)
 #![allow(unused_imports)]
 
 pub mod checker;
