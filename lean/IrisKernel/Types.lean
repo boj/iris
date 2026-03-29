@@ -111,18 +111,18 @@ inductive NodeKind : Type where
 -- CostBound — 13 variants (omitting HWScaled for the pure formalization)
 -- Rust: `pub enum CostBound { Unknown, Zero, Constant(u64), ... }`
 --
--- We omit Amortized and HWScaled since they involve opaque blobs
--- (PotentialFn, HWParamRef) that are irrelevant to the type-theoretic
--- formalization. The cost partial order is defined over the remaining
--- 11 variants.
 -- ===========================================================================
 
 /-- Cost bounds for resource usage analysis.
     Mirrors `CostBound` in `src/iris-repr/src/cost.rs`.
 
-    We omit `Amortized` and `HWScaled` which involve opaque runtime data
-    (potential functions, hardware profile refs) not relevant to the
-    metatheory. -/
+    `Amortized` wraps an inner cost bound (the potential function is opaque
+    and not relevant to the metatheory — only the inner bound matters for
+    ordering).
+
+    `HWScaled` wraps an inner cost bound (the hardware profile ref is opaque
+    and not relevant to the metatheory — only the inner bound matters for
+    ordering). -/
 inductive CostBound : Type where
   | Unknown    : CostBound
   | Zero       : CostBound
@@ -135,6 +135,8 @@ inductive CostBound : Type where
   | Mul        : CostBound → CostBound → CostBound
   | Sup        : List CostBound → CostBound
   | Inf        : List CostBound → CostBound
+  | Amortized  : CostBound → CostBound        -- inner bound (potential fn is opaque)
+  | HWScaled   : CostBound → CostBound        -- inner bound (hw profile ref is opaque)
 
 -- DecidableEq and Repr cannot be auto-derived for CostBound because it
 -- contains List CostBound (nested inductive). We provide BEq in Eval.lean
@@ -376,6 +378,18 @@ inductive CostLeq : CostBound → CostBound → Prop where
   /-- Inf element: if v ∈ vs, then Inf(vs) ≤ v. -/
   | inf_elem : (v : CostBound) → (vs : List CostBound) → v ∈ vs →
       CostLeq (CostBound.Inf vs) v
+  /-- Amortized is conservative: Amortized(inner) ≤ b iff inner ≤ b. -/
+  | amortized_le : (inner b : CostBound) → CostLeq inner b →
+      CostLeq (CostBound.Amortized inner) b
+  /-- a ≤ Amortized(inner) iff a ≤ inner. -/
+  | le_amortized : (a inner : CostBound) → CostLeq a inner →
+      CostLeq a (CostBound.Amortized inner)
+  /-- HWScaled is conservative: HWScaled(inner) ≤ b iff inner ≤ b. -/
+  | hwscaled_le : (inner b : CostBound) → CostLeq inner b →
+      CostLeq (CostBound.HWScaled inner) b
+  /-- a ≤ HWScaled(inner) iff a ≤ inner. -/
+  | le_hwscaled : (a inner : CostBound) → CostLeq a inner →
+      CostLeq a (CostBound.HWScaled inner)
   /-- Transitivity: if a ≤ b and b ≤ c then a ≤ c. -/
   | trans : (a b c : CostBound) → CostLeq a b → CostLeq b c → CostLeq a c
 

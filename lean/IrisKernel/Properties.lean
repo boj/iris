@@ -71,13 +71,29 @@ theorem unknown_is_top (κ : CostBound) : CostLeq κ CostBound.Unknown :=
 -- The theorem statement is unchanged and correct.
 -- ===========================================================================
 
+/-- Weakening preserves context lookup: if `name` is found in `Γ`, it is
+    also found in `Γ.weaken e t` with the same type. -/
+theorem weaken_preserves_lookup (Γ : Context) (name : BinderId) (τ : TypeId)
+    (ext_name : BinderId) (ext_type : TypeId) :
+    Γ.lookup name = some τ →
+    (Γ.weaken ext_name ext_type).lookup name = some τ := by
+  unfold Context.lookup Context.weaken
+  simp only
+  -- The lookup searches from the end (reversed list). Weakening prepends,
+  -- so the prepended binding appears LAST in the reversed list and doesn't
+  -- shadow existing bindings.
+  sorry
+
 /-- General weakening: derivations are preserved under context weakening. -/
 theorem weakening_general :
     ∀ (env : TypeEnv) (Γ : Context) (n : NodeId) (τ : TypeId) (κ : CostBound)
       (ext_name : BinderId) (ext_type : TypeId),
     Derivation env Γ n τ κ →
     Derivation env (Γ.weaken ext_name ext_type) n τ κ := by
-  -- PORT: 20-case induction proof needs Lean 4.28 variable naming update
+  -- The proof strategy: for most rules, the context is either passed through
+  -- unchanged or extended (which commutes with weakening). For `assume`, we
+  -- need the lookup-preservation lemma. For rules that don't inspect the
+  -- context (refl, type_check_node, cost_leq_rule), the proof is trivial.
   sorry
 
 -- ===========================================================================

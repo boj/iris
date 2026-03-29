@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 lean-ffi = []
+lean-kernel = ["lean-ffi", "syntax"]
 syntax = []
 
 [dependencies]
