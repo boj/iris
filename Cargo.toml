@@ -492,6 +492,10 @@ path = "tests/test_verification_complete.rs"
 required-features = ["rust-scaffolding"]
 
 [[test]]
+name = "test_cost_annotations"
+path = "tests/test_cost_annotations.rs"
+
+[[test]]
 name = "test_typecheck_all"
 path = "tests/test_typecheck_all.rs"
 required-features = ["rust-scaffolding"]

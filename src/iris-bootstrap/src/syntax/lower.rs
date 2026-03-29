@@ -1599,8 +1599,17 @@ pub fn compile_fn(
 
     let mut graph = SemanticGraph {
         root: root_id, nodes: ctx.nodes, edges: ctx.edges,
-        type_env: ctx.type_env.clone(), cost, resolution: Resolution::Implementation, hash,
+        type_env: ctx.type_env.clone(), cost: cost.clone(), resolution: Resolution::Implementation, hash,
     };
+
+    // Propagate the user's cost annotation to the root node so the checker
+    // can verify it against the proven cost.  Without this, the root node
+    // carries CostTerm::Unit and the per-node cost check never fires.
+    if !matches!(cost, CostBound::Unknown) {
+        if let Some(root_node) = graph.nodes.get_mut(&root_id) {
+            root_node.cost = CostTerm::Annotated(cost);
+        }
+    }
 
     // Run type inference pass to propagate types through composite nodes
     infer_types(&mut graph);
