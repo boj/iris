@@ -46,6 +46,8 @@ mutual
     | CostBound.Mul a1 a2, CostBound.Mul b1 b2 => costBoundBEq a1 b1 && costBoundBEq a2 b2
     | CostBound.Sup vs1, CostBound.Sup vs2 => costBoundListBEq vs1 vs2
     | CostBound.Inf vs1, CostBound.Inf vs2 => costBoundListBEq vs1 vs2
+    | CostBound.Amortized a, CostBound.Amortized b => costBoundBEq a b
+    | CostBound.HWScaled a, CostBound.HWScaled b => costBoundBEq a b
     | _, _ => false
 
   def costBoundListBEq : List CostBound → List CostBound → Bool
@@ -127,6 +129,14 @@ where
 
     -- Inf on left: any branch ≤ b
     | CostBound.Inf branches, _ => branches.any (checkCostLeq · b)
+
+    -- Amortized: conservative — compare via inner cost
+    | CostBound.Amortized inner, _ => checkCostLeq inner b
+    | _, CostBound.Amortized inner => checkCostLeq a inner
+
+    -- HWScaled: conservative — compare via inner cost
+    | CostBound.HWScaled inner, _ => checkCostLeq inner b
+    | _, CostBound.HWScaled inner => checkCostLeq a inner
 
     -- Lift simple costs into Sum when one component is Zero
     | _, CostBound.Sum b1 b2 =>
