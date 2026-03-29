@@ -6,15 +6,15 @@
 Replace Zig as the implementation language for Daimon (~/Development/daimon), and replace Daimon's implementation with IRIS so that Daimon can do full self-modification. IRIS is not a standalone project — it exists to become Daimon's substrate.
 
 ### 2. IRIS writes itself in IRIS (→ three phase transitions)
-IRIS should progressively replace its own Rust/C implementation with IRIS-evolved equivalents. The Rust and C are scaffolding — used to bootstrap the first generation, then discarded as IRIS replaces each component with an evolved, verified equivalent. The only permanent human-authored code is the proof kernel (~5K lines Rust, Löb's theorem ceiling). Everything else — mutation operators, seed generators, compiler passes, fitness functions, the interpreter itself — should eventually be IRIS programs that IRIS bred.
+All Rust scaffolding has been replaced by .iris programs. The only permanent Rust is the proof kernel (iris-types + iris-bootstrap, Lob's theorem ceiling). Everything else -- mutation operators, seed generators, compiler passes, fitness functions, the interpreter itself -- is IRIS programs that IRIS bred.
 
 Three phase transitions required (from the AI Minds Council, docs/council/10-ai-council-overview.md):
 
-**Phase Transition 1: Tool → Organism** — IRIS must run continuously, maintain itself, and produce its own components (autopoiesis). Every Rust component needs an IRIS-evolved equivalent.
+**Phase Transition 1: Tool → Organism** -- COMPLETE. All Rust components replaced by IRIS equivalents. Bootstrap evaluator is the sole execution engine.
 
-**Phase Transition 2: Individual → Ecology** — Programs must interact, compete, cooperate, and form emergent structures larger than any individual. Not just message passing — an ecology where programs REACT to each other.
+**Phase Transition 2: Individual → Ecology** -- Programs must interact, compete, cooperate, and form emergent structures larger than any individual. Not just message passing -- an ecology where programs REACT to each other.
 
-**Phase Transition 3: Slow → Recursive** — Self-improvement must compound, each cycle faster than the last, with the interpreter itself as the first target for self-optimization.
+**Phase Transition 3: Slow → Recursive** -- Self-improvement must compound, each cycle faster than the last, with the interpreter itself as the first target for self-optimization.
 
 ## What Daimon Needs From IRIS
 - 360K+ LOC equivalent capability (79 cognitive modules, 85 sensory plugins, 7 daemons)
@@ -27,18 +27,16 @@ Three phase transitions required (from the AI Minds Council, docs/council/10-ai-
 - Formal verification of cognitive invariants
 
 ## Current State
-- Gen1 implementation complete (~11K LOC Rust + C)
-- Can evolve simple programs (sum, max, etc.)
-- Gen2 in progress: CLCU execution bridge, perf counters, harder test problems
-- iris-exec (22,829 LOC) gated behind `rust-scaffolding` feature; default build uses iris-bootstrap shims
+- Fully self-hosted: all scaffolding (iris-exec, iris-evolve) deleted
+- Permanent Rust: iris-types (types + graph), iris-bootstrap (evaluator + proof kernel + syntax)
+- Everything else is .iris programs: evolution, mutation, crossover, fitness, compiler passes, codec, repr, deploy, LSP
 
 ## Architecture
 - 4-layer stack: Evolution (L0) → Semantics (L1) → Verification (L2) → Hardware (L3)
 - Canonical representation: SemanticGraph (20 node kinds, purely functional)
 - Proof kernel: LCF-style, 20 inference rules, zero unsafe Rust
-- Compiler: 10-pass pipeline (SemanticGraph → CLCU containers)
-- Execution: bootstrap evaluator (default) or full interpreter/JIT/VM (`rust-scaffolding`)
-- `iris-exec` split: always-available thin API (1,696 LOC) + gated heavy impl (22,829 LOC)
+- Compiler: 10-pass pipeline (SemanticGraph → CLCU containers), implemented in .iris
+- Execution: bootstrap evaluator (iris-bootstrap) with Rc<SemanticGraph> copy-on-write
 
 ## IRIS Program Quality Rules (for agents writing .iris files)
 
@@ -63,16 +61,15 @@ When writing IRIS programs that replace Rust scaffolding, these are absolute req
 - **Test:** can you trace a call path from the program's entry point to every function?
 
 ### Bootstrap compatibility
-- `graph_add_node_rt` behaves differently in bootstrap (arg = node kind) vs rust-scaffolding (arg = always Prim, arg = opcode)
-- Portable pattern: `graph_add_node_rt pg 0` (creates Prim) then `graph_set_prim_op pg node opcode` (sets opcode)
+- `graph_add_node_rt pg 0` creates a Prim node, then `graph_set_prim_op pg node opcode` sets the opcode
 - Never pass `()` as a node ID — use `graph_get_root pg` explicitly
-- **Test:** does the program work under `cargo test` (default build) without `--features rust-scaffolding`?
+- **Test:** does the program work under `cargo test` (default build)?
 
 ## Build Conventions
-- Rust workspace at project root
-- C library at iris-clcu/
+- Rust workspace: iris-types + iris-bootstrap (2 crates)
+- C library at iris-clcu/ (CLCU container runtime)
 - BLAKE3 for all hashing
 - Zero unsafe in proof kernel
 - NixOS: use `nix-shell -p <packages> --run '<command>'` for tools not on PATH
-- Default build (`cargo build`): uses iris-bootstrap shims, no heavy Rust interpreter
-- Full build (`cargo build --features rust-scaffolding`): full interpreter, JIT, VM, effects
+- Default build: `cargo build` (evaluator + types)
+- With parser/lowerer: `cargo build --features syntax`
