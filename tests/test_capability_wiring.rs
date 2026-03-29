@@ -324,9 +324,9 @@ fn runtime_dir_list() {
     match result {
         Value::Tuple(entries) => {
             let names: Vec<String> = entries
-                .into_iter()
+                .iter()
                 .map(|v| match v {
-                    Value::String(s) => s,
+                    Value::String(s) => s.clone(),
                     _ => panic!("expected String entry"),
                 })
                 .collect();

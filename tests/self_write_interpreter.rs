@@ -25,6 +25,7 @@
 //!    simple types.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -596,19 +597,19 @@ fn test_eval_lit_returns_int_value() {
     // Test with Lit(42) program
     let target = make_lit_program(42);
     let (outputs, _) =
-        interpreter::interpret(&eval_lit, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_lit, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(outputs[0], Value::Int(42), "eval_lit should return 42 for Lit(42)");
 
     // Test with Lit(0) program
     let target = make_lit_program(0);
     let (outputs, _) =
-        interpreter::interpret(&eval_lit, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_lit, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(outputs[0], Value::Int(0), "eval_lit should return 0 for Lit(0)");
 
     // Test with Lit(-7) program
     let target = make_lit_program(-7);
     let (outputs, _) =
-        interpreter::interpret(&eval_lit, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_lit, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(outputs[0], Value::Int(-7), "eval_lit should return -7 for Lit(-7)");
 }
 
@@ -619,7 +620,7 @@ fn test_eval_lit_rejects_non_lit() {
     // Test with a Prim program (not a Lit) -- should return sentinel -1
     let target = make_binop_program(0x00, 3, 5);
     let (outputs, _) =
-        interpreter::interpret(&eval_lit, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_lit, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(
         outputs[0],
         Value::Int(-1),
@@ -634,7 +635,7 @@ fn test_eval_prim_binop_add() {
     let (outputs, _) = interpreter::interpret(
         &eval_prim,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(3),
             Value::Int(5),
         ],
@@ -651,7 +652,7 @@ fn test_eval_prim_binop_sub() {
     let (outputs, _) = interpreter::interpret(
         &eval_prim,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(10),
             Value::Int(3),
         ],
@@ -668,7 +669,7 @@ fn test_eval_prim_binop_mul() {
     let (outputs, _) = interpreter::interpret(
         &eval_prim,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(4),
             Value::Int(6),
         ],
@@ -685,7 +686,7 @@ fn test_eval_prim_binop_div() {
     let (outputs, _) = interpreter::interpret(
         &eval_prim,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(20),
             Value::Int(4),
         ],
@@ -702,7 +703,7 @@ fn test_eval_node_simple_lit() {
     // A Lit(42) program
     let target = make_lit_program(42);
     let (outputs, _) =
-        interpreter::interpret(&eval_node, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_node, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(outputs[0], Value::Int(42), "eval_node_simple on Lit(42) = 42");
 }
 
@@ -713,7 +714,7 @@ fn test_eval_node_simple_prim_add() {
     // add(Lit(3), Lit(5)) -> 8
     let target = make_binop_program(0x00, 3, 5);
     let (outputs, _) =
-        interpreter::interpret(&eval_node, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_node, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(
         outputs[0],
         Value::Int(8),
@@ -728,7 +729,7 @@ fn test_eval_node_simple_prim_sub() {
     // sub(Lit(10), Lit(3)) -> 7
     let target = make_binop_program(0x01, 10, 3);
     let (outputs, _) =
-        interpreter::interpret(&eval_node, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_node, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(
         outputs[0],
         Value::Int(7),
@@ -743,7 +744,7 @@ fn test_eval_node_simple_prim_mul() {
     // mul(Lit(4), Lit(6)) -> 24
     let target = make_binop_program(0x02, 4, 6);
     let (outputs, _) =
-        interpreter::interpret(&eval_node, &[Value::Program(Box::new(target))], None).unwrap();
+        interpreter::interpret(&eval_node, &[Value::Program(Rc::new(target))], None).unwrap();
     assert_eq!(
         outputs[0],
         Value::Int(24),
@@ -760,7 +761,7 @@ fn test_mini_interpreter_lit() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -778,7 +779,7 @@ fn test_mini_interpreter_constant_add() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -800,7 +801,7 @@ fn test_mini_interpreter_with_inputs() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![Value::Int(10), Value::Int(20)]),
         ],
         None,
@@ -832,8 +833,8 @@ fn test_mini_interpreter_meta_circular() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(eval_lit)),
-            Value::tuple(vec![Value::Program(Box::new(target))]),
+            Value::Program(Rc::new(eval_lit)),
+            Value::tuple(vec![Value::Program(Rc::new(target))]),
         ],
         None,
     )
@@ -853,7 +854,7 @@ fn test_mini_interpreter_interprets_constant_mul() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,

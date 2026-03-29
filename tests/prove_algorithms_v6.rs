@@ -11,6 +11,7 @@ use iris_exec::interpreter;
 use iris_evolve::*;
 use iris_evolve::config::*;
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 fn tc(inputs: Vec<Value>, expected: Value) -> TestCase {
     TestCase { inputs, expected_output: Some(vec![expected]), initial_state: None, expected_state: None }
@@ -180,7 +181,7 @@ fn meta_program_proving() {
     // Now: can we build a program that takes an add_program, changes the opcode to mul, and evals it?
     // This requires: self_graph → graph_set_prim_op → graph_eval
     // For now, just verify the Value::Program round-trip works
-    let program_val = Value::Program(Box::new(add_program.clone()));
+    let program_val = Value::Program(Rc::new(add_program.clone()));
     println!("  Program as value: {} nodes", add_program.nodes.len());
 
     // =====================================================================

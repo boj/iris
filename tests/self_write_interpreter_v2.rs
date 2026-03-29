@@ -14,6 +14,7 @@
 //! The chain is: Rust interpreter -> IRIS interpreter -> target program.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 
 use iris_exec::interpreter;
@@ -953,7 +954,7 @@ fn test_full_interp_lit() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -969,7 +970,7 @@ fn test_full_interp_prim_add() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -985,7 +986,7 @@ fn test_full_interp_prim_mul() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1001,7 +1002,7 @@ fn test_full_interp_let() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1017,7 +1018,7 @@ fn test_full_interp_tuple() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1037,7 +1038,7 @@ fn test_full_interp_inject() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1057,7 +1058,7 @@ fn test_full_interp_project() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1077,7 +1078,7 @@ fn test_full_interp_rewrite() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1093,7 +1094,7 @@ fn test_full_interp_effect() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1113,7 +1114,7 @@ fn test_full_interp_type_abst() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1133,7 +1134,7 @@ fn test_full_interp_type_app() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1151,7 +1152,7 @@ fn test_full_interp_guard() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1168,7 +1169,7 @@ fn test_full_interp_guard() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1189,7 +1190,7 @@ fn test_full_interp_match_bool() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1205,7 +1206,7 @@ fn test_full_interp_match_bool() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1225,7 +1226,7 @@ fn test_full_interp_apply() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1254,9 +1255,9 @@ fn test_full_interp_meta_circular_lit() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(interp.clone())),
+            Value::Program(Rc::new(interp.clone())),
             Value::tuple(vec![
-                Value::Program(Box::new(inner_target)),
+                Value::Program(Rc::new(inner_target)),
                 Value::tuple(vec![]),
             ]),
         ],
@@ -1278,9 +1279,9 @@ fn test_full_interp_meta_circular_prim() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(interp.clone())),
+            Value::Program(Rc::new(interp.clone())),
             Value::tuple(vec![
-                Value::Program(Box::new(inner_target)),
+                Value::Program(Rc::new(inner_target)),
                 Value::tuple(vec![]),
             ]),
         ],
@@ -1329,7 +1330,7 @@ fn test_full_interp_project_tuple() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1366,7 +1367,7 @@ fn test_full_interp_rewrite_of_add() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1417,7 +1418,7 @@ fn test_full_interp_guard_with_tuple() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,
@@ -1440,7 +1441,7 @@ fn test_full_interp_let_with_add() {
     let (outputs, _) = interpreter::interpret(
         &interp,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         None,

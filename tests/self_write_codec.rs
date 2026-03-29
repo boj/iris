@@ -38,6 +38,7 @@
 //!    SemanticGraph since nodes are in a BTreeMap). Returns 1 if DAG.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -1108,7 +1109,7 @@ fn test_extract_node_histogram() {
     let histogram_program = build_extract_node_histogram();
     let target = make_target_3node();
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&histogram_program, &inputs, None).unwrap();
     let output = &outputs[0];
 
@@ -1140,7 +1141,7 @@ fn test_extract_graph_features() {
     let features_program = build_extract_graph_features();
     let target = make_target_3node();
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&features_program, &inputs, None).unwrap();
     let output = &outputs[0];
 
@@ -1223,7 +1224,7 @@ fn test_repair_remove_unreachable() {
     let unreachable_program = build_repair_remove_unreachable();
     let target = make_target_3node(); // fully connected
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&unreachable_program, &inputs, None).unwrap();
 
     // Connected program → 0 unreachable nodes
@@ -1239,7 +1240,7 @@ fn test_repair_check_dag() {
     let dag_program = build_repair_check_dag();
     let target = make_target_3node(); // a valid DAG
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
     let (outputs, _) = interpreter::interpret(&dag_program, &inputs, None).unwrap();
 
     // Valid DAG → 1

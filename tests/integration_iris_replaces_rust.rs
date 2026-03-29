@@ -16,6 +16,7 @@ use iris_evolve::*;
 use iris_evolve::config::*;
 use iris_evolve::seed;
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 fn int_type_env() -> (TypeEnv, TypeId) {
     let int_def = TypeDef::Primitive(PrimType::Int);
@@ -75,17 +76,17 @@ fn apply_iris_mutation(
     new_opcode: u8,
 ) -> Option<SemanticGraph> {
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(new_opcode as i64),
     ];
     match interpreter::interpret(mutation_program, &inputs, None) {
         Ok((outputs, _)) => {
             match outputs.into_iter().next() {
-                Some(Value::Program(p)) => Some(*p),
+                Some(Value::Program(p)) => Some(Rc::try_unwrap(p).unwrap_or_else(|rc| (*rc).clone())),
                 Some(Value::Tuple(elems)) => {
                     // graph_set_prim_op returns Tuple(Program, node_id)
-                    if let Some(Value::Program(p)) = elems.into_iter().next() {
-                        Some(*p)
+                    if let Some(Value::Program(p)) = elems.iter().next() {
+                        Some(p.as_ref().clone())
                     } else {
                         None
                     }

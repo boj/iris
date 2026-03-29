@@ -13,6 +13,7 @@
 //!   - Direct function pointer dispatch (no effect handler overhead)
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 use std::sync::RwLock;
 
 use iris_types::eval::Value;
@@ -223,7 +224,7 @@ fn is_jit_compilable_raw(graph: &SemanticGraph) -> bool {
         Some(g) => g,
         None => return false,
     };
-    let program_val = Value::Program(Box::new(graph.clone()));
+    let program_val = Value::Program(Rc::new(graph.clone()));
     // Direct Rust-side node kind check (the IRIS is_aot_compilable fold
     // has issues with cross-fragment closure evaluation).
     let _ = check_graph; // keep compiler fragments loaded
@@ -614,7 +615,7 @@ fn jit_compile(
     let compiler = get_compiler();
     let handler = get_handler();
     let aot_graph = find_graph(&compiler.aot_graphs, "aot_compile")?;
-    let program_val = Value::Program(Box::new(compile_graph.clone()));
+    let program_val = Value::Program(Rc::new(compile_graph.clone()));
 
     // Use the passed default_type (determined from input types by caller)
     // but also check if the graph itself reveals float types (e.g., float Lits)
@@ -657,7 +658,7 @@ fn jit_compile(
     let result_type_graph = find_graph(&compiler.aot_graphs, "node_type");
     let result_is_float = if let (Some(rtg), Some(_)) = (result_type_graph, ptr.as_ref()) {
         let root_id = compile_graph.root;
-        let program_val2 = Value::Program(Box::new(compile_graph));
+        let program_val2 = Value::Program(Rc::new(compile_graph));
         iris_bootstrap::evaluate_with_fragments(
             &rtg, &[program_val2, Value::Int(root_id.0 as i64), Value::Int(effective_type)],
             1_000_000, &compiler.aot_registry,

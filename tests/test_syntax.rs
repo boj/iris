@@ -1,6 +1,8 @@
 
 //! Integration tests: compile ML-like IRIS surface syntax and execute.
 
+use std::rc::Rc;
+
 use iris_exec::effect_runtime::LoggingHandler;
 use iris_exec::interpreter;
 use iris_types::eval::Value;
@@ -1492,7 +1494,7 @@ fn lower_iris(input: &str) -> iris_types::graph::SemanticGraph {
     ).expect("lowerer failed");
 
     match program {
-        Value::Program(g) => *g,
+        Value::Program(g) => Rc::try_unwrap(g).unwrap_or_else(|rc| (*rc).clone()),
         Value::Tuple(ref fields) if !fields.is_empty() => {
             match &fields[0] {
                 Value::Program(g) => g.as_ref().clone(),

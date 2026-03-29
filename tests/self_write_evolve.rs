@@ -15,6 +15,7 @@
 //! The essential cycle is: evaluate -> select best -> mutate -> insert back.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -752,7 +753,7 @@ fn evaluate_fitness(
     test_cases: &Value,
 ) -> i64 {
     let inputs = vec![
-        Value::Program(Box::new(program.clone())),
+        Value::Program(Rc::new(program.clone())),
         test_cases.clone(),
     ];
     let (outputs, _) = interpreter::interpret(fitness_eval, &inputs, None).unwrap();
@@ -816,7 +817,7 @@ fn mutation_precondition() {
     let sub_prog = make_binop_program(0x01); // sub
 
     let inputs = vec![
-        Value::Program(Box::new(sub_prog)),
+        Value::Program(Rc::new(sub_prog)),
         Value::Int(0x00), // mutate to add
     ];
     let (outputs, _) = interpreter::interpret(&mutator, &inputs, None).unwrap();
@@ -856,15 +857,15 @@ fn one_generation_two_programs() {
     let mul_prog = make_binop_program(0x02);
 
     let population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog.clone())),
-        Value::Program(Box::new(mul_prog.clone())),
+        Value::Program(Rc::new(sub_prog.clone())),
+        Value::Program(Rc::new(mul_prog.clone())),
     ]);
 
     let inputs = vec![
         population,
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator.clone())),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator.clone())),
     ];
 
     let (outputs, _) = interpreter::interpret(&evo_step, &inputs, None).unwrap();
@@ -899,15 +900,15 @@ fn population_changes_after_generation() {
     let mul_prog = make_binop_program(0x02);
 
     let initial_population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog.clone())),
-        Value::Program(Box::new(mul_prog.clone())),
+        Value::Program(Rc::new(sub_prog.clone())),
+        Value::Program(Rc::new(mul_prog.clone())),
     ]);
 
     let inputs = vec![
         initial_population.clone(),
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator.clone())),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator.clone())),
     ];
 
     let (outputs, _) = interpreter::interpret(&evo_step, &inputs, None).unwrap();
@@ -968,8 +969,8 @@ fn three_generations_sequential() {
     let mul_prog = make_binop_program(0x02);
 
     let mut population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog)),
-        Value::Program(Box::new(mul_prog)),
+        Value::Program(Rc::new(sub_prog)),
+        Value::Program(Rc::new(mul_prog)),
     ]);
 
     let mut scores: Vec<(i64, i64)> = Vec::new();
@@ -987,8 +988,8 @@ fn three_generations_sequential() {
         let inputs = vec![
             population.clone(),
             test_cases.clone(),
-            Value::Program(Box::new(evaluator.clone())),
-            Value::Program(Box::new(mutator.clone())),
+            Value::Program(Rc::new(evaluator.clone())),
+            Value::Program(Rc::new(mutator.clone())),
             Value::Int(new_opcode),
         ];
 
@@ -1038,15 +1039,15 @@ fn selects_correct_best() {
     let sub_prog = make_binop_program(0x01); // zero fitness
 
     let population = Value::tuple(vec![
-        Value::Program(Box::new(add_prog.clone())),
-        Value::Program(Box::new(sub_prog.clone())),
+        Value::Program(Rc::new(add_prog.clone())),
+        Value::Program(Rc::new(sub_prog.clone())),
     ]);
 
     let inputs = vec![
         population,
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator.clone())),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator.clone())),
     ];
 
     let (outputs, _) = interpreter::interpret(&evo_step, &inputs, None).unwrap();
@@ -1086,15 +1087,15 @@ fn selects_best_at_index_one() {
     let add_prog = make_binop_program(0x00);
 
     let population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog.clone())),
-        Value::Program(Box::new(add_prog.clone())),
+        Value::Program(Rc::new(sub_prog.clone())),
+        Value::Program(Rc::new(add_prog.clone())),
     ]);
 
     let inputs = vec![
         population,
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator.clone())),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator.clone())),
     ];
 
     let (outputs, _) = interpreter::interpret(&evo_step, &inputs, None).unwrap();
@@ -1138,15 +1139,15 @@ fn three_program_pairwise_evolution() {
     for _round in 0..3 {
         // Tournament: evolve pair (prog0, prog1)
         let pair = Value::tuple(vec![
-            Value::Program(Box::new(programs[0].clone())),
-            Value::Program(Box::new(programs[1].clone())),
+            Value::Program(Rc::new(programs[0].clone())),
+            Value::Program(Rc::new(programs[1].clone())),
         ]);
 
         let inputs = vec![
             pair,
             test_cases.clone(),
-            Value::Program(Box::new(evaluator.clone())),
-            Value::Program(Box::new(mutator.clone())),
+            Value::Program(Rc::new(evaluator.clone())),
+            Value::Program(Rc::new(mutator.clone())),
             Value::Int(0x00), // try add opcode
         ];
 
@@ -1157,15 +1158,15 @@ fn three_program_pairwise_evolution() {
 
         // Tournament: evolve pair (prog1, prog2)
         let pair = Value::tuple(vec![
-            Value::Program(Box::new(programs[1].clone())),
-            Value::Program(Box::new(programs[2].clone())),
+            Value::Program(Rc::new(programs[1].clone())),
+            Value::Program(Rc::new(programs[2].clone())),
         ]);
 
         let inputs = vec![
             pair,
             test_cases.clone(),
-            Value::Program(Box::new(evaluator.clone())),
-            Value::Program(Box::new(mutator.clone())),
+            Value::Program(Rc::new(evaluator.clone())),
+            Value::Program(Rc::new(mutator.clone())),
             Value::Int(0x00),
         ];
 

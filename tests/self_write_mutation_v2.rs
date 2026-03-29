@@ -13,6 +13,7 @@
 //! opcodes (0x80-0x8A) to inspect and transform program graphs at runtime.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::component::{ComponentRegistry, MutationComponent};
@@ -257,7 +258,7 @@ fn iris_delete_node_removes_middle_node() {
     assert_eq!(orig_result, vec![Value::Int(35)], "mul(add(3,4), 5) = 35");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source: root (mul)
         Value::Int(2),  // victim: inner (add)
         Value::Int(10), // target: lit(3) — reconnect root to lit(3)
@@ -313,7 +314,7 @@ fn iris_delete_node_removes_leaf() {
     let target = make_binop_graph(0x00, 5, 3);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source: root (add)
         Value::Int(20), // victim: lit(3)
         Value::Int(10), // target: lit(5) — reconnect to the other lit
@@ -354,7 +355,7 @@ fn iris_delete_node_preserves_node_count() {
     let original_count = target.nodes.len();
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(2),
         Value::Int(10),
@@ -391,7 +392,7 @@ fn register_iris_delete_node_as_component() {
     // Execute: delete inner node from chain
     let target = make_chain_graph(0x00, 0x02, 3, 4, 5);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(2),
         Value::Int(10),
@@ -492,7 +493,7 @@ fn iris_rewire_edge_changes_argument() {
     assert_eq!(orig, vec![Value::Int(8)], "add(5, 3) = 8");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source: root (add)
         Value::Int(20), // old target: lit(3)
         Value::Int(10), // new target: lit(5)
@@ -535,7 +536,7 @@ fn iris_rewire_edge_swaps_operands() {
 
     // Rewire port 1 from lit(3) to lit(10)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source
         Value::Int(20), // old target: lit(3)
         Value::Int(10), // new target: lit(10)
@@ -563,7 +564,7 @@ fn iris_rewire_edge_redirects_to_subexpression() {
     assert_eq!(orig, vec![Value::Int(35)], "mul(add(3,4), 5) = 35");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source: root (mul)
         Value::Int(30), // old target: lit(5)
         Value::Int(2),  // new target: inner (add)
@@ -601,7 +602,7 @@ fn iris_rewire_matches_rust_semantics() {
         let target = make_binop_graph(*opcode, *a, *b);
 
         let inputs = vec![
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(*src as i64),
             Value::Int(*old_tgt as i64),
             Value::Int(*new_tgt as i64),
@@ -639,7 +640,7 @@ fn register_iris_rewire_edge_as_component() {
 
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(20),
         Value::Int(10),
@@ -772,7 +773,7 @@ fn iris_replace_kind_changes_add_to_mul() {
     let target = make_binop_graph(0x00, 6, 7); // add(6, 7) = 13
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // target node: root (add)
         Value::Int(0x02), // new opcode: mul
     ];
@@ -813,7 +814,7 @@ fn iris_replace_kind_changes_inner_node() {
     assert_eq!(orig, vec![Value::Int(35)], "mul(add(3,4), 5) = 35");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(2),    // target node: inner (add)
         Value::Int(0x01), // new opcode: sub
     ];
@@ -846,7 +847,7 @@ fn iris_replace_kind_with_inspection() {
     let target = make_binop_graph(0x00, 6, 7); // add(6, 7)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // target node: root (add) — kind should be Prim=0x00
         Value::Int(0x02), // new opcode: mul
     ];
@@ -905,7 +906,7 @@ fn iris_replace_kind_inspect_lit_node() {
     let kind_inspector = make_graph(nodes, edges, 1);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // Lit node
     ];
     let (outputs, _) = interpreter::interpret(&kind_inspector, &inputs, None).unwrap();
@@ -936,7 +937,7 @@ fn iris_replace_kind_all_arithmetic_opcodes() {
         let target = make_binop_graph(0x00, 10, 3); // start with add
 
         let inputs = vec![
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(1),
             Value::Int(new_opcode as i64),
         ];
@@ -976,7 +977,7 @@ fn register_iris_replace_kind_as_component() {
 
     let target = make_binop_graph(0x00, 6, 7);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),
         Value::Int(0x02),
     ];
@@ -1075,9 +1076,9 @@ fn iris_mutate_literal_changes_value() {
     let donor_node_id = 500i64;
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20), // replace lit(3) at NodeId(20)
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(donor_node_id),
     ];
 
@@ -1123,9 +1124,9 @@ fn iris_mutate_literal_negative_value() {
     let donor = make_donor_lit(600, -3);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20), // replace lit(7)
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(600),
     ];
 
@@ -1147,9 +1148,9 @@ fn iris_mutate_literal_zero() {
     let donor = make_donor_lit(700, 0);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // replace lit(10) at NodeId(10)
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(700),
     ];
 
@@ -1171,9 +1172,9 @@ fn iris_mutate_literal_large_value() {
     let donor = make_donor_lit(800, 1_000_000);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // replace lit(5) at NodeId(10)
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(800),
     ];
 
@@ -1199,9 +1200,9 @@ fn iris_mutate_literal_preserves_other_nodes() {
     let donor = make_donor_lit(900, 100);
 
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(10), // replace lit(3)
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(900),
     ];
 
@@ -1260,9 +1261,9 @@ fn iris_mutate_literal_matches_rust_semantics() {
         let donor = make_donor_lit(donor_id, *new_val);
 
         let inputs = vec![
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::Int(*tgt_id as i64),
-            Value::Program(Box::new(donor)),
+            Value::Program(Rc::new(donor)),
             Value::Int(donor_id as i64),
         ];
 
@@ -1304,9 +1305,9 @@ fn register_iris_mutate_literal_as_component() {
     let target = make_binop_graph(0x00, 5, 3);
     let donor = make_donor_lit(999, 42);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(999),
     ];
     let (outputs, _) =
@@ -1346,7 +1347,7 @@ fn chain_all_four_new_operators() {
     // Step 1: replace_kind — add(id=2) -> sub
     let target = make_chain_graph(0x00, 0x02, 3, 4, 5);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(2),    // inner add node
         Value::Int(0x01), // sub opcode
     ];
@@ -1358,7 +1359,7 @@ fn chain_all_four_new_operators() {
 
     // Step 2: rewire_edge — root port 1 from lit(5, id=30) to lit(3, id=10)
     let inputs = vec![
-        Value::Program(Box::new(step1)),
+        Value::Program(Rc::new(step1)),
         Value::Int(1),  // source: root
         Value::Int(30), // old target: lit(5)
         Value::Int(10), // new target: lit(3)
@@ -1373,9 +1374,9 @@ fn chain_all_four_new_operators() {
     // Step 3: mutate_literal — replace lit(4, id=20) with lit(10)
     let donor = make_donor_lit(900, 10);
     let inputs = vec![
-        Value::Program(Box::new(step2)),
+        Value::Program(Rc::new(step2)),
         Value::Int(20),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(900),
     ];
     let (out, _) = interpreter::interpret(&mutator, &inputs, None).unwrap();
@@ -1402,7 +1403,7 @@ fn mutated_programs_can_be_mutated_again() {
     // Cycle 1: add(5, 3) -> sub(5, 3) = 2
     let p0 = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(p0)),
+        Value::Program(Rc::new(p0)),
         Value::Int(1),
         Value::Int(0x01), // sub
     ];
@@ -1419,7 +1420,7 @@ fn mutated_programs_can_be_mutated_again() {
 
     // Cycle 2: sub -> mul
     let inputs = vec![
-        Value::Program(Box::new(p1)),
+        Value::Program(Rc::new(p1)),
         Value::Int(prim1_id),
         Value::Int(0x02), // mul
     ];
@@ -1439,7 +1440,7 @@ fn mutated_programs_can_be_mutated_again() {
     // Cycle 3: mul -> max
     let prim2_id = prim2.id.0 as i64;
     let inputs = vec![
-        Value::Program(Box::new(p2)),
+        Value::Program(Rc::new(p2)),
         Value::Int(prim2_id),
         Value::Int(0x08), // max
     ];
@@ -1496,7 +1497,7 @@ fn all_four_operators_registered_together() {
 
     // delete_node
     let inputs = vec![
-        Value::Program(Box::new(make_chain_graph(0x00, 0x02, 3, 4, 5))),
+        Value::Program(Rc::new(make_chain_graph(0x00, 0x02, 3, 4, 5))),
         Value::Int(1),
         Value::Int(2),
         Value::Int(10),
@@ -1512,7 +1513,7 @@ fn all_four_operators_registered_together() {
 
     // rewire_edge
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(1),
         Value::Int(20),
         Value::Int(10),
@@ -1528,7 +1529,7 @@ fn all_four_operators_registered_together() {
 
     // replace_kind returns Tuple(Program, new_id) — extract the program
     let inputs = vec![
-        Value::Program(Box::new(target.clone())),
+        Value::Program(Rc::new(target.clone())),
         Value::Int(1),
         Value::Int(0x02),
     ];
@@ -1543,9 +1544,9 @@ fn all_four_operators_registered_together() {
     // mutate_literal
     let donor = make_donor_lit(999, 42);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(999),
     ];
     let (out, _) = interpreter::interpret(

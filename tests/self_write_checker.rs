@@ -24,6 +24,7 @@
 //!    check_types_simple.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -743,7 +744,7 @@ fn classify_node_tier_lit_is_tier0() {
     let target = make_lit_program(42);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // NodeId(1) is the Lit node
     ];
 
@@ -762,7 +763,7 @@ fn classify_node_tier_prim_is_tier0() {
     let target = make_binop_program(0x00, 3, 5);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // NodeId(1) is the Prim(add) node
     ];
 
@@ -781,7 +782,7 @@ fn classify_node_tier_fold_is_tier1() {
     let target = make_fold_program();
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // NodeId(1) is the Fold node
     ];
 
@@ -800,7 +801,7 @@ fn classify_node_tier_neural_is_tier3() {
     let target = make_neural_program();
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // NodeId(1) is the Neural node
     ];
 
@@ -822,7 +823,7 @@ fn count_obligations_single_node() {
     let counter = build_count_proof_obligations();
     let target = make_lit_program(42);
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&counter, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -838,7 +839,7 @@ fn count_obligations_three_nodes() {
     let counter = build_count_proof_obligations();
     let target = make_binop_program(0x00, 3, 5); // add(3, 5) = 3 nodes
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&counter, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -854,7 +855,7 @@ fn count_obligations_fold_program() {
     let counter = build_count_proof_obligations();
     let target = make_fold_program(); // has 5 nodes
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&counter, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -875,7 +876,7 @@ fn check_types_simple_well_typed() {
     let checker = build_check_types_simple();
     let target = make_binop_program(0x00, 3, 5); // 3 nodes, all well-formed
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&checker, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -891,7 +892,7 @@ fn check_types_simple_single_lit() {
     let checker = build_check_types_simple();
     let target = make_lit_program(42);
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&checker, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -911,7 +912,7 @@ fn graded_score_simple_well_typed() {
     let scorer = build_graded_score();
     let target = make_binop_program(0x00, 3, 5); // 3 nodes, all well-formed
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&scorer, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -927,7 +928,7 @@ fn graded_score_single_lit() {
     let scorer = build_graded_score();
     let target = make_lit_program(42);
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&scorer, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -943,7 +944,7 @@ fn graded_score_fold_program() {
     let scorer = build_graded_score();
     let target = make_fold_program();
 
-    let inputs = vec![Value::Program(Box::new(target))];
+    let inputs = vec![Value::Program(Rc::new(target))];
 
     let (outputs, _) = interpreter::interpret(&scorer, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);

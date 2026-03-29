@@ -534,7 +534,7 @@ fn test_dot_product_via_combinators() {
     println!("zip+map(mul) result: {:?}", products_raw);
     // The interpreter wraps results in vec![val], so unwrap the Tuple.
     let products_vec = match &products_raw[0] {
-        Value::Tuple(elems) => elems.clone(),
+        Value::Tuple(elems) => (**elems).clone(),
         other => panic!("expected Tuple, got {:?}", other),
     };
     assert_eq!(products_vec, vec![Value::Int(4), Value::Int(10), Value::Int(18)]);
@@ -568,7 +568,7 @@ fn test_dot_product_via_combinators() {
     };
 
     // Pass products as the input collection.
-    let input = Value::Tuple(products_vec);
+    let input = Value::tuple(products_vec);
     let final_result = interpret(&fold_graph, &[input], None).map(|(v, _)| v).expect("fold should succeed");
     println!("fold(0, add, [4, 10, 18]) = {:?}", final_result);
 

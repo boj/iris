@@ -7,6 +7,7 @@
 //! interpreter with the registry. Asserts correct output for each.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
@@ -196,7 +197,7 @@ fn test_eval_lit() {
     let target = make_lit_program(42);
     let out = eval_with_inputs(
         graph,
-        &[Value::Program(Box::new(target))],
+        &[Value::Program(Rc::new(target))],
         &registry,
     );
     assert_eq!(out[0], Value::Int(42), "eval_lit on Lit(42) should return 42");
@@ -205,7 +206,7 @@ fn test_eval_lit() {
     let target = make_lit_program(0);
     let out = eval_with_inputs(
         graph,
-        &[Value::Program(Box::new(target))],
+        &[Value::Program(Rc::new(target))],
         &registry,
     );
     assert_eq!(out[0], Value::Int(0), "eval_lit on Lit(0) should return 0");
@@ -214,7 +215,7 @@ fn test_eval_lit() {
     let target = make_lit_program(-7);
     let out = eval_with_inputs(
         graph,
-        &[Value::Program(Box::new(target))],
+        &[Value::Program(Rc::new(target))],
         &registry,
     );
     assert_eq!(out[0], Value::Int(-7), "eval_lit on Lit(-7) should return -7");
@@ -830,7 +831,7 @@ fn test_mini_interpreter() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -842,7 +843,7 @@ fn test_mini_interpreter() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -854,7 +855,7 @@ fn test_mini_interpreter() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -876,7 +877,7 @@ fn test_full_interpreter_lit() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -888,7 +889,7 @@ fn test_full_interpreter_lit() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -906,7 +907,7 @@ fn test_full_interpreter_arithmetic() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -918,7 +919,7 @@ fn test_full_interpreter_arithmetic() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -930,7 +931,7 @@ fn test_full_interpreter_arithmetic() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -942,7 +943,7 @@ fn test_full_interpreter_arithmetic() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -960,7 +961,7 @@ fn test_full_interpreter_comparison() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,
@@ -976,7 +977,7 @@ fn test_full_interpreter_comparison() {
     let out = eval_with_inputs(
         graph,
         &[
-            Value::Program(Box::new(target)),
+            Value::Program(Rc::new(target)),
             Value::tuple(vec![]),
         ],
         &registry,

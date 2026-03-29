@@ -28,6 +28,7 @@
 //!    graph_replace_subtree (0x88)
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::component::{ComponentRegistry, MutationComponent};
@@ -318,7 +319,7 @@ fn iris_duplicate_subgraph_replaces_leaf_with_another_leaf() {
     assert_eq!(orig_result, vec![Value::Int(7)], "sub(10, 3) = 7");
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20), // replace lit(3)
         Value::Int(10), // with copy of lit(10)
     ];
@@ -372,7 +373,7 @@ fn iris_duplicate_subgraph_copies_leaf() {
     let target = make_binop_graph(0x00, 5, 3);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20), // replace lit(3)
         Value::Int(10), // with copy of lit(5)
     ];
@@ -419,7 +420,7 @@ fn iris_duplicate_subgraph_cross_program() {
     let target2 = make_binop_graph(0x02, 4, 7); // mul(4, 7) = 28
 
     let inputs = vec![
-        Value::Program(Box::new(target2)),
+        Value::Program(Rc::new(target2)),
         Value::Int(10), // replace lit(4) with lit(7)
         Value::Int(20), // source: lit(7)
     ];
@@ -454,7 +455,7 @@ fn register_iris_duplicate_subgraph_as_component() {
     // Use leaf duplication: sub(10, 3) -> sub(10, 10) = 0
     let target = make_binop_graph(0x01, 10, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20), // replace lit(3)
         Value::Int(10), // with copy of lit(10)
     ];
@@ -563,11 +564,11 @@ fn iris_swap_fold_op_add_to_mul() {
     let donor = make_donor_lit(500, 1);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),   // step node ID (the add Prim)
         Value::Int(0x02), // new opcode: mul
         Value::Int(10),   // base node ID (the lit(0))
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(500),  // donor node ID
     ];
 
@@ -613,11 +614,11 @@ fn iris_swap_fold_op_add_to_max() {
     let donor = make_donor_lit(600, i64::MIN);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),   // step node
         Value::Int(0x08), // max
         Value::Int(10),   // base node
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(600),
     ];
 
@@ -654,11 +655,11 @@ fn iris_swap_fold_op_add_to_min() {
     let donor = make_donor_lit(700, i64::MAX);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),
         Value::Int(0x07), // min
         Value::Int(10),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(700),
     ];
 
@@ -686,11 +687,11 @@ fn iris_swap_fold_op_preserves_collection_edge() {
     let donor = make_donor_lit(800, 1);
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),
         Value::Int(0x02), // mul
         Value::Int(10),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(800),
     ];
 
@@ -730,11 +731,11 @@ fn register_iris_swap_fold_op_as_component() {
     let target = make_fold_graph(0x00, 0);
     let donor = make_donor_lit(999, 1);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(20),
         Value::Int(0x02),
         Value::Int(10),
-        Value::Program(Box::new(donor)),
+        Value::Program(Rc::new(donor)),
         Value::Int(999),
     ];
     let (outputs, _) =
@@ -1023,7 +1024,7 @@ fn iris_wrap_in_map_basic() {
     let target = make_fold_graph(0x00, 0); // fold(0, add, input)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // fold node ID
         Value::Int(30),   // collection node ID (input_ref)
         Value::Int(0x20), // map function: use 0x20 (>= 0x14, creates Prim)
@@ -1264,7 +1265,7 @@ fn iris_wrap_in_filter_basic() {
     let target = make_fold_graph(0x00, 0); // fold(0, add, input)
 
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // fold node ID
         Value::Int(30),   // collection node ID (input_ref)
         Value::Int(0x23), // filter function: gt (greater than)
@@ -1686,9 +1687,9 @@ fn iris_crossover_swaps_leaf_nodes() {
     assert_eq!(orig_b, vec![Value::Int(14)], "mul(7, 2) = 14");
 
     let inputs = vec![
-        Value::Program(Box::new(parent_a)),
+        Value::Program(Rc::new(parent_a)),
         Value::Int(21),  // node_a: lit(3) in parent_a
-        Value::Program(Box::new(parent_b)),
+        Value::Program(Rc::new(parent_b)),
         Value::Int(110), // node_b: lit(7) in parent_b
     ];
 
@@ -1747,9 +1748,9 @@ fn iris_crossover_swaps_subtrees() {
     assert_eq!(orig_b, vec![Value::Int(50)], "sub(100, 50) = 50");
 
     let inputs = vec![
-        Value::Program(Box::new(parent_a)),
+        Value::Program(Rc::new(parent_a)),
         Value::Int(2),   // node_a: inner add(3,4) subtree
-        Value::Program(Box::new(parent_b)),
+        Value::Program(Rc::new(parent_b)),
         Value::Int(210), // node_b: lit(100)
     ];
 
@@ -1802,9 +1803,9 @@ fn iris_crossover_same_structure_different_ids() {
     let parent_b = make_binop_graph_at(0x00, 8, 2, 100); // add(8, 2)
 
     let inputs = vec![
-        Value::Program(Box::new(parent_a)),
+        Value::Program(Rc::new(parent_a)),
         Value::Int(21),  // lit(3) in A
-        Value::Program(Box::new(parent_b)),
+        Value::Program(Rc::new(parent_b)),
         Value::Int(110), // lit(8) in B
     ];
 
@@ -1859,9 +1860,9 @@ fn register_iris_crossover_as_component() {
     let parent_a = make_binop_graph_at(0x00, 5, 3, 1);
     let parent_b = make_binop_graph_at(0x02, 7, 2, 100);
     let inputs = vec![
-        Value::Program(Box::new(parent_a)),
+        Value::Program(Rc::new(parent_a)),
         Value::Int(21),  // lit(3) in A
-        Value::Program(Box::new(parent_b)),
+        Value::Program(Rc::new(parent_b)),
         Value::Int(110), // lit(7) in B
     ];
     let (outputs, _) =
@@ -1899,7 +1900,7 @@ fn full_pipeline_mutate_crossover_select() {
 
     // Step 2: Mutate parent_a: change add to sub -> sub(5, 3) = 2
     let inputs = vec![
-        Value::Program(Box::new(parent_a)),
+        Value::Program(Rc::new(parent_a)),
         Value::Int(1),    // root node
         Value::Int(0x01), // sub opcode
     ];
@@ -1919,9 +1920,9 @@ fn full_pipeline_mutate_crossover_select() {
         "should have sub node"
     );
     let inputs = vec![
-        Value::Program(Box::new(mutated_a)),
+        Value::Program(Rc::new(mutated_a)),
         Value::Int(21),  // lit(3) in A
-        Value::Program(Box::new(parent_b)),
+        Value::Program(Rc::new(parent_b)),
         Value::Int(110), // lit(4) in B
     ];
     let (out, _) = interpreter::interpret(&crossover, &inputs, None).unwrap();

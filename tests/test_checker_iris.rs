@@ -6,6 +6,7 @@
 //! fragment with appropriate inputs and asserts expected outputs.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
@@ -246,7 +247,7 @@ fn test_obligation_count_3nodes() {
     let graph = find_fragment(&fragments, "obligation_count");
 
     let test_program = make_test_graph_3nodes();
-    let result = eval_int(graph, &[Value::Program(Box::new(test_program))], &registry);
+    let result = eval_int(graph, &[Value::Program(Rc::new(test_program))], &registry);
     assert_eq!(result, 3, "3-node graph should have 3 obligations");
 }
 
@@ -257,7 +258,7 @@ fn test_obligation_count_1node() {
     let graph = find_fragment(&fragments, "obligation_count");
 
     let test_program = make_lit_graph();
-    let result = eval_int(graph, &[Value::Program(Box::new(test_program))], &registry);
+    let result = eval_int(graph, &[Value::Program(Rc::new(test_program))], &registry);
     assert_eq!(result, 1, "1-node graph should have 1 obligation");
 }
 
@@ -275,7 +276,7 @@ fn test_tier_classify_lit_is_tier0() {
     let test_program = make_lit_graph();
     let result = eval_int(
         graph,
-        &[Value::Program(Box::new(test_program)), Value::Int(1)],
+        &[Value::Program(Rc::new(test_program)), Value::Int(1)],
         &registry,
     );
     assert_eq!(result, 0, "Lit node should be tier 0");
@@ -292,7 +293,7 @@ fn test_tier_classify_prim_is_tier0() {
     let test_program = make_graph(nodes, vec![], 1);
     let result = eval_int(
         graph,
-        &[Value::Program(Box::new(test_program)), Value::Int(1)],
+        &[Value::Program(Rc::new(test_program)), Value::Int(1)],
         &registry,
     );
     assert_eq!(result, 0, "Prim node should be tier 0");
@@ -308,7 +309,7 @@ fn test_tier_classify_fold_is_tier1() {
     let test_program = make_fold_graph();
     let result = eval_int(
         graph,
-        &[Value::Program(Box::new(test_program)), Value::Int(1)],
+        &[Value::Program(Rc::new(test_program)), Value::Int(1)],
         &registry,
     );
     assert_eq!(result, 1, "Fold node should be tier 1");
@@ -324,7 +325,7 @@ fn test_tier_classify_neural_is_tier3() {
     let test_program = make_neural_graph();
     let result = eval_int(
         graph,
-        &[Value::Program(Box::new(test_program)), Value::Int(1)],
+        &[Value::Program(Rc::new(test_program)), Value::Int(1)],
         &registry,
     );
     assert_eq!(result, 3, "Neural node should be tier 3");
@@ -342,7 +343,7 @@ fn test_type_check_3nodes() {
 
     // Well-formed 3-node graph: all nodes have valid kinds (>= 0)
     let test_program = make_test_graph_3nodes();
-    let result = eval_int(graph, &[Value::Program(Box::new(test_program))], &registry);
+    let result = eval_int(graph, &[Value::Program(Rc::new(test_program))], &registry);
     assert_eq!(result, 3, "all 3 nodes should pass type check");
 }
 
@@ -353,7 +354,7 @@ fn test_type_check_1node() {
     let graph = find_fragment(&fragments, "type_check");
 
     let test_program = make_lit_graph();
-    let result = eval_int(graph, &[Value::Program(Box::new(test_program))], &registry);
+    let result = eval_int(graph, &[Value::Program(Rc::new(test_program))], &registry);
     assert_eq!(result, 1, "1-node graph should have 1 passing node");
 }
 

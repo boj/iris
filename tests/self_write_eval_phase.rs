@@ -16,6 +16,7 @@
 //!      else SteadyState (Int 1).
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -785,7 +786,7 @@ fn evaluate_all_correct() {
         ]),
     ]);
 
-    let inputs = vec![Value::Program(Box::new(add_program)), test_cases];
+    let inputs = vec![Value::Program(Rc::new(add_program)), test_cases];
     let (outputs, _) = interpreter::interpret(&graph, &inputs, None).unwrap();
     assert_eq!(outputs.len(), 1);
     match &outputs[0] {
@@ -825,7 +826,7 @@ fn evaluate_partial_correct() {
         ]),
     ]);
 
-    let inputs = vec![Value::Program(Box::new(add_program)), test_cases];
+    let inputs = vec![Value::Program(Rc::new(add_program)), test_cases];
     let (outputs, _) = interpreter::interpret(&graph, &inputs, None).unwrap();
     match &outputs[0] {
         Value::Float64(v) => {
@@ -855,7 +856,7 @@ fn evaluate_none_correct() {
         ]),
     ]);
 
-    let inputs = vec![Value::Program(Box::new(add_program)), test_cases];
+    let inputs = vec![Value::Program(Rc::new(add_program)), test_cases];
     let (outputs, _) = interpreter::interpret(&graph, &inputs, None).unwrap();
     match &outputs[0] {
         Value::Float64(v) => {

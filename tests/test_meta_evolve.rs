@@ -6,6 +6,7 @@
 //! `graph_eval` (0x89) for calling evolved sub-programs.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 use std::time::Duration;
 
 use iris_evolve::IrisMetaEvolver;
@@ -744,7 +745,7 @@ fn meta_evolve_then_graph_eval() {
         Ok((outputs, _)) => {
             assert_eq!(outputs.len(), 1);
             match outputs.into_iter().next().unwrap() {
-                Value::Program(g) => *g,
+                Value::Program(g) => Rc::try_unwrap(g).unwrap_or_else(|rc| (*rc).clone()),
                 other => panic!("expected Program, got {:?}", other),
             }
         }

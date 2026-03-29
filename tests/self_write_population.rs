@@ -30,6 +30,7 @@
 //!    calls, and Fold for population-wide operations.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -1025,7 +1026,7 @@ fn evaluate_fitness(
     test_cases: &Value,
 ) -> i64 {
     let inputs = vec![
-        Value::Program(Box::new(program.clone())),
+        Value::Program(Rc::new(program.clone())),
         test_cases.clone(),
     ];
     let (outputs, _) = interpreter::interpret(fitness_eval, &inputs, None).unwrap();
@@ -1402,15 +1403,15 @@ fn full_step_selects_fitter_and_mutates() {
     let sub_prog = make_binop_program(0x01); // sub
 
     let population = Value::tuple(vec![
-        Value::Program(Box::new(add_prog.clone())),
-        Value::Program(Box::new(sub_prog.clone())),
+        Value::Program(Rc::new(add_prog.clone())),
+        Value::Program(Rc::new(sub_prog.clone())),
     ]);
 
     let inputs = vec![
         population,
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator)),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator)),
     ];
 
     let (out, _) = interpreter::interpret(&step, &inputs, None).unwrap();
@@ -1457,15 +1458,15 @@ fn full_step_reversed_population() {
     let sub_prog = make_binop_program(0x01);
 
     let population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog)),
-        Value::Program(Box::new(add_prog)),
+        Value::Program(Rc::new(sub_prog)),
+        Value::Program(Rc::new(add_prog)),
     ]);
 
     let inputs = vec![
         population,
         test_cases.clone(),
-        Value::Program(Box::new(evaluator.clone())),
-        Value::Program(Box::new(mutator)),
+        Value::Program(Rc::new(evaluator.clone())),
+        Value::Program(Rc::new(mutator)),
     ];
 
     let (out, _) = interpreter::interpret(&step, &inputs, None).unwrap();
@@ -1500,8 +1501,8 @@ fn full_step_multi_generation() {
     let mul_prog = make_binop_program(0x02);
 
     let mut population = Value::tuple(vec![
-        Value::Program(Box::new(sub_prog)),
-        Value::Program(Box::new(mul_prog)),
+        Value::Program(Rc::new(sub_prog)),
+        Value::Program(Rc::new(mul_prog)),
     ]);
 
     let mut best_fitness = 0i64;
@@ -1510,8 +1511,8 @@ fn full_step_multi_generation() {
         let inputs = vec![
             population.clone(),
             test_cases.clone(),
-            Value::Program(Box::new(evaluator.clone())),
-            Value::Program(Box::new(mutator.clone())),
+            Value::Program(Rc::new(evaluator.clone())),
+            Value::Program(Rc::new(mutator.clone())),
         ];
 
         let (out, _) = interpreter::interpret(&step, &inputs, None).unwrap();
@@ -1519,7 +1520,7 @@ fn full_step_multi_generation() {
         match &out[0] {
             Value::Tuple(new_pop) => {
                 // Track best fitness
-                for prog_val in new_pop {
+                for prog_val in new_pop.iter() {
                     let g = extract_program(prog_val);
                     let f = evaluate_fitness(&evaluator, &g, &test_cases);
                     if f > best_fitness {
@@ -1562,8 +1563,8 @@ fn compose_crowding_cull_elite() {
     // Step 1: Compute crowding distances for all individuals
     let mut crowding_scores = Vec::new();
     if let Value::Tuple(ref pop_values) = population {
-        for val in pop_values {
-            let inputs = vec![val.clone(), population.clone()];
+        for val in pop_values.iter() {
+            let inputs: Vec<Value> = vec![val.clone(), population.clone()];
             let (out, _) = interpreter::interpret(&crowding, &inputs, None).unwrap();
             let score = match &out[0] {
                 Value::Int(v) => *v,

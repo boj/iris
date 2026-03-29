@@ -5,6 +5,7 @@
 //! and full interpreter, verifying actual behavior rather than just parsing.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::fs;
 
 use iris_bootstrap::evaluate;
@@ -156,9 +157,9 @@ fn eval_all_repr_programs() {
         let g = get_named(&frags, "compare_programs");
         let g1 = make_test_graph(3);
         let g2 = make_test_graph(3);
-        assert_eq!(eval_with_registry(&g, &[Value::Program(Box::new(g1.clone())), Value::Program(Box::new(g2))], &reg), Value::Int(1));
+        assert_eq!(eval_with_registry(&g, &[Value::Program(Rc::new(g1.clone())), Value::Program(Rc::new(g2))], &reg), Value::Int(1));
         let g3 = make_test_graph(5);
-        assert_eq!(eval_with_registry(&g, &[Value::Program(Box::new(g1)), Value::Program(Box::new(g3))], &reg), Value::Int(0));
+        assert_eq!(eval_with_registry(&g, &[Value::Program(Rc::new(g1)), Value::Program(Rc::new(g3))], &reg), Value::Int(0));
     }
 
     // component.iris: classify_component, is_valid_component, make_mutation
@@ -237,7 +238,7 @@ fn eval_all_repr_programs() {
         let g = get_named(&frags, "fragment_size");
         let test_graph = make_test_graph(3);
         // 3 nodes -> 3 * 38 + 14 = 128
-        assert_eq!(eval_with_registry(&g, &[Value::Program(Box::new(test_graph))], &reg), Value::Int(128));
+        assert_eq!(eval_with_registry(&g, &[Value::Program(Rc::new(test_graph))], &reg), Value::Int(128));
     }
 
     // guard.iris: is_valid_error_bound, validate_statistical, compare_error_bounds
@@ -568,7 +569,7 @@ fn resolution_boundary_preservation() {
     let (frags, _) = compile_with_registry(&src);
     let g = get_named(&frags, "check_boundary_preservation");
     let test_graph = make_test_graph(3);
-    assert_eq!(eval(&g, &[Value::Program(Box::new(test_graph)), Value::Int(42)]), Value::Int(1));
+    assert_eq!(eval(&g, &[Value::Program(Rc::new(test_graph)), Value::Int(42)]), Value::Int(1));
 }
 
 // ===========================================================================

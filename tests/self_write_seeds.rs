@@ -19,6 +19,7 @@
 //! The result is a Value::Program with the correct structure and edges.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -573,7 +574,7 @@ fn generated_fold_program_runs_via_graph_eval() {
     // program, so we wrap the list in an extra Tuple layer.
     let list = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)]);
     let wrapped = Value::tuple(vec![list]);
-    let inputs = vec![Value::Program(Box::new(fold_program)), wrapped];
+    let inputs = vec![Value::Program(Rc::new(fold_program)), wrapped];
     let (result, _) = interpreter::interpret(&eval_program, &inputs, None).unwrap();
     assert_eq!(
         result,
@@ -611,7 +612,7 @@ fn generated_add_program_runs_via_graph_eval() {
 
     // graph_eval passes second arg as inputs; Tuple gets unpacked.
     let inputs = vec![
-        Value::Program(Box::new(add_program)),
+        Value::Program(Rc::new(add_program)),
         Value::tuple(vec![Value::Int(100), Value::Int(200)]),
     ];
     let (result, _) = interpreter::interpret(&eval_program, &inputs, None).unwrap();

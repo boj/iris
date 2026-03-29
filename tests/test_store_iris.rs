@@ -1,5 +1,7 @@
 //! Tests for src/iris-programs/store/ — persistence and registry utilities.
 
+use std::rc::Rc;
+
 use iris_bootstrap::syntax;
 use iris_exec::interpreter;
 use iris_exec::registry::FragmentRegistry;
@@ -398,9 +400,9 @@ fn real_program_entries() -> Value {
     let dbl_graph = compile_function("let double x : Int -> Int = x * 2");
     let neg_graph = compile_function("let negate x : Int -> Int = 0 - x");
     Value::tuple(vec![
-        Value::tuple(vec![Value::Int(1), Value::Program(Box::new(add_graph))]),
-        Value::tuple(vec![Value::Int(2), Value::Program(Box::new(dbl_graph))]),
-        Value::tuple(vec![Value::Int(3), Value::Program(Box::new(neg_graph))]),
+        Value::tuple(vec![Value::Int(1), Value::Program(Rc::new(add_graph))]),
+        Value::tuple(vec![Value::Int(2), Value::Program(Rc::new(dbl_graph))]),
+        Value::tuple(vec![Value::Int(3), Value::Program(Rc::new(neg_graph))]),
     ])
 }
 
@@ -487,7 +489,7 @@ fn test_integration_get_root_real_program() {
     let src = serialize_src();
     let (frags, reg) = compile_with_registry(&src);
     let graph = compile_function("let add x y : Int -> Int -> Int = x + y");
-    let prog = Value::Program(Box::new(graph));
+    let prog = Value::Program(Rc::new(graph));
     let v = eval_named(&frags, &reg, "get_root", &[prog]);
     assert!(as_int(&v) > 0, "root node ID should be positive");
 }
@@ -498,7 +500,7 @@ fn test_integration_get_node_count_matches_graph() {
     let (frags, reg) = compile_with_registry(&src);
     let graph = compile_function("let add x y : Int -> Int -> Int = x + y");
     let expected = graph.nodes.len() as i64;
-    let prog = Value::Program(Box::new(graph));
+    let prog = Value::Program(Rc::new(graph));
     let v = eval_named(&frags, &reg, "get_node_count", &[prog]);
     assert_eq!(as_int(&v), expected, "IRIS node count should match graph.nodes.len()");
 }
@@ -508,7 +510,7 @@ fn test_integration_serialize_node_root() {
     let src = serialize_src();
     let (frags, reg) = compile_with_registry(&src);
     let graph = compile_function("let add x y : Int -> Int -> Int = x + y");
-    let prog = Value::Program(Box::new(graph));
+    let prog = Value::Program(Rc::new(graph));
     let root_val = eval_named(&frags, &reg, "get_root", &[prog.clone()]);
     let root_id = as_int(&root_val);
     let v = eval_named(&frags, &reg, "serialize_node", &[prog, Value::Int(root_id)]);
@@ -524,11 +526,11 @@ fn test_integration_graph_fingerprint_deterministic() {
     let graph = compile_function("let add x y : Int -> Int -> Int = x + y");
     let fp1 = as_int(&eval_named(
         &frags, &reg, "graph_fingerprint",
-        &[Value::Program(Box::new(graph.clone()))],
+        &[Value::Program(Rc::new(graph.clone()))],
     ));
     let fp2 = as_int(&eval_named(
         &frags, &reg, "graph_fingerprint",
-        &[Value::Program(Box::new(graph))],
+        &[Value::Program(Rc::new(graph))],
     ));
     assert_ne!(fp1, 0, "fingerprint should be non-zero");
     assert_eq!(fp1, fp2, "same program should produce identical fingerprint");
@@ -540,8 +542,8 @@ fn test_integration_graphs_equal_same_program() {
     let (frags, reg) = compile_with_registry(&src);
     let graph = compile_function("let add x y : Int -> Int -> Int = x + y");
     let v = eval_named(&frags, &reg, "graphs_equal", &[
-        Value::Program(Box::new(graph.clone())),
-        Value::Program(Box::new(graph)),
+        Value::Program(Rc::new(graph.clone())),
+        Value::Program(Rc::new(graph)),
     ]);
     assert_eq!(as_int(&v), 1, "same program should be structurally equal");
 }
@@ -553,8 +555,8 @@ fn test_integration_graphs_equal_different_programs() {
     let add_graph = compile_function("let add x y : Int -> Int -> Int = x + y");
     let mul_graph = compile_function("let mul x y : Int -> Int -> Int = x * y");
     let v = eval_named(&frags, &reg, "graphs_equal", &[
-        Value::Program(Box::new(add_graph)),
-        Value::Program(Box::new(mul_graph)),
+        Value::Program(Rc::new(add_graph)),
+        Value::Program(Rc::new(mul_graph)),
     ]);
     assert_eq!(as_int(&v), 0, "different programs should not be equal");
 }

@@ -20,37 +20,30 @@ let max_nodes_per_individual : Int [cost: Const(1)] = 1000
 -- =========================================================================
 
 -- Collect a subgraph from a program: the pivot node + nodes reachable
--- within max_depth hops via outgoing edges
--- Returns: list of node IDs in the subgraph
+-- within max_depth hops via outgoing edges.
+-- Single-pass: scans edges once, collecting depth-1 and depth-2 in one fold.
+-- Returns: (pivot, succ1a, succ1b, succ2a) — up to 4 node IDs.
 let collect_subgraph program pivot max_depth : Int -> Int -> Int -> Int [cost: Linear(program)] =
-  let nodes = graph_nodes program in
-  -- Start with just the pivot
-  -- For depth 0, return just pivot
-  -- For depth 1, add direct successors
-  -- For depth 2, add successors of successors
   if max_depth == 0 then (pivot, 0, 0, 0)
   else
     let edges = graph_edges program in
-    -- Find direct successors (depth 1)
-    let succ1 = fold (0, 0, 0)
+    -- Single fold: accumulator = (s1a, s1b, s1c, s2a, s2b)
+    -- s1a/s1b/s1c = depth-1 successors, s2a/s2b = depth-2 successors
+    let r = fold (0, 0, 0, 0, 0)
       (\acc edge ->
         let src = edge.0 in
         let tgt = edge.1 in
-        if src == pivot then (tgt, acc.0, acc.1)
+        -- Depth-1: direct successors of pivot
+        if src == pivot && acc.0 == 0 then (tgt, acc.1, acc.2, acc.3, acc.4)
+        else if src == pivot && acc.1 == 0 then (acc.0, tgt, acc.2, acc.3, acc.4)
+        else if src == pivot && acc.2 == 0 then (acc.0, acc.1, tgt, acc.3, acc.4)
+        -- Depth-2: successors of depth-1 nodes (only when max_depth >= 2)
+        else if max_depth >= 2 && src == acc.0 && acc.0 != 0 && acc.3 == 0 then (acc.0, acc.1, acc.2, tgt, acc.4)
+        else if max_depth >= 2 && src == acc.1 && acc.1 != 0 && acc.4 == 0 then (acc.0, acc.1, acc.2, acc.3, tgt)
         else acc)
       edges in
-    if max_depth == 1 then (pivot, succ1.0, succ1.1, succ1.2)
-    else
-      -- Find depth-2 successors
-      let succ2 = fold (0, 0)
-        (\acc edge ->
-          let src = edge.0 in
-          let tgt = edge.1 in
-          if src == succ1.0 then (tgt, acc.0)
-          else if src == succ1.1 then (tgt, acc.0)
-          else acc)
-        edges in
-      (pivot, succ1.0, succ1.1, succ2.0)
+    if max_depth == 1 then (pivot, r.0, r.1, r.2)
+    else (pivot, r.0, r.1, r.3)
 
 -- Copy payload from a donor node onto a newly-added node in the child graph.
 -- After graph_add_node_rt creates a node with the right NodeKind, this copies

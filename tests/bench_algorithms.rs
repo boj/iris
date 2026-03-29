@@ -44,7 +44,7 @@ fn list_and_val_to_int(list: Vec<i64>, target: i64, expected: i64) -> TestCase {
 fn list_to_list(input: Vec<i64>, expected: Vec<i64>) -> TestCase {
     TestCase {
         inputs: vec![Value::tuple(input.into_iter().map(Value::Int).collect())],
-        expected_output: Some(vec![Value::Tuple(
+        expected_output: Some(vec![Value::tuple(
             expected.into_iter().map(Value::Int).collect(),
         )]),
         initial_state: None,
@@ -59,7 +59,7 @@ fn two_lists_to_list(a: Vec<i64>, b: Vec<i64>, expected: Vec<i64>) -> TestCase {
             Value::tuple(a.into_iter().map(Value::Int).collect()),
             Value::tuple(b.into_iter().map(Value::Int).collect()),
         ],
-        expected_output: Some(vec![Value::Tuple(
+        expected_output: Some(vec![Value::tuple(
             expected.into_iter().map(Value::Int).collect(),
         )]),
         initial_state: None,
@@ -184,7 +184,7 @@ fn rust_list_reversal(cases: &[TestCase]) -> Duration {
                 Value::Tuple(elems) => elems.clone(),
                 _ => continue,
             };
-            let mut reversed = list;
+            let mut reversed = list.as_ref().clone();
             reversed.reverse();
             std::hint::black_box(&reversed);
         }
@@ -255,8 +255,8 @@ fn rust_remove_duplicates(cases: &[TestCase]) -> Duration {
                 Value::Tuple(elems) => elems,
                 _ => continue,
             };
-            let mut seen = Vec::new();
-            for elem in list {
+            let mut seen: Vec<Value> = Vec::new();
+            for elem in list.as_ref() {
                 if !seen.contains(elem) {
                     seen.push(elem.clone());
                 }
@@ -275,7 +275,7 @@ fn rust_insertion_sort(cases: &[TestCase]) -> Duration {
                 Value::Tuple(elems) => elems.clone(),
                 _ => continue,
             };
-            let mut sorted = list;
+            let mut sorted = list.as_ref().clone();
             sorted.sort_by(|a, b| {
                 let a_val = match a {
                     Value::Int(v) => *v,
@@ -562,6 +562,7 @@ fn format_value(v: &Value) -> String {
         Value::Future(_) => "Future".to_string(),
         Value::Thunk(_, _) => "Thunk".to_string(),
         Value::String(s) => format!("{:?}", s),
+        Value::Range(lo, hi) => format!("{}..{}", lo, hi),
     }
 }
 

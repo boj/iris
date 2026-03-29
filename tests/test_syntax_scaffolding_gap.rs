@@ -36,6 +36,8 @@
 //! Each test loads pre-compiled JSON graphs and runs them through
 //! the bootstrap evaluator, same as test_self_hosting_e2e.rs.
 
+use std::rc::Rc;
+
 use iris_types::eval::Value;
 use iris_types::graph::{NodeKind, NodePayload};
 
@@ -267,8 +269,8 @@ fn iris_format_error(source: &str, start: i64, end: i64, message: &str) -> Strin
 ///   - Value::Tuple([Program, smap]) (new: with source map)
 fn extract_program(val: Value) -> iris_types::graph::SemanticGraph {
     match val {
-        Value::Program(g) => *g,
-        Value::Tuple(fields) if !fields.is_empty() => {
+        Value::Program(g) => Rc::try_unwrap(g).unwrap_or_else(|rc| (*rc).clone()),
+        Value::Tuple(ref fields) if !fields.is_empty() => {
             match &fields[0] {
                 Value::Program(g) => g.as_ref().clone(),
                 _ => panic!("lowerer tuple[0] should be Program, got {:?}", fields[0]),

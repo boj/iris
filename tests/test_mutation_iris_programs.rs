@@ -4,6 +4,7 @@
 //! correct structural changes to the graph.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_bootstrap;
 use iris_exec::interpreter;
@@ -163,7 +164,7 @@ fn test_connect_adds_edge() {
     let (graph, registry) = compile_fn(CONNECT_SRC, "connect");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // source
         Value::Int(20), // target
         Value::Int(2),  // port
@@ -180,7 +181,7 @@ fn test_delete_node_removes_and_reconnects() {
     // delete_node program source victim target port
     // Delete the root (1), reconnecting source=10 to target=20
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source (will disconnect from victim)
         Value::Int(10), // victim to delete
         Value::Int(20), // target to reconnect to
@@ -197,7 +198,7 @@ fn test_insert_node_adds_prim() {
     let target = make_binop_graph(0x00, 5, 3);
     assert_eq!(target.nodes.len(), 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x00), // kind=Prim
     ];
     let out = run(&graph, &inputs, &registry);
@@ -210,7 +211,7 @@ fn test_replace_prim_changes_opcode() {
     let (graph, registry) = compile_fn(REPLACE_PRIM_SRC, "replace_prim");
     let target = make_binop_graph(0x00, 5, 3); // add(5,3)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0x01), // change to sub
     ];
     let out = run(&graph, &inputs, &registry);
@@ -229,7 +230,7 @@ fn test_rewire_edge() {
     let target = make_binop_graph(0x00, 5, 3);
     // Rewire edge from root(1)->lit_a(10) to root(1)->lit_b(20) on port 0
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // source
         Value::Int(10), // old target
         Value::Int(20), // new target
@@ -250,7 +251,7 @@ fn test_mutate_int() {
     let (graph, registry) = compile_fn(MUTATE_LIT_SRC, "mutate_int");
     let target = make_binop_graph(0x00, 42, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // node_id of lit(42)
         Value::Int(5),  // delta
     ];
@@ -268,7 +269,7 @@ fn test_flip_bool() {
     nodes.insert(nid, node);
     let target = make_graph(nodes, vec![], 10);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10), // node_id
     ];
     let out = run(&graph, &inputs, &registry);
@@ -281,7 +282,7 @@ fn test_annotate_cost() {
     let (graph, registry) = compile_fn(ANNOTATE_COST_SRC, "annotate_cost");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // node_id (root)
         Value::Int(42), // cost value
     ];
@@ -295,7 +296,7 @@ fn test_wrap_in_guard() {
     let (graph, registry) = compile_fn(WRAP_GUARD_SRC, "wrap_in_guard");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // body_id (root)
     ];
     let out = run(&graph, &inputs, &registry);
@@ -311,7 +312,7 @@ fn test_swap_fold_op() {
     let (graph, registry) = compile_fn(SWAP_FOLD_SRC, "swap_fold_op");
     let target = make_fold_graph(); // fold(0, add, input)
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),  // fold_id
         Value::Int(20), // step_id (add)
         Value::Int(10), // base_id (lit 0)
@@ -330,7 +331,7 @@ fn test_compose_fold() {
     let (graph, registry) = compile_fn(COMPOSE_SRC, "compose_fold");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(0),    // base_value
         Value::Int(0x00), // step_opcode: add
     ];
@@ -347,7 +348,7 @@ fn test_wrap_in_map() {
     let (graph, registry) = compile_fn(WRAP_MAP_SRC, "wrap_in_map");
     let target = make_fold_graph();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // fold_id
         Value::Int(30),   // collection_id
         Value::Int(0x02), // step_opcode: mul
@@ -364,7 +365,7 @@ fn test_wrap_in_filter() {
     let (graph, registry) = compile_fn(WRAP_FILTER_SRC, "wrap_in_filter");
     let target = make_fold_graph();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // fold_id
         Value::Int(30),   // collection_id
         Value::Int(0x22), // cmp_opcode: less_than
@@ -381,7 +382,7 @@ fn test_insert_zip() {
     let (graph, registry) = compile_fn(INSERT_ZIP_SRC, "insert_zip");
     let target = make_fold_graph();
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // fold_id
         Value::Int(30),   // collection_id
         Value::Int(0x00), // binary_opcode: add
@@ -400,7 +401,7 @@ fn test_add_guard_condition() {
     let (graph, registry) = compile_fn(ADD_GUARD_SRC, "add_guard_condition");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1),    // body_id (root)
         Value::Int(10),   // input_id (lit 5)
         Value::Int(0x22), // cmp_opcode: less_than
@@ -417,7 +418,7 @@ fn test_extract_to_ref() {
     let (graph, registry) = compile_fn(EXTRACT_REF_SRC, "extract_to_ref");
     let target = make_binop_graph(0x00, 5, 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(10),    // node_id
         Value::Int(12345), // fragment_id
     ];
@@ -433,7 +434,7 @@ fn test_duplicate_node() {
     let target = make_binop_graph(0x00, 5, 3);
     assert_eq!(target.nodes.len(), 3);
     let inputs = vec![
-        Value::Program(Box::new(target)),
+        Value::Program(Rc::new(target)),
         Value::Int(1), // node_id (root Prim)
     ];
     let out = run(&graph, &inputs, &registry);

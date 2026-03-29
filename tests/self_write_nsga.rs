@@ -23,6 +23,7 @@
 //!    nsga2::non_dominated_sort implementation.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -740,7 +741,7 @@ fn population_ranks() {
 
     let inputs = vec![
         population,
-        Value::Program(Box::new(rank_prog)),
+        Value::Program(Rc::new(rank_prog)),
     ];
 
     let (outputs, _) = interpreter::interpret(&ranks_prog, &inputs, None).unwrap();
@@ -788,7 +789,7 @@ fn iris_ranks_match_rust_dominance_counts() {
         vec![0, 0],
     ];
 
-    let population_value = Value::Tuple(
+    let population_value = Value::tuple(
         population_data
             .iter()
             .map(|v| Value::tuple(v.iter().map(|&x| Value::Int(x)).collect()))
@@ -798,7 +799,7 @@ fn iris_ranks_match_rust_dominance_counts() {
     // Compute IRIS domination counts for each individual.
     let mut iris_dom_counts = vec![];
     for (i, _ind) in population_data.iter().enumerate() {
-        let individual = Value::Tuple(
+        let individual = Value::tuple(
             population_data[i].iter().map(|&x| Value::Int(x)).collect(),
         );
         let (outputs, _) = interpreter::interpret(

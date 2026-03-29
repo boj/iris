@@ -24,6 +24,7 @@
 //!  13. sub variant              — sub(input(0), input(1))
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -1368,7 +1369,7 @@ fn generated_mul_program_runs_via_graph_eval() {
     let eval_program = make_graph(nodes, edges, 1);
 
     let inputs = vec![
-        Value::Program(Box::new(mul_program)),
+        Value::Program(Rc::new(mul_program)),
         Value::tuple(vec![Value::Int(6), Value::Int(7)]),
     ];
     let (result, _) = interpreter::interpret(&eval_program, &inputs, None).unwrap();
@@ -1405,7 +1406,7 @@ fn generated_stateful_fold_runs_via_graph_eval() {
 
     let list = Value::tuple(vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
     let wrapped = Value::tuple(vec![list]);
-    let inputs = vec![Value::Program(Box::new(fold_program)), wrapped];
+    let inputs = vec![Value::Program(Rc::new(fold_program)), wrapped];
     let (result, _) = interpreter::interpret(&eval_program, &inputs, None).unwrap();
     assert_eq!(
         result,

@@ -845,7 +845,7 @@ pub fn run_generator(
                     if graph.nodes.len() > MAX_GENERATED_SEED_NODES {
                         return None;
                     }
-                    Some(*graph)
+                    Some(std::rc::Rc::try_unwrap(graph).unwrap_or_else(|rc| (*rc).clone()))
                 }
                 _ => None,
             }

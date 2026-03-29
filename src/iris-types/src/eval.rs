@@ -194,7 +194,11 @@ pub enum Value {
     /// A reified program graph — enables runtime self-modification.
     /// Programs can inspect and modify their own graph structure, then
     /// evaluate the modified version via `graph_eval`.
-    Program(Box<SemanticGraph>),
+    ///
+    /// Uses `Rc` for copy-on-write semantics: read-only operations
+    /// (graph_eval, graph_get_*) borrow without cloning, while mutations
+    /// clone only when refcount > 1.
+    Program(Rc<SemanticGraph>),
     /// Handle to a concurrently-executing computation.
     /// `None` inside the mutex = pending; `Some` = resolved.
     Future(FutureHandle),
@@ -281,6 +285,39 @@ impl Value {
             Value::Range(s, e) => {
                 let len = if *e > *s { (*e - *s) as usize } else { 0 };
                 if idx < len { Some(Value::Int(*s + idx as i64)) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// Borrow the inner SemanticGraph without cloning (for read-only ops).
+    #[inline]
+    pub fn as_program(&self) -> Option<&SemanticGraph> {
+        match self {
+            Value::Program(rc) => Some(rc.as_ref()),
+            Value::Tuple(t) if !t.is_empty() => {
+                if let Value::Program(rc) = &t[0] {
+                    Some(rc.as_ref())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract an owned SemanticGraph, cloning only if the Rc is shared.
+    #[inline]
+    pub fn into_program(self) -> Option<SemanticGraph> {
+        match self {
+            Value::Program(rc) => Some(Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())),
+            Value::Tuple(t) => {
+                let inner = Rc::try_unwrap(t).unwrap_or_else(|rc| (*rc).clone());
+                if let Some(Value::Program(rc)) = inner.into_iter().next() {
+                    Some(Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone()))
+                } else {
+                    None
+                }
             }
             _ => None,
         }

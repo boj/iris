@@ -22,6 +22,7 @@
 //! Rust implementations in iris_evolve::nsga2.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use iris_exec::interpreter;
 use iris_types::cost::{CostBound, CostTerm};
@@ -961,7 +962,7 @@ fn rust_non_dominated_sort(population: &[Vec<i64>]) -> Vec<usize> {
 // ---------------------------------------------------------------------------
 
 fn population_to_value(pop: &[Vec<i64>]) -> Value {
-    Value::Tuple(
+    Value::tuple(
         pop.iter()
             .map(|v| Value::tuple(v.iter().map(|&x| Value::Int(x)).collect()))
             .collect(),
@@ -1055,7 +1056,7 @@ fn population_crowding_distances() {
 
     let inputs = vec![
         front_val,
-        Value::Program(Box::new(crowding_prog)),
+        Value::Program(Rc::new(crowding_prog)),
     ];
 
     let (outputs, _) = interpreter::interpret(&pop_crowding_prog, &inputs, None).unwrap();
@@ -1068,7 +1069,7 @@ fn population_crowding_distances() {
 
     assert_eq!(
         outputs[0],
-        Value::Tuple(expected),
+        Value::tuple(expected),
         "population crowding distances should match Rust computation"
     );
 }
@@ -1090,7 +1091,7 @@ fn population_ranks_match_rust() {
 
     let inputs = vec![
         population_val,
-        Value::Program(Box::new(rank_prog)),
+        Value::Program(Rc::new(rank_prog)),
     ];
 
     let (outputs, _) = interpreter::interpret(&ranks_prog, &inputs, None).unwrap();
@@ -1101,7 +1102,7 @@ fn population_ranks_match_rust() {
 
     assert_eq!(
         outputs[0],
-        Value::Tuple(expected),
+        Value::tuple(expected),
         "IRIS ranks should match Rust domination counts"
     );
 }
@@ -1209,7 +1210,7 @@ fn end_to_end_rank_and_crowding() {
     // Step 1: Compute ranks
     let rank_inputs = vec![
         population_val.clone(),
-        Value::Program(Box::new(rank_prog)),
+        Value::Program(Rc::new(rank_prog)),
     ];
     let (rank_outputs, _) = interpreter::interpret(&ranks_prog, &rank_inputs, None).unwrap();
     let iris_ranks: Vec<i64> = match &rank_outputs[0] {
@@ -1234,7 +1235,7 @@ fn end_to_end_rank_and_crowding() {
 
     let crowd_inputs = vec![
         front0_val,
-        Value::Program(Box::new(crowding_prog)),
+        Value::Program(Rc::new(crowding_prog)),
     ];
     let (crowd_outputs, _) = interpreter::interpret(&pop_crowding_prog, &crowd_inputs, None).unwrap();
     let iris_crowds: Vec<i64> = match &crowd_outputs[0] {
@@ -1287,7 +1288,7 @@ fn three_objective_population() {
 
     let inputs = vec![
         population_val,
-        Value::Program(Box::new(rank_prog)),
+        Value::Program(Rc::new(rank_prog)),
     ];
     let (outputs, _) = interpreter::interpret(&ranks_prog, &inputs, None).unwrap();
 
@@ -1339,7 +1340,7 @@ fn domination_counts_vs_fronts() {
     let population_val = population_to_value(&pop_data);
     let inputs = vec![
         population_val,
-        Value::Program(Box::new(rank_prog)),
+        Value::Program(Rc::new(rank_prog)),
     ];
     let (outputs, _) = interpreter::interpret(&ranks_prog, &inputs, None).unwrap();
 

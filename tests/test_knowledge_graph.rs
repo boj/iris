@@ -866,7 +866,7 @@ fn graph_query_by_edge_type() {
         Value::Tuple(t) => t.clone(),
         other => panic!("expected Tuple from graph_query, got {:?}", other),
     };
-    assert_eq!(inner, vec![Value::Bytes(b"b".to_vec())]);
+    assert_eq!(*inner, vec![Value::Bytes(b"b".to_vec())]);
 }
 
 // ---------------------------------------------------------------------------
