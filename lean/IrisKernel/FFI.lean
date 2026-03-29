@@ -364,11 +364,11 @@ partial def encodeJudgment (arr : ByteArray) (j : Judgment) : ByteArray :=
 
 /-- Encode a successful result: byte 1 + Judgment. -/
 partial def encodeSuccess (j : Judgment) : ByteArray :=
-  encodeJudgment (ByteArray.mkEmpty 64 |>.push 1) j
+  encodeJudgment (ByteArray.empty |>.push 1) j
 
 /-- Encode a failure result: byte 0 + error code. -/
 def encodeFailure (errCode : UInt8) : ByteArray :=
-  ByteArray.mkEmpty 2 |>.push 0 |>.push errCode
+  ByteArray.empty |>.push 0 |>.push errCode
 
 -- ===========================================================================
 -- LIA decoder

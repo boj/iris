@@ -35,6 +35,8 @@ structure BinderId where
   val : Nat
   deriving DecidableEq, Repr, BEq, Hashable
 
+instance : Inhabited BinderId := ⟨⟨0⟩⟩
+
 -- ===========================================================================
 -- TypeId — 64-bit content-addressed type identity
 -- Rust: `pub struct TypeId(pub u64);`
@@ -142,6 +144,8 @@ inductive CostBound : Type where
 -- contains List CostBound (nested inductive). We provide BEq in Eval.lean
 -- and use the inductive CostLeq relation for proofs instead.
 
+instance : Inhabited CostBound := ⟨CostBound.Zero⟩
+
 -- ===========================================================================
 -- PrimType — primitive type tags
 -- Rust: `pub enum PrimType { Int, Nat, Float64, Float32, Bool, Bytes, Unit }`
@@ -232,7 +236,7 @@ end TypeEnv
 structure Binding where
   name    : BinderId
   type_id : TypeId
-  deriving DecidableEq, Repr, BEq
+  deriving DecidableEq, Repr, BEq, Inhabited
 
 -- ===========================================================================
 -- Context — an ordered list of bindings (Gamma)
@@ -243,7 +247,7 @@ structure Binding where
     Mirrors `Context` in `src/iris-kernel/src/theorem.rs`. -/
 structure Context where
   bindings : List Binding
-  deriving DecidableEq, Repr, BEq
+  deriving DecidableEq, Repr, BEq, Inhabited
 
 namespace Context
 
@@ -303,6 +307,7 @@ structure Judgment where
   node_id  : NodeId
   type_ref : TypeId
   cost     : CostBound
+  deriving Inhabited
 
 -- ===========================================================================
 -- CostLeq — the partial order on CostBound

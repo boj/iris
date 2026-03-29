@@ -20,3 +20,8 @@ lean_exe «iris-kernel-ffi-check» where
   root := `IrisKernel
   -- This exe target forces all @[export] symbols into the link.
   -- We don't actually run it — we just need the compiled objects.
+
+-- IPC server binary: reads kernel requests from stdin, writes results to stdout.
+-- Used by the Rust IPC bridge (lean_bridge.rs) instead of linking the Lean runtime.
+lean_exe «iris-kernel-server» where
+  root := `IrisKernelServer

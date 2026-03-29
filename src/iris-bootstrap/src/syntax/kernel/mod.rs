@@ -19,7 +19,7 @@
 //! - `lean/IrisKernel/FFI.lean` — C-callable exports
 //!
 //! Feature flags:
-//! - `lean-ffi`: Links with Lean runtime (requires Lean toolchain)
+//! - `lean-ffi`: Communicates with Lean kernel server via IPC (requires Lean toolchain)
 //! - `lean-kernel`: Delegates kernel rules to Lean (requires lean-ffi)
 #![allow(unused_imports)]
 
@@ -27,7 +27,6 @@ pub mod checker;
 pub mod cost_checker;
 pub mod error;
 pub mod kernel;
-#[allow(unsafe_code)]
 pub mod lean_bridge;
 pub mod lia_solver;
 pub mod property_test;
