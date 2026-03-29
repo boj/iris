@@ -26,13 +26,13 @@ If `$ARGUMENTS` names a specific crate (e.g., `iris-evolve`), audit only that cr
 - `iris-clcu` / `iris-clcu-sys` — C hardware layer / FFI bindings
 
 **Scaffolding crates to audit:**
-- `iris-syntax` → `programs/syntax/` + `bootstrap/*.json`
-- `iris-evolve` → `programs/evolution/`, `programs/seeds/`, `programs/analyzer/`, `programs/meta/`, `programs/population/`, `programs/mutation/`
-- `iris-exec` (rust-scaffolding gated heavy impl) → `programs/interpreter/`, `programs/jit/`, `programs/vm/`, `programs/exec/`
-- `iris-codec` → `programs/codec/`
-- `iris-repr` → `programs/repr/`
-- `iris-compiler` → `programs/compiler/`
-- `iris-deploy` → `programs/deploy/`
+- `iris-syntax` → `src/iris-programs/syntax/` + `bootstrap/*.json`
+- `iris-evolve` → `src/iris-programs/evolution/`, `src/iris-programs/seeds/`, `src/iris-programs/analyzer/`, `src/iris-programs/meta/`, `src/iris-programs/population/`, `src/iris-programs/mutation/`
+- `iris-exec` (rust-scaffolding gated heavy impl) → `src/iris-programs/interpreter/`, `src/iris-programs/jit/`, `src/iris-programs/vm/`, `src/iris-programs/exec/`
+- `iris-codec` → `src/iris-programs/codec/`
+- `iris-repr` → `src/iris-programs/repr/`
+- `iris-compiler` → `src/iris-programs/compiler/`
+- `iris-deploy` → `src/iris-programs/deploy/`
 - `iris-lsp` → (check if any equivalent exists)
 
 ## Methodology

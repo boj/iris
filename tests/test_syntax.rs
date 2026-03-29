@@ -1696,31 +1696,31 @@ fn eval_fragment(
 
 #[test]
 fn test_path_import_basic() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let result = eval_fragment(&frags, &registry, "test_is_none");
     assert_eq!(result, Value::Bool(true));
 }
 
 #[test]
 fn test_path_import_all_fragments() {
-    let (frags, _) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, _) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let names: Vec<&str> = frags.iter().map(|(n, _, _)| n.as_str()).collect();
     assert!(names.contains(&"unwrap_or"), "missing imported unwrap_or");
-    assert!(names.contains(&"map"), "missing imported map");
+    assert!(names.contains(&"option_map"), "missing imported option_map");
     assert!(names.contains(&"test_unwrap_some"), "missing test_unwrap_some");
     assert!(names.contains(&"test_unwrap_none"), "missing test_unwrap_none");
 }
 
 #[test]
 fn test_path_import_unwrap_some() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let result = eval_fragment(&frags, &registry, "test_unwrap_some");
     assert_eq!(result, Value::Int(42));
 }
 
 #[test]
 fn test_path_import_unwrap_none() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let result = eval_fragment(&frags, &registry, "test_unwrap_none");
     assert_eq!(result, Value::Int(99));
 }
@@ -1728,7 +1728,7 @@ fn test_path_import_unwrap_none() {
 #[test]
 fn test_path_import_map() {
     // Higher-order functions across fragments with graph-aware closures.
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     // Actually execute test_map: map (Some(21)) (\x -> x * 2) → Some(42), unwrap → 42
     let val = eval_fragment(&frags, &registry, "test_map");
     assert_eq!(val, Value::Int(42), "cross-graph higher-order function should work");
@@ -1736,7 +1736,7 @@ fn test_path_import_map() {
 
 #[test]
 fn test_path_import_and_then() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     // and_then (Some(10)) (\x -> if x > 5 then Some(x*3) else None) → Some(30) → 30
     let val = eval_fragment(&frags, &registry, "test_and_then_some");
     assert_eq!(val, Value::Int(30), "and_then with Some should apply closure");
@@ -1747,7 +1747,7 @@ fn test_path_import_and_then() {
 
 #[test]
 fn test_path_import_filter() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let val = eval_fragment(&frags, &registry, "test_filter_pass");
     assert_eq!(val, Value::Bool(true), "filter should keep values passing predicate");
     let val = eval_fragment(&frags, &registry, "test_filter_fail");
@@ -1756,14 +1756,14 @@ fn test_path_import_filter() {
 
 #[test]
 fn test_path_import_unwrap_or_else() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let val = eval_fragment(&frags, &registry, "test_unwrap_or_else");
     assert_eq!(val, Value::Int(99), "unwrap_or_else on None should call closure");
 }
 
 #[test]
 fn test_path_import_map_none() {
-    let (frags, registry) = compile_file_with_registry("programs/test_import.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_import.iris");
     let val = eval_fragment(&frags, &registry, "test_map_none");
     assert_eq!(val, Value::Bool(true), "map on None should return None");
 }
@@ -1787,7 +1787,7 @@ let b = 2"#).unwrap();
 
 #[test]
 fn test_stdlib_option_compiles() {
-    let path = std::path::Path::new("programs/stdlib/option.iris");
+    let path = std::path::Path::new("src/iris-programs/stdlib/option.iris");
     let src = std::fs::read_to_string(path).unwrap();
     let result = iris_bootstrap::syntax::compile_file(&src, path);
     assert!(result.errors.is_empty(), "option.iris should compile: {:?}", result.errors);
@@ -1796,7 +1796,7 @@ fn test_stdlib_option_compiles() {
 
 #[test]
 fn test_stdlib_result_compiles() {
-    let path = std::path::Path::new("programs/stdlib/result.iris");
+    let path = std::path::Path::new("src/iris-programs/stdlib/result.iris");
     let src = std::fs::read_to_string(path).unwrap();
     let result = iris_bootstrap::syntax::compile_file(&src, path);
     assert!(result.errors.is_empty(), "result.iris should compile: {:?}", result.errors);
@@ -1805,7 +1805,7 @@ fn test_stdlib_result_compiles() {
 
 #[test]
 fn test_stdlib_either_compiles() {
-    let path = std::path::Path::new("programs/stdlib/either.iris");
+    let path = std::path::Path::new("src/iris-programs/stdlib/either.iris");
     let src = std::fs::read_to_string(path).unwrap();
     let result = iris_bootstrap::syntax::compile_file(&src, path);
     assert!(result.errors.is_empty(), "either.iris should compile: {:?}", result.errors);
@@ -1813,7 +1813,7 @@ fn test_stdlib_either_compiles() {
 
 #[test]
 fn test_stdlib_ordering_compiles() {
-    let path = std::path::Path::new("programs/stdlib/ordering.iris");
+    let path = std::path::Path::new("src/iris-programs/stdlib/ordering.iris");
     let src = std::fs::read_to_string(path).unwrap();
     let result = iris_bootstrap::syntax::compile_file(&src, path);
     assert!(result.errors.is_empty(), "ordering.iris should compile: {:?}", result.errors);
@@ -1853,42 +1853,42 @@ fn test_hex_import_still_works() {
 
 #[test]
 fn test_struct_field_access() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_point_x");
     assert_eq!(val, Value::Int(3));
 }
 
 #[test]
 fn test_struct_field_y() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_point_y");
     assert_eq!(val, Value::Int(4));
 }
 
 #[test]
 fn test_struct_computed() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_distance");
     assert_eq!(val, Value::Int(25)); // 3^2 + 4^2
 }
 
 #[test]
 fn test_struct_multi_field() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_color_g");
     assert_eq!(val, Value::Int(128));
 }
 
 #[test]
 fn test_struct_return_and_access() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_add_points");
     assert_eq!(val, Value::Int(10)); // (1+3) + (2+4) = 10
 }
 
 #[test]
 fn test_struct_positional_still_works() {
-    let (frags, registry) = compile_file_with_registry("programs/test_structs.iris");
+    let (frags, registry) = compile_file_with_registry("src/iris-programs/test_structs.iris");
     let val = eval_fragment(&frags, &registry, "test_positional");
     assert_eq!(val, Value::Int(30)); // 10 + 20
 }

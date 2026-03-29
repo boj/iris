@@ -344,7 +344,7 @@ let eval_prim_map program inputs : Program -> Tuple -> Value [cost: Unknown] =
 -- === JSON (0xD0-0xD3) — REMOVED ===
 -- json_parse (0xD0), json_stringify (0xD1), json_array_len (0xD3) have been
 -- removed from the substrate. Programs that need JSON must implement parsing
--- in IRIS using string operations (see programs/stdlib/json.iris).
+-- in IRIS using string operations (see src/iris-programs/stdlib/json.iris).
 -- 0xD2 is now tuple_get (get field from tuple by key or index).
 -- Only tuple_get remains; it is dispatched via eval_prim_list or the
 -- master dispatch (opcode 210 decimal = 0xD2).

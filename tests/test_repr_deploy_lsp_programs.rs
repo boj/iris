@@ -131,7 +131,7 @@ fn make_test_graph(node_count: usize) -> SemanticGraph {
 // Full execution validation: compile + evaluate functions from every .iris file
 // ===========================================================================
 
-/// Evaluate at least one function from every .iris file in programs/repr.
+/// Evaluate at least one function from every .iris file in src/iris-programs/repr.
 #[test]
 fn eval_all_repr_programs() {
     // abstract_machine.iris: fits_machine, select_backend
@@ -324,7 +324,7 @@ fn eval_all_repr_programs() {
     }
 }
 
-/// Evaluate at least one function from every .iris file in programs/deploy.
+/// Evaluate at least one function from every .iris file in src/iris-programs/deploy.
 #[test]
 fn eval_all_deploy_programs() {
     // elf_native.iris: encode_u16_le, validate_ident, validate_code_size, validate_elf
@@ -410,7 +410,7 @@ fn eval_all_deploy_programs() {
     }
 }
 
-/// Evaluate at least one function from every .iris file in programs/lsp.
+/// Evaluate at least one function from every .iris file in src/iris-programs/lsp.
 #[test]
 fn eval_all_lsp_programs() {
     // completion.iris: is_ident_char, keyword_category, make_completion_item, estimate_completion_count

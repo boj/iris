@@ -10,7 +10,7 @@ This tutorial walks through writing a program, verifying it, evolving alternativ
 
 ## Step 1: Write a Specification {#spec}
 
-Create a file `programs/my_service/spec.iris` that defines what we want: a function that computes the sum of integers from 0 to n-1.
+Create a file `src/iris-programs/my_service/spec.iris` that defines what we want: a function that computes the sum of integers from 0 to n-1.
 
 ```iris
 -- Sum a list of integers.
@@ -28,7 +28,7 @@ The `-- test: <inputs> -> <output>` comments define the specification. Each line
 
 ## Step 2: Write the Program {#write}
 
-Create `programs/my_service/service.iris`:
+Create `src/iris-programs/my_service/service.iris`:
 
 ```iris
 -- A service that computes various reductions over integer ranges.
@@ -85,7 +85,7 @@ Structs are sugar over tuples: `{ operation = Sum, count = 10 }` compiles to `(S
 Run the type checker to verify correctness:
 
 ```bash
-iris check programs/my_service/service.iris
+iris check src/iris-programs/my_service/service.iris
 ```
 
 Expected output:
@@ -103,17 +103,17 @@ All 4 definitions verified.
 Run the service via `main`, which dispatches on the operation type:
 
 ```bash
-iris run programs/my_service/service.iris Sum 10    # main Sum 10 -> sum_to 10 = 45
-iris run programs/my_service/service.iris Product 5 # main Product 5  -> product_to 5 = 120
-iris run programs/my_service/service.iris Max 10    # main Max 10 -> max_of 10 = 9
+iris run src/iris-programs/my_service/service.iris Sum 10    # main Sum 10 -> sum_to 10 = 45
+iris run src/iris-programs/my_service/service.iris Product 5 # main Product 5  -> product_to 5 = 120
+iris run src/iris-programs/my_service/service.iris Max 10    # main Max 10 -> max_of 10 = 9
 ```
 
 Or call the individual functions directly:
 
 ```bash
-iris run programs/my_service/sum_to.iris 10       # 45
-iris run programs/my_service/product_to.iris 5    # 120
-iris run programs/my_service/max_of.iris 10       # 9
+iris run src/iris-programs/my_service/sum_to.iris 10       # 45
+iris run src/iris-programs/my_service/product_to.iris 5    # 120
+iris run src/iris-programs/my_service/max_of.iris 10       # 9
 ```
 
 ## Step 5: Evolve an Alternative {#evolve}
@@ -131,10 +131,10 @@ Create a specification file with test cases:
 -- test: 100 -> 4950
 ```
 
-Save as `programs/my_service/evolve_spec.iris` and run:
+Save as `src/iris-programs/my_service/evolve_spec.iris` and run:
 
 ```bash
-iris solve programs/my_service/evolve_spec.iris
+iris solve src/iris-programs/my_service/evolve_spec.iris
 ```
 
 The solver generates candidates, scores them on correctness, performance, and verifiability, and reports the best:
@@ -151,7 +151,7 @@ Best program: 3 nodes, 2 edges
 ### As Deployable Rust Source {#deploy-rust}
 
 ```bash
-iris deploy programs/my_service/service.iris -o my_service.rs
+iris deploy src/iris-programs/my_service/service.iris -o my_service.rs
 rustc --edition 2021 -O my_service.rs -o my_service
 ```
 

@@ -31,7 +31,7 @@ For interpreter/evaluator functions: does every branch end with `graph_eval prog
 
 ### Check 4: Tests Execute .iris Files
 For every test file in `tests/`:
-- Does it use `include_str!("../programs/...")` or `std::fs::read_to_string` to load .iris source?
+- Does it use `include_str!("../src/iris-programs/...")` or `std::fs::read_to_string` to load .iris source?
 - Does it call `iris_syntax::compile()` or `iris_syntax::parse()` on the loaded source?
 - Does it evaluate the result through bootstrap_eval or interpreter::interpret?
 - If the test only constructs SemanticGraphs in Rust → FAIL (it tests Rust, not IRIS)
