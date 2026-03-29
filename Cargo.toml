@@ -2,14 +2,11 @@
 resolver = "2"
 members = [
     "src/iris-types",
-    "src/iris-evolve",
-    "src/iris-exec",
-    "src/iris-clcu-sys",
     "src/iris-bootstrap",
 ]
 # Removed crates (100% replaced by .iris programs, types moved to iris-types):
 #   iris-repr     -> renamed to iris-types
-#   iris-kernel   -> merged into iris-syntax → iris-bootstrap::syntax::kernel
+#   iris-kernel   -> merged into iris-syntax -> iris-bootstrap::syntax::kernel
 #   iris-syntax   -> merged into iris-bootstrap::syntax
 #   iris-deploy   -> src/iris-programs/deploy/*.iris
 #   iris-foundry  -> src/iris-programs/foundry/*.iris
@@ -17,6 +14,9 @@ members = [
 #   iris-lsp      -> src/iris-programs/syntax/*.iris
 #   iris-compiler -> src/iris-programs/compiler/*.iris (IR types in iris-types::compiler_ir)
 #   iris-codec    -> src/iris-programs/codec/*.iris (traits in iris-types::codec)
+#   iris-clcu-sys -> removed (Rust scaffolding)
+#   iris-exec     -> removed (Rust scaffolding)
+#   iris-evolve   -> removed (Rust scaffolding)
 
 [workspace.package]
 version = "0.1.0"
@@ -36,330 +36,29 @@ publish = false
 autotests = false
 
 [features]
-default = ["rust-scaffolding"]
+default = []
 syntax = ["iris-bootstrap/syntax"]
-rust-scaffolding = ["syntax", "dep:iris-exec", "dep:iris-evolve"]
-jit = ["rust-scaffolding", "iris-exec/jit"]
-clcu = ["rust-scaffolding", "iris-exec/clcu"]
 
 [dependencies]
 iris-types = { path = "src/iris-types" }
-iris-exec = { path = "src/iris-exec", optional = true }
-iris-evolve = { path = "src/iris-evolve", optional = true }
 iris-bootstrap = { path = "src/iris-bootstrap" }
 blake3 = { workspace = true }
 rand = "0.8"
 serde_json = "1"
-libc = "0.2"
-rustyline = "14"
-criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bin]]
+name = "iris"
+path = "src/bin/iris.rs"
 
 [[bin]]
 name = "iris-bootstrap"
 path = "src/bin/iris-bootstrap.rs"
-required-features = ["rust-scaffolding"]
+required-features = ["syntax"]
 
 [[bin]]
 name = "iris-lsp"
 path = "src/bin/iris-lsp.rs"
 required-features = ["syntax"]
-
-[[bench]]
-name = "evaluator"
-harness = false
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_sum"
-path = "tests/evolve_sum.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_max"
-path = "tests/evolve_max.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_double"
-path = "tests/evolve_double.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_abs"
-path = "tests/evolve_abs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_dot_product"
-path = "tests/evolve_dot_product.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "evolve_dot_product_v2"
-path = "tests/evolve_dot_product_v2.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_scale"
-path = "tests/test_scale.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_effects"
-path = "tests/test_effects.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_capability_wiring"
-path = "tests/test_capability_wiring.rs"
-required-features = ["rust-scaffolding"]
-
-
-
-[[test]]
-name = "test_knowledge_graph"
-path = "tests/test_knowledge_graph.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_self_mod"
-path = "tests/test_self_mod.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_concurrent"
-path = "tests/test_concurrent.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_meta_evolve"
-path = "tests/test_meta_evolve.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_evo_lifecycle"
-path = "tests/test_evo_lifecycle.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "bench_math"
-path = "tests/bench_math.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "bench_algorithms"
-path = "tests/bench_algorithms.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_repr_deploy_lsp_programs"
-path = "tests/test_repr_deploy_lsp_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "bench_cs"
-path = "tests/bench_cs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_corecursion"
-path = "tests/test_corecursion.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_novelty_strings"
-path = "tests/test_novelty_strings.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_self_improve"
-path = "tests/test_self_improve.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_components"
-path = "tests/test_components.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "fuzz_interpreter"
-path = "tests/fuzz_interpreter.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_ecology"
-path = "tests/test_ecology.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_iris_programs"
-path = "tests/test_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms"
-path = "tests/prove_algorithms.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v2"
-path = "tests/prove_algorithms_v2.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v3"
-path = "tests/prove_algorithms_v3.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v4"
-path = "tests/prove_algorithms_v4.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v5"
-path = "tests/prove_algorithms_v5.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v6"
-path = "tests/prove_algorithms_v6.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_mutation"
-path = "tests/self_write_mutation.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_compiler"
-path = "tests/self_write_compiler.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_fitness"
-path = "tests/self_write_fitness.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_seeds"
-path = "tests/self_write_seeds.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_seeds_v2"
-path = "tests/self_write_seeds_v2.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_nsga"
-path = "tests/self_write_nsga.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_evolve"
-path = "tests/self_write_evolve.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "prove_algorithms_v7"
-path = "tests/prove_algorithms_v7.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "iris_in_production"
-path = "tests/iris_in_production.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_auto_improve"
-path = "tests/test_auto_improve.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_mutation_v2"
-path = "tests/self_write_mutation_v2.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_mutation_v3"
-path = "tests/self_write_mutation_v3.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_mutation_v4"
-path = "tests/self_write_mutation_v4.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_population"
-path = "tests/self_write_population.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_syntax"
-path = "tests/test_syntax.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_nsga_v2"
-path = "tests/self_write_nsga_v2.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "integration_iris_replaces_rust"
-path = "tests/integration_iris_replaces_rust.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_instrumentation"
-path = "tests/test_instrumentation.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_eval_phase"
-path = "tests/self_write_eval_phase.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_crossover_death"
-path = "tests/self_write_crossover_death.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_interpreter"
-path = "tests/self_write_interpreter.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_checker"
-path = "tests/self_write_checker.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_repr"
-path = "tests/self_write_repr.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "self_write_codec"
-path = "tests/self_write_codec.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_self_improving_daemon"
-path = "tests/test_self_improving_daemon.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_realtime_optimization"
-path = "tests/test_realtime_optimization.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_bootstrap"
-path = "tests/test_bootstrap.rs"
-required-features = ["rust-scaffolding"]
 
 [[test]]
 name = "test_bootstrap_effects"
@@ -381,259 +80,49 @@ path = "tests/test_fragment_cache_e2e.rs"
 required-features = ["syntax"]
 
 [[test]]
-name = "test_precompile_syntax"
-path = "tests/test_precompile_syntax.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_self_hosting"
-path = "tests/test_self_hosting.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_self_hosting_e2e"
-path = "tests/test_self_hosting_e2e.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_syntax_scaffolding_gap"
-path = "tests/test_syntax_scaffolding_gap.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "live_daemon_test"
-path = "tests/live_daemon_test.rs"
-required-features = ["rust-scaffolding"]
-harness = false
-
-[[test]]
-name = "test_self_on_self"
-path = "tests/test_self_on_self.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "print_audit_example"
-path = "tests/print_audit_example.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_strings"
-path = "tests/test_stdlib_strings.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_files"
-path = "tests/test_stdlib_files.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_time"
-path = "tests/test_stdlib_time.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_math"
-path = "tests/test_stdlib_math.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_compiler_iris_passes"
-path = "tests/test_compiler_iris_passes.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_http"
-path = "tests/test_stdlib_http.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_paths"
-path = "tests/test_stdlib_paths.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_collections"
-path = "tests/test_stdlib_collections.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_benchmarks_game"
-path = "tests/test_benchmarks_game.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_security"
-path = "tests/test_security.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_formal_verification"
-path = "tests/test_formal_verification.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_gen1_bugfixes"
-path = "tests/test_gen1_bugfixes.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "bench_profiling"
-path = "tests/bench_profiling.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_examples"
-path = "tests/test_examples.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_verification_complete"
-path = "tests/test_verification_complete.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
 name = "test_cost_annotations"
 path = "tests/test_cost_annotations.rs"
-
-[[test]]
-name = "test_typecheck_all"
-path = "tests/test_typecheck_all.rs"
-required-features = ["rust-scaffolding"]
+required-features = ["syntax"]
 
 [[test]]
 name = "test_kernel_lean_correspondence"
 path = "tests/test_kernel_lean_correspondence.rs"
+required-features = ["syntax"]
 
 [[test]]
 name = "test_lean_bridge"
 path = "tests/test_lean_bridge.rs"
+required-features = ["syntax"]
 
 [[test]]
-name = "test_evolve_iris_programs"
-path = "tests/test_evolve_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_stdlib_iris_programs"
-path = "tests/test_stdlib_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_checker_iris"
-path = "tests/test_checker_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_codec_iris"
-path = "tests/test_codec_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_interpreter_iris"
-path = "tests/test_interpreter_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_meta_iris_programs"
-path = "tests/test_meta_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_exec_iris_programs"
-path = "tests/test_exec_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_improve"
-path = "tests/test_improve.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_improve_e2e"
-path = "tests/test_improve_e2e.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_evolution_iris_programs"
-path = "tests/test_evolution_iris_programs.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_evolution_iris_execute"
-path = "tests/test_evolution_iris_execute.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_capability_wiring_iris"
-path = "tests/test_capability_wiring_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_deploy_iris"
-path = "tests/test_deploy_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_foundry_iris"
-path = "tests/test_foundry_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_repr_iris"
-path = "tests/test_repr_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_store_iris"
-path = "tests/test_store_iris.rs"
-required-features = ["rust-scaffolding"]
-
-[[test]]
-name = "test_mutation_iris_programs"
-path = "tests/test_mutation_iris_programs.rs"
-required-features = ["rust-scaffolding"]
+name = "test_compiler_iris_passes"
+path = "tests/test_compiler_iris_passes.rs"
+required-features = ["syntax"]
 
 [[test]]
 name = "test_io_boundary"
 path = "tests/test_io_boundary.rs"
-required-features = ["rust-scaffolding"]
 
 [[test]]
-name = "test_convergence"
-path = "tests/test_convergence.rs"
-required-features = ["rust-scaffolding"]
+name = "test_precompile_syntax"
+path = "tests/test_precompile_syntax.rs"
+required-features = ["syntax"]
 
 [[test]]
-name = "test_jit"
-path = "tests/test_jit.rs"
-required-features = ["jit"]
+name = "test_self_hosting_e2e"
+path = "tests/test_self_hosting_e2e.rs"
+required-features = ["syntax"]
 
 [[test]]
-name = "test_jit_codegen"
-path = "tests/test_jit_codegen.rs"
-required-features = ["jit"]
+name = "test_typecheck_all"
+path = "tests/test_typecheck_all.rs"
+required-features = ["syntax"]
 
 [[test]]
-name = "test_jit_backend"
-path = "tests/test_jit_backend.rs"
-required-features = ["jit", "rust-scaffolding"]
-
-[[test]]
-name = "test_clcu_backend"
-path = "tests/test_clcu_backend.rs"
-required-features = ["clcu", "rust-scaffolding"]
-
-[[test]]
-name = "bench_jit_comparison"
-path = "tests/bench_jit_comparison.rs"
-required-features = ["jit", "rust-scaffolding"]
-
+name = "test_verification_complete"
+path = "tests/test_verification_complete.rs"
+required-features = ["syntax"]
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
-
-[[test]]
-name = "bench_micro"
-path = "tests/bench_micro.rs"
-required-features = ["jit", "rust-scaffolding"]
