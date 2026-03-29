@@ -2,6 +2,35 @@ fn main() {
     if std::env::var("CARGO_FEATURE_LEAN_FFI").is_ok() {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let lean_lib_dir = format!("{}/../../lean/.lake/build/lib", manifest_dir);
+        let lean_lib_path = format!("{}/libIrisKernel.a", lean_lib_dir);
+
+        // Auto-invoke `lake build` if the compiled Lean library doesn't exist.
+        if !std::path::Path::new(&lean_lib_path).exists() {
+            let lean_dir = format!("{}/../../lean", manifest_dir);
+            eprintln!("cargo:warning=Lean library not found at {}; running `lake build`...", lean_lib_path);
+            let status = std::process::Command::new("lake")
+                .arg("build")
+                .current_dir(&lean_dir)
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    eprintln!("cargo:warning=`lake build` succeeded.");
+                }
+                Ok(s) => {
+                    panic!(
+                        "lake build failed with exit code {:?} (run manually in {})",
+                        s.code(),
+                        lean_dir,
+                    );
+                }
+                Err(e) => {
+                    panic!(
+                        "Failed to run `lake build`: {}. Is Lean 4 installed and `lake` on PATH?",
+                        e,
+                    );
+                }
+            }
+        }
 
         let lean_prefix = std::process::Command::new("lean")
             .arg("--print-prefix")

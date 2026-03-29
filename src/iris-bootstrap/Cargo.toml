@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-lean-ffi = []
-lean-kernel = ["lean-ffi", "syntax"]
+default = ["lean-kernel"]
+lean-kernel = []
+lean-ffi = ["lean-kernel"]
 syntax = []
 
 [dependencies]
