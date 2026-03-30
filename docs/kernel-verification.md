@@ -1,8 +1,10 @@
-# Kernel Verification: Rust <-> Lean 4 Correspondence
+# Kernel Verification: Lean 4 Proof Kernel
 
-This document maps each Rust kernel function (`src/iris-bootstrap/src/syntax/kernel/kernel.rs`)
-to its Lean 4 formalization (`lean/IrisKernel/Rules.lean`) and documents the
-test coverage provided by `tests/test_kernel_lean_correspondence.rs`.
+The proof kernel is implemented in Lean 4 (`lean/IrisKernel/Kernel.lean`) and runs as
+an IPC subprocess. The Rust `Kernel` struct (`src/iris-bootstrap/src/syntax/kernel/kernel.rs`)
+delegates all 20 inference rules to Lean via `lean_bridge.rs`. This document maps each
+rule to its Lean implementation and documents the test coverage provided by
+`tests/test_kernel_lean_correspondence.rs` (86 tests).
 
 ## Rule Correspondence Table
 

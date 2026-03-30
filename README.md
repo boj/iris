@@ -14,30 +14,29 @@ The surface syntax is a projection of the SemanticGraph, not the source of truth
 ```
 L0  Evolution        -- population search (NSGA-II + lexicase + novelty)
 L1  Semantics        -- SemanticGraph (20 node kinds, BLAKE3 content-addressed)
-L2  Verification     -- LCF proof kernel (20 inference rules, zero unsafe Rust)
+L2  Verification     -- Lean 4 proof kernel (20 inference rules, IPC subprocess)
 L3  Hardware         -- tree-walker + CLCU (AVX-512)
 ```
 
 ## Key Properties
 
 - **Self-improving**: Run any program with `--improve` and the runtime automatically traces function calls, builds test cases from observed I/O, evolves faster implementations via NSGA-II genetic search, gates them for correctness and performance, and hot-swaps improvements into the running program. No manual specs needed; the program improves itself from its own behavior.
-- **Self-hosting**: 228 `.iris` programs (29K+ LOC) cover all system components. The bootstrap evaluator loads the meta-circular interpreter, which handles all 20 node kinds. The infrastructure uses its own type system features (ADTs, pattern matching, imports) internally. The irreducible Rust substrate is ~51K LOC across 5 crates (proof kernel + bootstrap evaluator + types + evolution engine + execution shim).
-- **Verified**: The LCF proof kernel (CaCIC -- Cost-aware Calculus of Inductive Constructions) proves type safety, cost bounds, and functional properties via refinement types and contracts. The kernel's 20 inference rules are formalized in Lean 4 with 47 theorems (zero `sorry`), and a Lean FFI bridge lets the proven Lean code execute as the production kernel.
+- **Self-hosting**: 228 `.iris` programs (29K+ LOC) cover all system components. The bootstrap evaluator loads the meta-circular interpreter, which handles all 20 node kinds. The infrastructure uses its own type system features (ADTs, pattern matching, imports) internally. The irreducible Rust substrate is iris-types + iris-bootstrap (types, evaluator, syntax); everything else is `.iris` programs.
+- **Verified**: The proof kernel is written in Lean 4 and runs as a separate IPC process (`iris-kernel-server`). The 20 inference rules (CaCIC -- Cost-aware Calculus of Inductive Constructions) prove type safety, cost bounds, and functional properties. Lean's type system guarantees the kernel is correct -- the running code IS the formal proof. Rust handles proof hashing (BLAKE3 audit trail) and the `Theorem` wrapper, but all judgment logic executes in Lean.
 - **Recursive**: Programs improve programs. The evolution engine runs inside the language, and evolved programs can themselves evolve sub-programs. A BLAKE3 Merkle chain provides tamper-evident audit trails for all self-modifications.
 
 ## Architecture
 
-The runtime is implemented in Rust with 5 crates. The parser, proof kernel, and syntax pipeline are embedded inside the bootstrap crate (merged from the original 14-crate workspace):
+The runtime is a 2-crate Rust workspace plus the Lean 4 kernel:
 
 ```
-Permanent Rust substrate (5 crates)
-  iris-types       (5,370 LOC)  -- SemanticGraph, Value, types, cost, wire format
-  iris-bootstrap  (12,887 LOC)  -- bootstrap evaluator + parser + proof kernel
-    +-- syntax/                 -- lexer, parser, lowerer (merged from iris-syntax)
-    +-- syntax/kernel/          -- LCF proof kernel (merged from iris-kernel)
-  iris-exec        (2,326 LOC)  -- execution shim, capabilities, effect runtime
-  iris-evolve     (30,340 LOC)  -- evolution engine, improvement daemon
-  iris-clcu-sys      (300 LOC)  -- FFI bindings to C CLCU interpreter
+Permanent substrate
+  iris-types                    -- SemanticGraph, Value, types, cost, wire format
+  iris-bootstrap                -- bootstrap evaluator + parser + kernel bridge
+    +-- syntax/                 -- lexer, parser, lowerer
+    +-- syntax/kernel/          -- Lean IPC bridge, Theorem type, proof hashing
+  lean/IrisKernel/              -- Lean 4 proof kernel (20 rules, compiled to native)
+  lean/IrisKernelServer.lean    -- IPC server (stdin/stdout, auto-spawned by Rust)
 
 IRIS Programs (228 files, 29K+ LOC)
   interpreter/     -- meta-circular interpreter (all 20 node kinds)
@@ -62,8 +61,18 @@ IRIS Programs (228 files, 29K+ LOC)
 
 ## Quick Start
 
+### Prerequisites
+
+- **Rust** 1.75+ (`rustup` recommended)
+- **Lean 4** (`elan` recommended — `lake build` is invoked automatically)
+
+On NixOS, Lean is found automatically via `nix-shell`. On other systems, install
+from [leanprover.github.io](https://leanprover.github.io/lean4/doc/setup.html).
+
+### Build and Run
+
 ```bash
-# Build
+# Build (auto-builds the Lean kernel server on first run)
 cargo build --release
 
 # Run an IRIS program
@@ -81,26 +90,22 @@ cargo run --release --bin iris -- solve spec.iris
 cargo run --release --bin iris -- run --improve examples/algorithms/factorial.iris 10
 ```
 
-The `run` command loads the pre-compiled tokenizer, parser, and lowerer from
-`bootstrap/*.json`, then evaluates the resulting SemanticGraph with the bootstrap
-tree-walker. No feature flags are needed.
+The first `cargo build` invokes `lake build iris-kernel-server` in `lean/` to
+compile the Lean proof kernel. Subsequent builds skip this step unless the Lean
+sources change. The Lean server binary is spawned automatically on first kernel
+call and stays alive for the process lifetime.
 
 ### Tests
 
 ```bash
-# Run core tests (397+ pass across 9 suites)
-cargo test --features rust-scaffolding --test test_typecheck_all \
-  --test test_capability_wiring_iris --test test_exec_iris_programs \
-  --test test_syntax --test test_syntax_scaffolding_gap \
-  --test test_verification_complete --test test_checker_iris \
-  --test test_improve --test test_improve_e2e
+# Run all tests (329+ across lib, bridge, and correspondence suites)
+cargo test --features syntax
 
-# Run integration tests
-cargo test --features rust-scaffolding --test test_effects --test test_security \
-  --test test_bootstrap_effects --test test_capability_wiring_iris
+# Kernel correspondence tests (Lean IPC exercised)
+cargo test --features syntax --test test_kernel_lean_correspondence
 
-# Type-check all 228 .iris files
-cargo test --features rust-scaffolding --test test_typecheck_all
+# Wire format round-trip tests
+cargo test --features syntax --test test_lean_bridge
 ```
 
 ## Observation-Driven Improvement
@@ -290,14 +295,16 @@ Every execution path (`IrisExecutionService`, `interpret_with_capabilities`, and
 
 Three layers of verification are provided:
 
-### LCF Proof Kernel
-The kernel is ~7,345 LOC of Rust (in `src/iris-bootstrap/src/syntax/kernel/`) with zero `unsafe` blocks outside the Lean FFI bridge. It has 20 inference rules that produce opaque `Theorem` values; external code cannot forge proofs. The kernel proves type safety, cost bounds, and functional properties via refinement types (`{x : Int | x > 0}`) and contracts (`requires`/`ensures`).
+### Lean 4 Proof Kernel
+The proof kernel is written in Lean 4 (`lean/IrisKernel/`) and runs as a native subprocess (`iris-kernel-server`). All 20 inference rules execute in Lean — the running code IS the formal proof. Lean's type system guarantees that every judgment was derived by a valid sequence of rule applications. The Rust side (`src/iris-bootstrap/src/syntax/kernel/`) wraps results in opaque `Theorem` values with BLAKE3 proof hashes for audit trails, but never evaluates inference rules itself.
 
-### Lean 4 Formalization
-The kernel's 20 rules are formalized in Lean 4 (`lean/IrisKernel/`) with 47 theorems and zero `sorry` markers. Key results include weakening (structural induction over all 20 constructors), cost lattice properties, and consistency. 85 cross-validation tests verify the Rust implementation matches the Lean specification.
+Why Lean matters: in a self-improving system, the kernel is the one thing that must never be wrong. By writing it in a language with a built-in proof checker, we get machine-verified correctness — not "tested" correctness, not "reviewed" correctness, but mathematically proven. The kernel can't be silently broken by a mutation, an evolution, or a bug in the Rust code, because Lean won't compile if the proofs don't hold.
 
-### Lean FFI Bridge
-A C shim + Rust bridge lets the *compiled Lean code* execute as the production kernel. Enable with `--features lean-ffi` (requires Lean 4 toolchain). Without it, the Rust implementation runs as a fallback, and both produce identical results (verified by 85 cross-validation tests).
+### IPC Bridge
+The Lean kernel runs as a persistent subprocess, communicating over stdin/stdout pipes. The wire protocol is: `rule_id(u8) + payload_len(u32 LE) + payload` → `result_len(u32 LE) + result`. The server is spawned automatically on first kernel call and stays alive for the process lifetime. Latency per rule call is ~microseconds — negligible versus the millisecond-scale evolution loop.
+
+### Metatheory
+47 theorems proven in Lean with zero `sorry` in the core rules. Key results: cost lattice properties, weakening, consistency (no derive-bottom, match exhaustiveness, type uniqueness). 86 cross-validation tests verify correspondence between the Lean kernel and the Rust `Theorem` wrapper.
 
 ### BLAKE3 Audit Chain
 Every self-modification (component deployment, rollback) is recorded in a tamper-evident BLAKE3 Merkle chain. Each entry's hash covers all fields; each entry's `prev_hash` links to the previous. Modifying any entry breaks the chain.
@@ -337,28 +344,28 @@ All 6 findings from the 2026-03-24 security audit have been resolved. See [docs/
 
 ### Kernel Safety
 
-The LCF proof kernel (at `src/iris-bootstrap/src/syntax/kernel/`) enforces zero `unsafe` blocks across all modules. The single exception is `lean_bridge`, which is explicitly `#[allow(unsafe_code)]` because it calls into Lean 4's C-compiled output via FFI.
+The proof kernel runs out-of-process in Lean, so no `unsafe` Rust is involved in kernel logic. The Rust `lean_bridge` module communicates via safe `std::process` and `std::io` — no FFI, no C shim, no `unsafe` blocks.
 
 ## Project Structure
 
 ```
 src/
   iris-types/          Core data structures (SemanticGraph, Value, types, cost, wire)
-  iris-bootstrap/      Bootstrap evaluator + syntax pipeline + proof kernel
-    src/syntax/        Lexer, parser, AST, lowering (merged from iris-syntax)
-    src/syntax/kernel/ LCF proof kernel (merged from iris-kernel)
-  iris-exec/           Execution shim, capabilities, effect runtime, registry
-  iris-evolve/         Evolution engine, improvement daemon
-  iris-clcu-sys/       FFI bindings to C CLCU interpreter
+  iris-bootstrap/      Bootstrap evaluator + syntax pipeline + kernel bridge
+    src/syntax/        Lexer, parser, AST, lowering
+    src/syntax/kernel/ Lean IPC bridge, Theorem type, checker, proof hashing
   bin/iris.rs          CLI binary (run, check, solve, daemon, repl)
+lean/
+  IrisKernel/          Lean 4 proof kernel (Types, Rules, Kernel, FFI, Properties)
+  IrisKernelServer.lean  IPC server (stdin/stdout, dispatches 20 rules)
+  lakefile.lean        Build config (produces iris-kernel-server binary)
 src/iris-programs/    Core .iris programs (19 categories)
 examples/             Demo .iris programs + Rust examples
   stdlib/             Standard library type modules (Option, Result, Either, Ordering)
 benchmark/             10 Computer Language Benchmarks Game implementations
 bootstrap/             Pre-compiled IRIS interpreter (JSON)
-lean/                  Lean 4 kernel formalization (47 theorems, 0 sorry)
 iris-clcu/             C CLCU interpreter (AVX-512 + scalar)
-tests/                 45+ test files (397+ tests)
+tests/                 45+ test files (329+ tests)
 docs/                  User guide, language reference, architecture, API, contributing
 site/                  Hugo-based documentation website (iris-lang.org)
 ```

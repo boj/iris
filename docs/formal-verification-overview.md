@@ -8,11 +8,11 @@ IRIS has three complementary verification systems:
 2. **BLAKE3 Merkle Audit Chain**: proves what happened (tamper-evident modification history)
 3. **ZK Proofs**: proves "I verified this program" without revealing the program itself
 
-## LCF Proof Kernel (4,130 LOC, permanent Rust)
+## Lean 4 Proof Kernel
 
 ### Architecture
 
-The kernel is an LCF-style (Logic of Computable Functions) proof system. The critical invariant: **`Theorem` values can only be constructed inside the kernel module**; `pub(crate)` fields prevent forgery from outside code.
+The kernel is written in Lean 4 (`lean/IrisKernel/`) and runs as an IPC subprocess. All 20 inference rules execute in Lean — the running code is the formal proof. The Rust side wraps results in opaque `Theorem` values (`pub(crate)` fields prevent forgery) with BLAKE3 proof hashes for audit trails. The LCF invariant holds: **`Theorem` values can only be constructed by the kernel bridge**, and the bridge only constructs them from Lean-validated judgments.
 
 Each theorem proves a judgment: `Γ ⊢ e : τ @ κ`
 

@@ -6,14 +6,19 @@ weight: 10
 
 ## Install {#install}
 
-IRIS is built with Rust. You'll need a recent Rust toolchain (1.75+).
+IRIS requires Rust and Lean 4:
+
+- **Rust** 1.75+ ([rustup](https://rustup.rs/))
+- **Lean 4** ([elan](https://github.com/leanprover/elan) or `nix-shell -p lean4` on NixOS)
+
+The proof kernel is written in Lean 4 and compiled to a native binary. Rust's build script invokes `lake build` automatically on first build.
 
 ```bash
 # Clone the repository
 git clone https://github.com/boj/iris.git
 cd iris
 
-# Build in release mode
+# Build (auto-compiles the Lean kernel server on first run)
 cargo build --release
 ```
 
@@ -142,26 +147,20 @@ No manual specs needed. The program improves itself from its own behavior. See [
 
 ## Build Options {#build-options}
 
-Several feature flags are available:
-
 ```bash
-# Default build (interpreter only)
+# Default build (evaluator + Lean kernel)
 cargo build --release
 
-# Enable JIT compilation (x86-64, W^X memory)
-cargo build --release --features jit
+# With syntax pipeline (parser, lowerer, type checker)
+cargo build --release --features syntax
 
-# Run all tests
-cargo test --features jit -- --skip evolution --skip convergence
-
-# Run benchmarks
-cargo bench --features jit
+# Run tests
+cargo test --features syntax
 ```
 
 | Feature | What it enables |
 |---------|-----------------|
-| `rust-scaffolding` | Full runtime (default ON): syntax, executor, evolution |
-| `jit` | JIT compiler: W^X x86-64 code generation via `mmap_exec` / `call_native` effects |
+| `syntax` | Parser, lowerer, type checker, kernel correspondence tests |
 
 ## What's Next {#next}
 

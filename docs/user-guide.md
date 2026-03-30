@@ -4,23 +4,21 @@
 
 ### Build from Source
 
-IRIS is a Rust workspace. Build with:
+IRIS requires Rust (1.75+) and Lean 4 (for the proof kernel). Build with:
 
 ```sh
 cargo build --release
 ```
 
-This produces the `iris` binary at `target/release/iris`.
+This produces the `iris` binary at `target/release/iris`. On first build, the Lean proof kernel server is compiled automatically via `lake build`.
 
-The workspace contains 5 crates:
+The workspace has 2 Rust crates + the Lean 4 kernel:
 
-| Crate | Purpose |
-|-------|---------|
-| `iris-types` | Core data structures: `SemanticGraph`, `Value`, types, cost bounds, wire format |
-| `iris-bootstrap` | Bootstrap evaluator + syntax pipeline (lexer, parser, lowerer) + LCF proof kernel |
-| `iris-exec` | Execution shim: capabilities, effect runtime, registry, service |
-| `iris-evolve` | Multi-objective evolution (NSGA-II), self-improvement daemon |
-| `iris-clcu-sys` | FFI bindings to the C CLCU interpreter (AVX-512) |
+| Component | Purpose |
+|-----------|---------|
+| `iris-types` (Rust) | Core data structures: `SemanticGraph`, `Value`, types, cost bounds, wire format |
+| `iris-bootstrap` (Rust) | Bootstrap evaluator + syntax pipeline (lexer, parser, lowerer) + kernel IPC bridge |
+| `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, runs as IPC subprocess |
 
 ### Your First Program
 

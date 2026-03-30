@@ -4,7 +4,7 @@
 
 IRIS is a self-improving programming language designed around evolutionary program synthesis. Programs are represented as content-addressed semantic graphs, evolved via multi-objective optimization, verified by an LCF-style proof kernel, and executed through a tiered evaluator pipeline: tree-walker → flat evaluator → native x86-64 AVX codegen, all with capability-guarded effects.
 
-The system is implemented as a Rust workspace (5 crates, ~51K LOC) with a C library (`iris-clcu/`) for vectorized execution, and 256 `.iris` programs (34K+ LOC) covering all system components.
+The permanent substrate is 2 Rust crates (`iris-types`, `iris-bootstrap`) plus a Lean 4 proof kernel that runs as an IPC subprocess. Everything else — evolution, mutation, compilation, codec, deploy, LSP — is `.iris` programs.
 
 ---
 

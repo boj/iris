@@ -1,32 +1,32 @@
-# IRIS Proof Kernel — Lean 4 Formalization
+# IRIS Proof Kernel — Lean 4
 
-Lean 4 formalization of the IRIS proof kernel's 20 inference rules and their metatheoretic properties.
+The IRIS proof kernel, implemented in Lean 4. This is not a formalization of a separate kernel — it IS the kernel. The Lean code compiles to a native binary (`iris-kernel-server`) that runs as an IPC subprocess, processing all 20 inference rules. The running code is the formal proof.
 
 ## What's formalized
 
 ### Core types (`IrisKernel/Types.lean`)
 
-| Lean type | Rust source | Description |
+| Lean type | Rust mirror | Description |
 |-----------|-------------|-------------|
-| `NodeId` | `iris-repr/src/graph.rs::NodeId` | 64-bit content-addressed node identity |
-| `BinderId` | `iris-repr/src/graph.rs::BinderId` | Binder identifier for lambda/let-rec |
-| `TypeId` | `iris-repr/src/types.rs::TypeId` | 64-bit content-addressed type identity |
-| `BoundVar` | `iris-repr/src/types.rs::BoundVar` | De Bruijn bound variable index |
-| `Tag` | `iris-repr/src/types.rs::Tag` | Sum-type variant tag |
-| `CostVar` | `iris-repr/src/cost.rs::CostVar` | Variable in cost expressions |
-| `NodeKind` | `iris-repr/src/graph.rs::NodeKind` | 20-variant node kind enum |
-| `CostBound` | `iris-repr/src/cost.rs::CostBound` | 11 cost bound variants (omits `Amortized`, `HWScaled`) |
-| `PrimType` | `iris-repr/src/types.rs::PrimType` | 7 primitive type tags |
-| `TypeDef` | `iris-repr/src/types.rs::TypeDef` | 11 type definition variants |
-| `TypeEnv` | `iris-repr/src/types.rs::TypeEnv` | Type environment (list of (TypeId, TypeDef)) |
-| `Binding` | `iris-kernel/src/theorem.rs::Binding` | Context binding (name + type) |
-| `Context` | `iris-kernel/src/theorem.rs::Context` | Typing context (list of bindings) |
-| `Judgment` | `iris-kernel/src/theorem.rs::Judgment` | Typing judgment `Γ ⊢ e : τ @ κ` |
-| `CostLeq` | `iris-kernel/src/cost_checker.rs::cost_leq` | Cost partial order as inductive Prop |
+| `NodeId` | `iris_types::graph::NodeId` | 64-bit content-addressed node identity |
+| `BinderId` | `iris_types::graph::BinderId` | Binder identifier for lambda/let-rec |
+| `TypeId` | `iris_types::types::TypeId` | 64-bit content-addressed type identity |
+| `BoundVar` | `iris_types::types::BoundVar` | De Bruijn bound variable index |
+| `Tag` | `iris_types::types::Tag` | Sum-type variant tag |
+| `CostVar` | `iris_types::cost::CostVar` | Variable in cost expressions |
+| `NodeKind` | `iris_types::graph::NodeKind` | 20-variant node kind enum |
+| `CostBound` | `iris_types::cost::CostBound` | 13 cost bound variants (incl. `Amortized`, `HWScaled`) |
+| `PrimType` | `iris_types::types::PrimType` | 7 primitive type tags |
+| `TypeDef` | `iris_types::types::TypeDef` | 11 type definition variants |
+| `TypeEnv` | `iris_types::types::TypeEnv` | Type environment (list of (TypeId, TypeDef)) |
+| `Binding` | `iris_bootstrap::syntax::kernel::theorem::Binding` | Context binding (name + type) |
+| `Context` | `iris_bootstrap::syntax::kernel::theorem::Context` | Typing context (list of bindings) |
+| `Judgment` | `iris_bootstrap::syntax::kernel::theorem::Judgment` | Typing judgment `Γ ⊢ e : τ @ κ` |
+| `CostLeq` | `iris_bootstrap::syntax::kernel::cost_checker::cost_leq` | Cost partial order as inductive Prop |
 
 ### Inference rules (`IrisKernel/Rules.lean`)
 
-All 20 rules from `iris-kernel/src/kernel.rs` are formalized as constructors of an inductive `Derivation` type:
+All 20 rules are implemented as executable functions in `Kernel.lean` and exported via C FFI in `FFI.lean`. They are also formalized as constructors of an inductive `Derivation` type in `Rules.lean` for proving metatheory:
 
 | # | Constructor | Rust method | Type-theoretic counterpart |
 |---|-------------|-------------|----------------------------|
@@ -120,18 +120,34 @@ Theorems with `sorry`:
 | `Types.lean` | 0 | All definitions are complete |
 | `Rules.lean` | 0 | All 20 inference rules fully defined |
 
-## Correspondence with Rust code
+## Architecture
 
-| Lean file | Rust source |
-|-----------|-------------|
-| `IrisKernel/Types.lean` | `iris-repr/src/graph.rs`, `iris-repr/src/types.rs`, `iris-repr/src/cost.rs`, `iris-kernel/src/theorem.rs` |
-| `IrisKernel/Rules.lean` | `iris-kernel/src/kernel.rs` (the 20 `Kernel::*` methods) |
-| `IrisKernel/Properties.lean` | Metatheory (no direct Rust counterpart) |
-| `IrisKernel/Consistency.lean` | Metatheory (no direct Rust counterpart) |
+The kernel runs as an IPC server (`IrisKernelServer.lean`), spawned by Rust's `lean_bridge.rs` on first use. Communication is over stdin/stdout pipes:
 
-### Simplifications from the Rust implementation
+```
+Request:  rule_id(u8) + payload_len(u32 LE) + payload bytes
+Response: result_len(u32 LE) + result bytes
+```
 
-1. **`CostBound`** — Omits `Amortized` (requires opaque `PotentialFn`) and `HWScaled` (requires opaque `HWParamRef`). These are runtime concepts not relevant to the type-theoretic formalization.
+The server dispatches rule IDs 1-20 to the corresponding `Kernel.*` function, serializes the result `Judgment` (or error), and writes it back. Rule 0 is `checkCostLeq`. Rule 255 is shutdown.
+
+### File layout
+
+| Lean file | Role |
+|-----------|------|
+| `IrisKernel/Types.lean` | Core types mirroring `iris-types` |
+| `IrisKernel/Rules.lean` | Inductive `Derivation` (specification) |
+| `IrisKernel/Kernel.lean` | Executable `def` functions (implementation) |
+| `IrisKernel/KernelCorrectness.lean` | Proofs: executable = specification |
+| `IrisKernel/FFI.lean` | `@[export]` C-callable wrappers + wire format |
+| `IrisKernel/Eval.lean` | Cost checker, LIA evaluator |
+| `IrisKernel/Properties.lean` | Metatheory (weakening, cost lattice) |
+| `IrisKernel/Consistency.lean` | Metatheory (uniqueness, exhaustiveness) |
+| `IrisKernelServer.lean` | IPC server (stdin/stdout dispatch loop) |
+
+### Simplifications from the Rust types
+
+1. **`CostBound`** — `Amortized` and `HWScaled` are included in the wire format but treated conservatively (transparent to inner cost) since their runtime-specific fields are opaque.
 
 2. **`TypeDef.Refined`** — The refinement predicate (`LIAFormula`) is abstracted away. The Lean formalization tracks that a refinement type wraps a base type, but does not model the predicate logic.
 
@@ -147,20 +163,27 @@ Theorems with `sorry`:
 
 ## How to build
 
-Requires [Lean 4](https://leanprover.github.io/lean4/doc/setup.html) and [Lake](https://github.com/leanprover/lean4/tree/master/src/lake) (ships with Lean 4).
+Requires [Lean 4](https://leanprover.github.io/lean4/doc/setup.html) (ships with Lake). On NixOS, `nix-shell -p lean4` works.
 
 ```bash
 cd lean/
+
+# Build the IPC server binary
+lake build iris-kernel-server
+# Binary at: .lake/build/bin/iris-kernel-server
+
+# Build just the library (for proofs/checking)
 lake build
 ```
 
-The build will report any `sorry` markers. These are documented above and in the source files.
+`cargo build` in the root automatically invokes `lake build iris-kernel-server` if the binary doesn't exist yet. You don't need to build Lean manually for normal development.
 
-## Architecture notes
+## Design: why Lean, not Rust
 
-The Lean formalization replaces the LCF architecture (opaque `Theorem` type + trusted kernel module) with a natural deduction-style inductive `Derivation` type. This is a standard approach in proof assistants:
+In a self-improving system, the proof kernel is the trust anchor — the one component that must never be wrong, because everything else (mutations, evolutions, deployments) is gated through it. A bug in the kernel silently invalidates all guarantees.
 
-- In Rust (LCF style): only `kernel.rs` can construct `Theorem` values; the `pub(crate)` visibility enforces this.
-- In Lean: `Derivation` is an inductive Prop whose constructors ARE the inference rules. A value of type `Derivation env Γ n τ κ` can only be built by applying these constructors — Lean's kernel enforces this.
+Rust gives you memory safety, but not logical correctness. You can write a type checker in Rust that compiles, passes tests, and still has a subtle soundness hole (e.g., the original rule 19 `type_app` didn't check well-formedness of substituted types). Tests can miss edge cases. Code review can miss edge cases. Only a proof can't miss edge cases.
 
-Both approaches achieve the same guarantee: every proven judgment was derived by a valid sequence of inference rule applications.
+Lean 4 is both a proof assistant and a compiled language. The `Derivation` inductive type's constructors ARE the inference rules — Lean's kernel (which is itself proven correct) guarantees that every value of type `Derivation` was built by valid rule application. The executable `Kernel.lean` functions are proven to correspond to this specification. When the code compiles, the proofs hold. When the proofs hold, the kernel is correct.
+
+The Rust side handles everything that doesn't need to be proven: process management, wire format encoding, BLAKE3 hashing, the opaque `Theorem` wrapper. The trust boundary is narrow and explicit.

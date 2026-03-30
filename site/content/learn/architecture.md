@@ -127,7 +127,7 @@ See the [Verification](/learn/verification/) page for a deep dive into the proof
 
 - **LCF-style** -- proofs can only be constructed through the kernel's API; no external code can forge a `Theorem` value
 - **Refinement types** -- predicates on types: `{x: Int | x > 0}`
-- **Cost annotations** -- asymptotic bounds as evolution fitness objectives
+- **Cost annotations** -- asymptotic bounds verified by the proof kernel (warnings at Tier 0/1, hard errors at Tier 2+) and used as evolution fitness objectives
 - **Lean 4 formalization** -- the 20 rules are mirrored in Lean 4 with consistency proofs
 
 ## Execution (L3) {#execution}
@@ -166,12 +166,10 @@ Key properties:
 
 ## Crate Map {#crates}
 
-The Rust runtime is organized into 5 crates:
+The permanent substrate is 2 Rust crates + the Lean 4 kernel:
 
-| Crate | Purpose |
-|-------|---------|
-| `iris-types` | SemanticGraph, types, values, wire format |
-| `iris-bootstrap` | Bootstrap evaluator + syntax pipeline + LCF proof kernel |
-| `iris-exec` | Execution shim, capabilities, effect runtime |
-| `iris-evolve` | Evolution engine, improvement pipeline |
-| `iris-clcu-sys` | FFI bindings to C CLCU (AVX-512) |
+| Component | Purpose |
+|-----------|---------|
+| `iris-types` (Rust) | SemanticGraph, types, values, wire format |
+| `iris-bootstrap` (Rust) | Bootstrap evaluator + syntax pipeline + kernel bridge |
+| `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, runs as IPC subprocess |

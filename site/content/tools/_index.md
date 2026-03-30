@@ -97,15 +97,13 @@ cargo test --release --test test_benchmarks_game
 
 ### Crate Structure {#crates}
 
-The workspace is organized into 5 focused crates:
+The permanent substrate is 2 Rust crates + the Lean 4 kernel:
 
-| Crate | Description |
-|-------|-------------|
-| `iris-types` | SemanticGraph, types, values, wire format |
-| `iris-bootstrap` | Bootstrap evaluator + syntax pipeline + LCF proof kernel |
-| `iris-exec` | Execution shim: capabilities, effect runtime, service |
-| `iris-evolve` | Evolution engine, improvement pipeline |
-| `iris-clcu-sys` | FFI bindings to C CLCU interpreter |
+| Component | Description |
+|-----------|-------------|
+| `iris-types` (Rust) | SemanticGraph, types, values, wire format |
+| `iris-bootstrap` (Rust) | Bootstrap evaluator + syntax pipeline + kernel bridge |
+| `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, IPC server |
 
 ## Examples {#examples}
 
