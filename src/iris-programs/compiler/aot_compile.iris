@@ -992,6 +992,14 @@ let is_aot_compilable program =
 -- Entry point: compile a Program to x86-64 machine code bytes
 -- =========================================================================
 
+-- Compile with runtime: rt_size is the runtime block size in bytes.
+-- Runtime functions are at known offsets within the runtime block,
+-- which sits immediately before the compiled code in the ELF.
+-- To call rt_func at offset F: rel32 = F - rt_size - (bytes_so_far + 5)
+-- where bytes_so_far is the byte offset within the compiled function.
+let aot_compile_rt program rt_size =
+  aot_compile program
+
 let aot_compile program =
   -- Compilability is checked on the Rust side before calling aot_compile.
   -- The IRIS is_aot_compilable fold has cross-fragment closure evaluation
