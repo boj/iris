@@ -114,10 +114,12 @@ int main(int argc, char **argv) {
         if (tokens && tokens->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", tokens->tuple.len);
         fprintf(stderr, "\n");
 
-        /* Load and run parser */
+        /* Load and run parser (expects (tokens, source_string) as input) */
         iris_graph_t *par = iris_graph_load_json("bootstrap/parser.json");
         if (!par) { fprintf(stderr, "error: cannot load parser.json\n"); return 1; }
-        iris_value_t *ast = iris_eval_graph(par, tokens);
+        iris_value_t *parser_elems[2] = { tokens, src_val };
+        iris_value_t *parser_input = iris_tuple(parser_elems, 2);
+        iris_value_t *ast = iris_eval_graph(par, parser_input);
         fprintf(stderr, "ast: tag=%d", ast ? ast->tag : -1);
         if (ast && ast->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", ast->tuple.len);
         fprintf(stderr, "\n");
