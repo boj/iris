@@ -1,124 +1,311 @@
 ---
 title: "Tutorial"
-description: "Build a program from scratch: write, verify, evolve, deploy, and improve automatically."
+description: "Learn the language from first principles, then evolve and improve a program."
 weight: 20
 ---
 
-This tutorial walks through writing a program, verifying it, evolving alternatives, deploying it, and running it with observation-driven improvement.
+This tutorial teaches IRIS by building up from simple expressions to a complete program that evolves itself. No prior functional programming experience is required.
 
-> **Note:** This tutorial uses the short form `iris` to invoke the CLI. If you haven't installed IRIS to your PATH, substitute `cargo run --release --bin iris --` for `iris` in all commands below. See [Getting Started](/learn/get-started/) for build instructions.
+> **Note:** This tutorial uses `iris` to invoke the CLI. If you haven't installed IRIS to your PATH, substitute `cargo run --release --bin iris --` for `iris` in all commands below. See [Getting Started](/learn/get-started/) for build instructions.
 
-## Step 1: Write a Specification {#spec}
+---
 
-Create a file `src/iris-programs/my_service/spec.iris` that defines what we want: a function that computes the sum of integers from 0 to n-1.
+## Part 1: The Language {#language}
+
+### Values and Let Bindings {#values}
+
+The simplest IRIS program is an expression:
 
 ```iris
--- Sum a list of integers.
--- test: 0 -> 0
--- test: 1 -> 0
--- test: 2 -> 1
--- test: 3 -> 3
--- test: 4 -> 6
--- test: 5 -> 10
--- test: 10 -> 45
-let sum_to n : Int -> Int [cost: Linear(n)] = fold 0 (+) n
+42
 ```
 
-The `-- test: <inputs> -> <output>` comments define the specification. Each line provides input(s) and the expected output, separated by `->`. Multiple inputs are comma-separated.
-
-## Step 2: Write the Program {#write}
-
-Create `src/iris-programs/my_service/service.iris`:
+`let` binds a name to a value. The `in` keyword introduces the expression that uses the binding:
 
 ```iris
--- A service that computes various reductions over integer ranges.
+let x = 10 in x + 1    -- 11
+```
 
+You can chain bindings. Each `let..in` introduces a name that the next expression can use:
+
+```iris
+let width = 5 in
+let height = 3 in
+width * height    -- 15
+```
+
+### Functions {#functions}
+
+Define a function with `let`, listing parameters after the name:
+
+```iris
+let double n = n * 2
+```
+
+Call it by writing the function name followed by its argument:
+
+```iris
+double 5    -- 10
+```
+
+Functions can take multiple parameters:
+
+```iris
+let add a b = a + b
+
+add 3 4    -- 7
+```
+
+### Type Annotations {#types}
+
+Type annotations are optional, but they document what a function expects and returns. The syntax is `: InputType -> OutputType` after the parameters:
+
+```iris
+let double n : Int -> Int = n * 2
+```
+
+This says `double` takes an `Int` and returns an `Int`. Multiple parameters chain with `->`:
+
+```iris
+let add a b : Int -> Int -> Int = a + b
+```
+
+Read this left to right: takes an `Int`, takes another `Int`, returns an `Int`.
+
+### Conditionals {#conditionals}
+
+`if..then..else` works like you'd expect, but both branches must return a value (there are no statements, only expressions):
+
+```iris
+let abs n : Int -> Int =
+  if n < 0 then 0 - n
+  else n
+```
+
+### Recursion {#recursion}
+
+Use `let rec` for functions that call themselves:
+
+```iris
+let rec factorial n : Int -> Int =
+  if n <= 1 then 1
+  else n * factorial (n - 1)
+```
+
+Parentheses around `(n - 1)` are needed so IRIS reads it as one argument, not as `factorial n` minus `1`.
+
+### Tuples {#tuples}
+
+Tuples are the universal container. They hold any number of values of any type:
+
+```iris
+let point = (1, 2, 3)
+let pair = ("hello", 42)
+let empty = ()
+```
+
+Access elements by position with `.0`, `.1`, etc.:
+
+```iris
+let x = point.0    -- 1
+let y = point.1    -- 2
+```
+
+### Lambdas {#lambdas}
+
+A lambda is an anonymous function. The syntax is `\param -> body`:
+
+```iris
+let add_one = \x -> x + 1
+
+add_one 5    -- 6
+```
+
+Lambdas are most useful when passed to other functions, as you'll see next.
+
+### Fold: Iteration Without Loops {#fold}
+
+IRIS has no `for` or `while` loops. Instead, it has `fold`, which processes a collection one element at a time, accumulating a result.
+
+`fold` takes three arguments:
+
+1. An **initial value** (the accumulator starts here)
+2. A **function** that takes the current accumulator and the next element, and returns the new accumulator
+3. A **collection** to iterate over
+
+```iris
+-- Sum the numbers (1, 2, 3, 4, 5)
+fold 0 (\acc x -> acc + x) (1, 2, 3, 4, 5)    -- 15
+```
+
+Step by step:
+- Start with `acc = 0`
+- Element `1`: `acc = 0 + 1 = 1`
+- Element `2`: `acc = 1 + 2 = 3`
+- Element `3`: `acc = 3 + 3 = 6`
+- Element `4`: `acc = 6 + 4 = 10`
+- Element `5`: `acc = 10 + 5 = 15`
+
+The shorthand `(+)` wraps an operator as a function, so these are equivalent:
+
+```iris
+fold 0 (\acc x -> acc + x) xs
+fold 0 (+) xs
+```
+
+You can fold over anything. Count elements, find a maximum, build a new tuple:
+
+```iris
+-- Count elements
+fold 0 (\acc _ -> acc + 1) (10, 20, 30)    -- 3
+
+-- Find the maximum
+fold 0 (\acc x -> if x > acc then x else acc) (3, 7, 2, 9, 1)    -- 9
+```
+
+### Custom Types {#custom-types}
+
+Define your own types with `type`. The simplest form is an **enum** with named alternatives separated by `|`:
+
+```iris
+type Color = Red | Green | Blue
+```
+
+Variants can carry data:
+
+```iris
+type Option = Some(Int) | None
+```
+
+`Some` is a constructor that wraps a value. `None` is a bare constructor with no data. Use `match` to inspect which variant you have:
+
+```iris
+let describe x =
+  match x with
+  | Some(v) -> v
+  | None -> 0
+```
+
+`match` checks each pattern top to bottom and executes the first one that fits. The variable `v` inside `Some(v)` binds to whatever value was wrapped.
+
+Here's a more complete example -- a safe division function that returns `None` instead of crashing on divide-by-zero:
+
+```iris
+type Option = Some(Int) | None
+
+let safe_div a b : Int -> Int -> Option =
+  if b == 0 then None
+  else Some (a / b)
+
+let result = safe_div 10 3    -- Some(3)
+let bad = safe_div 10 0       -- None
+```
+
+### The Pipe Operator {#pipe}
+
+The pipe `|>` passes a value as the last argument to the next function. It turns nested calls inside out into a readable left-to-right chain:
+
+```iris
+-- Without pipe (read inside out)
+fold 0 (+) (filter (\x -> x > 0) xs)
+
+-- With pipe (read left to right)
+xs |> filter (\x -> x > 0) |> fold 0 (+)
+```
+
+Both compile to the same thing. Use whichever reads better.
+
+### Imports {#imports}
+
+Pull in other modules with `import`:
+
+```iris
+import "stdlib/option.iris" as Opt
+
+let x = Some 42
+let val = unwrap_or x 0    -- 42
+```
+
+The import makes all the module's definitions available. Paths are relative to the importing file. See the [Standard Library](/learn/stdlib/) for what's included.
+
+### Contracts {#contracts}
+
+`requires` and `ensures` state what must be true before and after a function runs. The verifier checks these automatically:
+
+```iris
+let safe_div a b : Int -> Int -> Int
+  requires b != 0
+  ensures result >= 0
+  = a / b
+```
+
+`requires b != 0` means callers must guarantee `b` isn't zero. `ensures result >= 0` means the function guarantees its output is non-negative. These aren't just comments -- `iris check` proves them.
+
+### Cost Annotations {#costs}
+
+Cost annotations declare a function's computational complexity:
+
+```iris
+let sum_to n : Int -> Int [cost: Linear(n)] =
+  fold 0 (+) (list_range 0 n)
+```
+
+`[cost: Linear(n)]` declares that this function's cost is at most O(n). The verifier checks that the proven cost (derived from the expression structure) does not exceed the declared bound. Overestimating is accepted; underestimating produces a warning or error. Available costs include `Zero`, `Const(k)`, `Linear(n)`, `NLogN(n)`, and `Polynomial(n, d)`. See the [Type System](/learn/type-system/#costs) for the full list.
+
+---
+
+## Part 2: Verify a Program {#verify}
+
+Now let's use the features from Part 1 together. Create a file called `my_math.iris`:
+
+```iris
 -- Sum of integers from 0 to n-1
 let sum_to n : Int -> Int [cost: Linear(n)]
   requires n >= 0
   ensures result >= 0
-  = fold 0 (+) n
+  = fold 0 (+) (list_range 0 n)
 
 -- Product of integers from 1 to n (factorial)
 let product_to n : Int -> Int [cost: Linear(n)]
   requires n >= 0
-  = fold 1 (\acc i -> acc * (i + 1)) n
+  = fold 1 (\acc i -> acc * (i + 1)) (list_range 0 n)
 
 -- Maximum of integers from 0 to n-1
 let max_of n : Int -> Int [cost: Linear(n)]
   requires n >= 1
-  = fold 0 (\acc i -> if i > acc then i else acc) n
-
--- Define an operation type instead of using integer codes
-type Operation = Sum | Product | Max
-
--- Entry point: dispatch based on named operation
-let main op n : Int -> Int -> Int [cost: Linear(n)] =
-  match op with
-  | Sum -> sum_to n
-  | Product -> product_to n
-  | Max -> max_of n
-  | _ -> 0
+  = fold 0 (\acc i -> if i > acc then i else acc) (list_range 0 n)
 ```
 
-Each variant of `Operation` is a named constructor. The compiler verifies exhaustiveness, so if you add a new variant, you must handle it.
-
-### Using Struct Types {#tutorial-structs}
-
-Struct types give named fields to tuples, improving readability without runtime cost:
-
-```iris
--- Define a struct for service configuration
-type Config = { operation: Operation, count: Int }
-
--- Construct with named fields
-let default_config : Config = { operation = Sum, count = 10 }
-
--- Access fields by name
-let result = main default_config.operation default_config.count
-```
-
-Structs are sugar over tuples: `{ operation = Sum, count = 10 }` compiles to `(Sum, 10)`, and `.operation` resolves to `.0` at compile time.
-
-## Step 3: Verify {#verify}
-
-Run the type checker to verify correctness:
+Run the verifier:
 
 ```bash
-iris check src/iris-programs/my_service/service.iris
+iris check my_math.iris
 ```
-
-Expected output:
 
 ```
 [OK] sum_to: 5/5 obligations satisfied (score: 1.00)
 [OK] product_to: 4/4 obligations satisfied (score: 1.00)
 [OK] max_of: 4/4 obligations satisfied (score: 1.00)
-[OK] main: 6/6 obligations satisfied (score: 1.00)
-All 4 definitions verified.
+All 3 definitions verified.
 ```
 
-## Step 4: Test {#test}
+Each obligation is a type check, contract, or cost annotation that the verifier checked. For cost annotations, the checker confirms that the proven expression cost does not exceed the declared bound. A score of `1.00` means all passed. If a contract or cost bound were violated, the output would tell you which obligation failed and why.
 
-Run the service via `main`, which dispatches on the operation type:
+Run the program:
 
 ```bash
-iris run src/iris-programs/my_service/service.iris Sum 10    # main Sum 10 -> sum_to 10 = 45
-iris run src/iris-programs/my_service/service.iris Product 5 # main Product 5  -> product_to 5 = 120
-iris run src/iris-programs/my_service/service.iris Max 10    # main Max 10 -> max_of 10 = 9
+iris run my_math.iris 10       -- calls sum_to by default: 45
 ```
 
-Or call the individual functions directly:
+---
 
-```bash
-iris run src/iris-programs/my_service/sum_to.iris 10       # 45
-iris run src/iris-programs/my_service/product_to.iris 5    # 120
-iris run src/iris-programs/my_service/max_of.iris 10       # 9
-```
+## Part 3: Evolve a Solution {#evolve}
 
-## Step 5: Evolve an Alternative {#evolve}
+So far you've written programs by hand. IRIS can also **evolve** programs from a specification -- you describe what the function should do with test cases, and the evolution engine breeds a program that satisfies them.
 
-Create a specification file with test cases:
+### Write a Spec {#spec}
+
+Create a file called `sum_spec.iris` with input/output test cases:
 
 ```iris
 -- test: 0 -> 0
@@ -131,13 +318,13 @@ Create a specification file with test cases:
 -- test: 100 -> 4950
 ```
 
-Save as `src/iris-programs/my_service/evolve_spec.iris` and run:
+Each line defines: given this input, the function should produce this output. The pattern here is the sum of integers from 0 to n-1 (same as `sum_to` from Part 2), but you don't tell the solver *how* to compute it -- only *what* the answers should be.
+
+### Run the Solver {#solve}
 
 ```bash
-iris solve src/iris-programs/my_service/evolve_spec.iris
+iris solve sum_spec.iris
 ```
-
-The solver generates candidates, scores them on correctness, performance, and verifiability, and reports the best:
 
 ```
 Evolving solution from 8 test cases...
@@ -146,32 +333,104 @@ Best fitness: correctness=1.0000, performance=0.9800, verifiability=0.9000
 Best program: 3 nodes, 2 edges
 ```
 
-## Step 6: Deploy {#deploy}
+The solver uses an evolutionary algorithm (NSGA-II) that:
 
-### As Deployable Rust Source {#deploy-rust}
+1. **Generates** a population of random candidate programs
+2. **Scores** each candidate on three objectives: correctness (does it match the test cases?), performance (how fast is it?), and verifiability (can the proof kernel verify it?)
+3. **Selects** the best candidates and mutates them to produce a new generation
+4. **Repeats** until it finds a solution or hits the time budget
+
+The result -- `3 nodes, 2 edges` -- is a SemanticGraph (IRIS's internal program representation). It's not text you'd read; it's a data structure the runtime executes directly.
+
+### Multiple Inputs {#multi-input}
+
+Specs support multiple inputs with tuple syntax:
+
+```iris
+-- test: (3, 4) -> 7
+-- test: (0, 0) -> 0
+-- test: (10, 5) -> 15
+```
+
+---
+
+## Part 4: Observation-Driven Improvement {#improve}
+
+Evolution from specs is powerful, but it requires you to write test cases up front. **Observation-driven improvement** skips that step: you run a program normally, and IRIS watches what it does, builds test cases from real behavior, evolves faster versions, and swaps them in -- all automatically.
+
+### Run with `--improve` {#run-improve}
+
+Take the `my_math.iris` program from Part 2 and run it with the `--improve` flag:
 
 ```bash
-iris deploy src/iris-programs/my_service/service.iris -o my_service.rs
-rustc --edition 2021 -O my_service.rs -o my_service
+iris run --improve my_math.iris 10000
 ```
 
-This generates a self-contained Rust file with the bootstrap evaluator embedded.
+```
+[improve] daemon started: min_traces=50, threshold=2.0x, budget=5s
+45
+[improve] attempting sum_to (73 test cases, avg 124.3us)
+[improve] deployed sum_to (124.3us -> 68.1us, 45% faster)
 
-### As a Shared Library {#deploy-shared}
-
-The `deploy_shared_lib` API generates a `.so` that exports:
-
-```c
-int64_t iris_invoke(int64_t* inputs, size_t num_inputs, int64_t* output);
+[improve] 1 improvement(s) deployed:
+  sum_to -- 124.3us -> 68.1us
 ```
 
-## Step 7: Run with Observation-Driven Improvement {#improve}
+Here's what happened:
 
-The `--improve` flag enables automatic optimization: the runtime traces function calls, builds test cases from observed I/O, evolves faster implementations, and hot-swaps them in.
+1. The program ran normally and produced its answer (`45`)
+2. In the background, a daemon **traced** function calls, recording inputs and outputs
+3. Once it had enough traces (50 by default), it used them as test cases and **evolved** a faster version
+4. The faster version passed two gates: it produces identical outputs on all traces (equivalence gate), and it's no more than 2x slower (performance gate)
+5. The daemon **hot-swapped** the improved version into the running program
+
+### What Gets Saved {#saved}
+
+The improved version is saved to a persistent **fragment cache** at `~/.iris/fragments/`:
+
+```
+~/.iris/fragments/
+  manifest.json            # maps function names to their best version
+  861059f04935ef6e.frag    # gen 0: the original compiled version
+  24c8b7c66a95e4fc.frag    # gen 1: the evolved replacement
+```
+
+Every version is identified by its **BLAKE3 hash** -- a content-addressed fingerprint derived entirely from the program's structure. Two structurally identical programs always get the same hash, regardless of when they were compiled. This means:
+
+- **Deduplication**: identical programs share one file
+- **Integrity**: loading a fragment verifies its hash matches
+- **No conflicts**: different versions coexist, addressed by hash
+
+### Rerun with the Improved Version {#rerun}
+
+Now run the same program again, *without* `--improve`:
 
 ```bash
-iris run --improve --improve-threshold 2.0 myservice.iris
+iris run my_math.iris 10000
 ```
+
+```
+[cache] loaded improved 'sum_to' (gen 1, 24c8b7c66a95e4fc)
+[cache] 1 function(s) loaded from ~/.iris/fragments
+45
+```
+
+Same input, same output -- but the runtime automatically loaded the evolved version from the cache. No `--improve` flag needed. The program is faster and you didn't change a line of code.
+
+### Generational Improvement {#generations}
+
+Each run builds on the previous best. Run with `--improve` again and the daemon starts from the already-improved version, potentially evolving something even better:
+
+```
+Gen 0: compile from source      -> original
+Gen 1: evolve, save to cache    -> 2.8x faster
+Gen 2: load gen 1, evolve again -> potentially faster still
+Gen 3: load gen 2, evolve again -> ...
+```
+
+Old versions are never deleted. Every generation's fragment stays in the cache, enabling rollback if needed.
+
+### Improvement Options {#options}
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -181,169 +440,14 @@ iris run --improve --improve-threshold 2.0 myservice.iris
 | `--improve-sample-rate` | `0.01` | Fraction of calls to trace (1%) |
 | `--improve-budget` | `5` | Max seconds per evolution attempt |
 
-See the [Evolution & Improvement guide](/learn/daemon/) for the full pipeline, benchmarked results, and usage patterns.
+---
 
-## Step 8: Import and Use Standard Library Types {#imports}
+## What's Next {#next}
 
-Type modules define common algebraic data types. Import
-them with path-based imports to get safe error handling and structured values.
+You've now seen the core loop: write a program, verify it, evolve alternatives, and let the runtime improve it over time.
 
-### Using Option for safe lookups {#import-option}
-
-```iris
-import "stdlib/option.iris" as Opt
-
--- Safe division that returns None on divide-by-zero
-let safe_div a b : Int -> Int -> Option =
-  if b == 0 then None
-  else Some (a / b)
-
--- Chain safe operations
-let compute a b c : Int -> Int -> Int -> Int =
-  let step1 = safe_div a b in
-  let step2 = and_then step1 (\v -> safe_div v c) in
-  unwrap_or step2 0
-```
-
-### Using Result for error propagation {#import-result}
-
-```iris
-import "stdlib/result.iris" as Res
-
-let parse_positive n : Int -> Result =
-  if n > 0 then Ok n
-  else Err n
-
-let double_positive n : Int -> Result =
-  and_then (parse_positive n) (\v -> Ok (v * 2))
-
-unwrap_or (double_positive 5) 0    -- 10
-unwrap_or (double_positive (0 - 3)) 0  -- 0
-```
-
-### Using Ordering for comparisons {#import-ordering}
-
-```iris
-import "stdlib/ordering.iris" as Ord
-
-let clamp_to_range lo hi x : Int -> Int -> Int -> Int =
-  let cmp_lo = compare x lo in
-  let cmp_hi = compare x hi in
-  if is_lt cmp_lo then lo
-  else if is_gt cmp_hi then hi
-  else x
-```
-
-### Cross-Import Higher-Order Functions {#import-hof}
-
-Imported modules export higher-order functions that accept lambdas defined in
-your module. This pattern chains computations by passing local `\`-lambdas to
-imported HOFs like `Opt.and_then` and `Opt.map`:
-
-```iris
-import "stdlib/option.iris" as Opt
-
--- Safe division returning Option
-let safe_div a b : Int -> Int -> Option =
-  if b == 0 then None
-  else Some(a / b)
-
--- Chain computations using imported HOFs with local lambdas
-let compute x : Int -> Option =
-  let step1 = safe_div 100 x in
-  let step2 = Opt.and_then step1 (\v ->
-    if v > 10 then Some(v - 10) else None) in
-  Opt.map step2 (\v -> v * 2)
-```
-
-Lambdas (`\v -> ...`) defined in your module work correctly when passed to
-functions imported from another module. Closures capture their defining
-environment regardless of where the higher-order function lives.
-
-Import paths are resolved relative to the importing file. All `let` and `type`
-declarations, including constructors like `Some`, `None`, `Ok`, `Err`, are
-brought into scope automatically. See the [Language Guide: Imports](/learn/language/#imports) for details.
-
-## Program Patterns {#patterns}
-
-### Self-Modifying Programs {#pattern-self-modify}
-
-Programs can inspect and modify their own graph at runtime. Here, `test_cases` is a tuple of `(input, expected_output)` pairs that the program uses to score itself and its modifications:
-
-```iris
--- test_cases: ((1, 1), (2, 4), (3, 9), ...)
--- Each pair is (input, expected_output).
-let self_improve test_cases : Tuple -> Int =
-  let program = self_graph () in           -- capture own graph
-  let score = graph_eval program test_cases in
-  let root = graph_get_root program in
-  let modified = graph_set_prim_op program root 0x02 in  -- try mul
-  let new_score = graph_eval modified test_cases in
-  if new_score > score then new_score      -- keep if better
-  else score
-```
-
-Running it:
-
-```bash
-iris run self_improve.iris '((1,1),(2,4),(3,9),(4,16))'
-```
-
-### Capability-Restricted Modules {#pattern-capabilities}
-
-Control what effects your module can perform. This module can read any file and write under `/tmp/`, but cannot open network connections, spawn threads, or execute native code:
-
-```iris
-allow [FileRead, FileWrite "/tmp/*"]
-deny [TcpConnect, ThreadSpawn, MmapExec]
-
--- Read a file and return its contents.
--- path: file path string, e.g., "/tmp/data.txt"
-let process path : String -> Bytes =
-  let h = file_open path "r" in
-  let data = file_read_bytes h 4096 in
-  let _ = file_close h in
-  data
-```
-
-```bash
-iris run process.iris "/tmp/data.txt"
-```
-
-### Concurrent Programs {#pattern-concurrent}
-
-Spawn threads that each execute a program and collect their results:
-
-```iris
--- Run two copies of a computation in parallel.
--- n: input value passed to both threads
-let parallel_square n : Int -> Tuple =
-  let half = n / 2 in
-  let h1 = thread_spawn (self_graph ()) in  -- thread 1: runs this program
-  let h2 = thread_spawn (self_graph ()) in  -- thread 2: runs this program
-  let r1 = thread_join h1 in
-  let r2 = thread_join h2 in
-  (r1, r2)
-```
-
-```bash
-iris run parallel_square.iris 42
-# Output: (42, 42)  -- both threads compute the same result
-```
-
-### FFI Integration {#pattern-ffi}
-
-Call C functions from IRIS via `ffi_call "library" "function" (args)`:
-
-```iris
--- Call libc functions: getpid() and time(NULL)
-let main : Tuple =
-  let pid = ffi_call "libc" "getpid" () in    -- returns process ID
-  let time = ffi_call "libc" "time" (0) in    -- returns Unix timestamp
-  (pid, time)
-```
-
-```bash
-iris run ffi_example.iris
-# Output: (12345, 1711234567)
-```
+- [Language Guide](/learn/language/) -- full syntax reference: pattern matching, typeclasses, lazy lists, effects, capabilities
+- [Standard Library](/learn/stdlib/) -- Option, Result, collections, math, file I/O, HTTP, and more
+- [Type System](/learn/type-system/) -- refinement types, parametric types, cost analysis, the proof kernel
+- [Evolution & Improvement](/learn/daemon/) -- the full evolution pipeline, content-addressed lifecycle, and meta-evolution from running code
+- [Architecture](/learn/architecture/) -- the four-layer stack: evolution, semantics, verification, hardware

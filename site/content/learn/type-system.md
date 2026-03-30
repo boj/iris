@@ -366,8 +366,10 @@ The kernel's **cost subsumption** rule (rule 9) allows weakening: if you prove `
 | Application | `Sum(k_arg, k_fn, k_body)` |
 | Let binding | `Sum(k_bound, k_body)` |
 | Guard (if/else) | `Sum(k_pred, Sup(k_then, k_else))` |
-| Fold | `Sum(k_input, k_base, Mul(k_step, size))` |
+| Fold | `Sum(k_input, k_base, Mul(k_step, k_input))` |
 | Match | `Sum(k_scrutinee, Sup(k_arms...))` |
+
+Note: `k_input` in the fold rule is the cost of **evaluating the input expression**, not the runtime element count. A fold over a bare variable has `k_input = Zero` because variables are free to evaluate. This means the kernel's cost model tracks expression structure, not data-dependent complexity. Overestimated annotations (e.g., `[cost: Linear(n)]` on a fold whose proven cost is near-Zero) are accepted because `proven <= declared` holds.
 
 ---
 

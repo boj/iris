@@ -464,46 +464,46 @@ propagated into the importing scope.
 `stdlib/option.iris`: safe nullable values.
 
 ```iris
-type Option = Some(Int) | None
+type Option<T> = Some(T) | None
 ```
 
 **Functions:**
 
 ```iris
 -- Unwrap an Option with a default value
-let unwrap_or : Option -> Int -> Int =
+let unwrap_or : Option<T> -> T -> T =
   \opt -> \default ->
     match opt with
     | Some(v) -> v
     | None -> default
 
 -- Map a function over an Option
-let map : Option -> (Int -> Int) -> Option =
+let option_map : Option<T> -> (T -> U) -> Option<U> =
   \opt -> \f ->
     match opt with
     | Some(v) -> Some(f v)
     | None -> None
 
 -- Chain computations that may fail
-let and_then : Option -> (Int -> Option) -> Option =
+let and_then : Option<T> -> (T -> Option<U>) -> Option<U> =
   \opt -> \f ->
     match opt with
     | Some(v) -> f v
     | None -> None
 
 -- Check if an Option contains a value
-let is_some : Option -> Bool
+let is_some : Option<T> -> Bool
 -- Check if an Option is empty
-let is_none : Option -> Bool
+let is_none : Option<T> -> Bool
 
--- Get value or compute from a function (passes 0 to f for None)
-let unwrap_or_else : Option -> (Int -> Int) -> Int
+-- Get value or compute from a function
+let unwrap_or_else : Option<T> -> (Int -> T) -> T
 
 -- Filter: keep Some only if predicate holds
-let filter : Option -> (Int -> Bool) -> Option
+let option_filter : Option<T> -> (T -> Bool) -> Option<T>
 
--- Zip two Options (returns Some if both are Some)
-let zip_with : Option -> Option -> (Int -> Int -> Int) -> Option
+-- Zip two Options with a combining function
+let zip_with : Option<T> -> Option<U> -> (T -> U -> V) -> Option<V>
 ```
 
 **Usage:**
@@ -516,9 +516,9 @@ let y = None
 
 unwrap_or x 0                        -- 10
 unwrap_or y 0                        -- 0
-map x (\v -> v * 2)                  -- Some(20)
+option_map x (\v -> v * 2)           -- Some(20)
 and_then x (\v -> if v > 5 then Some(v) else None)  -- Some(10)
-filter x (\v -> v > 100)            -- None
+option_filter x (\v -> v > 100)     -- None
 zip_with x (Some 20) (\a b -> a + b)  -- Some(30)
 ```
 
@@ -529,41 +529,41 @@ zip_with x (Some 20) (\a b -> a + b)  -- Some(30)
 `stdlib/result.iris`: computations that may succeed or fail.
 
 ```iris
-type Result = Ok(Int) | Err(Int)
+type Result<T, E> = Ok(T) | Err(E)
 ```
 
 **Functions:**
 
 ```iris
 -- Unwrap a Result with a default value
-let unwrap_or : Result -> Int -> Int =
+let result_unwrap_or : Result<T, E> -> T -> T =
   \res -> \default ->
     match res with
     | Ok(v) -> v
     | Err(e) -> default
 
 -- Check if a Result is Ok / Err
-let is_ok : Result -> Bool
-let is_err : Result -> Bool
+let is_ok : Result<T, E> -> Bool
+let is_err : Result<T, E> -> Bool
 
 -- Map a function over the Ok value
-let map_ok : Result -> (Int -> Int) -> Result =
+let map_ok : Result<T, E> -> (T -> U) -> Result<U, E> =
   \res -> \f ->
     match res with
     | Ok(v) -> Ok(f v)
     | Err(e) -> Err(e)
 
 -- Map a function over the Err value
-let map_err : Result -> (Int -> Int) -> Result
+let map_err : Result<T, E> -> (E -> F) -> Result<T, F>
 
 -- Chain computations that may fail
-let and_then : Result -> (Int -> Result) -> Result
+let result_and_then : Result<T, E> -> (T -> Result<U, E>) -> Result<U, E>
 
 -- Extract Ok value or return 0
-let ok_or_zero : Result -> Int
+let ok_or_zero : Result<Int, E> -> Int
 
 -- Unwrap or call a function on the error
-let unwrap_or_else : Result -> (Int -> Int) -> Int
+let result_unwrap_or_else : Result<T, E> -> (E -> T) -> T
 ```
 
 **Usage:**
@@ -574,12 +574,12 @@ import "stdlib/result.iris" as Res
 let ok = Ok 42
 let err = Err 1
 
-unwrap_or ok 0                       -- 42
+result_unwrap_or ok 0                -- 42
 map_ok ok (\v -> v + 1)              -- Ok(43)
 map_err err (\e -> e + 100)          -- Err(101)
-and_then ok (\v -> if v > 0 then Ok(v * 2) else Err(0))  -- Ok(84)
+result_and_then ok (\v -> if v > 0 then Ok(v * 2) else Err(0))  -- Ok(84)
 ok_or_zero err                       -- 0
-unwrap_or_else err (\e -> e * 10)    -- 10
+result_unwrap_or_else err (\e -> e * 10)  -- 10
 ```
 
 
@@ -592,33 +592,33 @@ version with `(0, val)`/`(1, err)` tuple encoding and `either_bind`/`either_map`
 see [Either Monad](#either-monad) above.
 
 ```iris
-type Either = Left(Int) | Right(Int)
+type Either<A, B> = Left(A) | Right(B)
 ```
 
 **Functions:**
 
 ```iris
 -- Apply one of two functions depending on the variant
-let either : Either -> (Int -> Int) -> (Int -> Int) -> Int =
+let either : Either<A, B> -> (A -> C) -> (B -> C) -> C =
   \e -> \on_left -> \on_right ->
     match e with
     | Left(a) -> on_left a
     | Right(b) -> on_right b
 
 -- Predicates
-let is_left : Either -> Bool
-let is_right : Either -> Bool
+let is_left : Either<A, B> -> Bool
+let is_right : Either<A, B> -> Bool
 
 -- Extract with default
-let from_left : Either -> Int -> Int
-let from_right : Either -> Int -> Int
+let from_left : Either<A, B> -> A -> A
+let from_right : Either<A, B> -> B -> B
 
 -- Map over one side
-let map_left : Either -> (Int -> Int) -> Either
-let map_right : Either -> (Int -> Int) -> Either
+let map_left : Either<A, B> -> (A -> C) -> Either<C, B>
+let map_right : Either<A, B> -> (B -> C) -> Either<A, C>
 
 -- Swap Left and Right
-let swap : Either -> Either
+let swap : Either<A, B> -> Either<B, A>
 ```
 
 **Usage:**
@@ -649,8 +649,19 @@ type Ordering = Less | Equal | Greater
 **Functions:**
 
 ```iris
+-- Typeclasses for equality and ordering
+class Eq<A> where
+  eq : A -> A -> Bool
+
+class Ord<A> requires Eq<A> where
+  compare : A -> A -> Ordering
+
+-- Built-in instances
+instance Eq<Int> where eq = \a b -> a == b
+instance Ord<Int> where compare = \a b -> ...
+
 -- Compare two integers
-let compare : Int -> Int -> Ordering =
+let compare_int : Int -> Int -> Ordering =
   \a -> \b ->
     if a < b then Less
     else if a == b then Equal
@@ -675,12 +686,12 @@ let to_int : Ordering -> Int
 ```iris
 import "stdlib/ordering.iris" as Ord
 
-let cmp = compare 3 5               -- Less
+let cmp = compare_int 3 5           -- Less
 is_lt cmp                            -- true
 is_ge cmp                            -- false
 reverse cmp                          -- Greater
-to_int (compare 7 7)                 -- 0
-to_int (compare 10 3)               -- 1
+to_int (compare_int 7 7)            -- 0
+to_int (compare_int 10 3)           -- 1
 ```
 
 

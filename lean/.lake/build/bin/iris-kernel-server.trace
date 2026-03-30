@@ -1,0 +1,24 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs": "bbf97b87a31b2f43",
+ "log":
+ [{"message":
+   ".> gcc -o /home/bojo/Development/ailang/lean/.lake/build/bin/iris-kernel-server /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernelServer.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Types.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Eval.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/FFI.c.o.export -L /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/lib/lean -Wl,--start-group -lleancpp -lLean -Wl,--end-group -lStd -Wl,--start-group -lInit -lleanrt -Wl,--end-group -lstdc++ -lLake /nix/store/wqikjqrnbynh44y0nfr16ynyq1g891wf-gmp-with-cxx-6.3.0/lib/libgmp.so -L/nix/store/84rbbk45fal6gqxmxh06ky2n42k6vqfp-libuv-1.51.0/lib -luv -Wl,--gc-sections -lm -ldl -pthread",
+   "level": "trace"}],
+ "inputs":
+ [["linkObjs",
+   [["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernelServer.c.o.export",
+     "dc58c9989ebf7ed8"],
+    ["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Types.c.o.export",
+     "161ca5eab25b154d"],
+    ["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Eval.c.o.export",
+     "0c69a529caed1b2c"],
+    ["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c.o.export",
+     "8a0dec3de64d867b"],
+    ["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/FFI.c.o.export",
+     "9f2681a4642b61c8"]]],
+  ["linkLibs", "00000000000006bb"],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["traceArgs: #[]", "00000000000006bb"],
+  ["", "21c42906adea99f5"]],
+ "depHash": "fffb7db9f3b6351d"}

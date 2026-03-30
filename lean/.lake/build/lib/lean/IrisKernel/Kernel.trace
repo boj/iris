@@ -1,0 +1,31 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["74d903c64525cac8.olean"],
+  "i": "3c65bd3d266dee00.ilean",
+  "c": "40b8f161c6696360.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/bojo/Development/ailang/lean/.lake/build/lib/lean /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/bin/lean /home/bojo/Development/ailang/lean/IrisKernel/Kernel.lean -o /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Kernel.olean -i /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Kernel.ilean -c /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c --setup /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["IrisKernel.Kernel:deps",
+   [["deps",
+     [["«iris-kernel»/IrisKernel:extraDep",
+       [["@«iris-kernel»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["IrisKernel.Types transitive imports (legacy)", "00000000000006bb"],
+        ["IrisKernel.Types:importAllArts", "3a3951819ed16d4f"],
+        ["IrisKernel.Eval transitive imports (legacy)", "c9adffa97ab58fc9"],
+        ["IrisKernel.Eval:importAllArts", "f327abf7c1c22ecf"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["/home/bojo/Development/ailang/lean/IrisKernel/Kernel.lean",
+   "b42a7d9f9690944c"],
+  ["options", [["-DautoImplicit=false", "4a85acb881fd49d0"]]],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "86561a507a192643"}

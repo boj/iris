@@ -1,0 +1,16 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs": "0c69a529caed1b2c.o",
+ "log":
+ [{"message":
+   ".> gcc -c -o /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Eval.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Eval.c -I /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/include -fstack-clash-protection -fwrapv -fdata-sections -ffunction-sections -fPIC -fvisibility=hidden -Wno-unused-command-line-argument -O3 -DNDEBUG -DLEAN_EXPORTING",
+   "level": "trace"}],
+ "inputs":
+ [["IrisKernel.Eval:c",
+   [["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Eval.c",
+     "9eb73b47e4ca32ec"],
+    ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"]]],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["traceArgs: #[-O3, -DNDEBUG, -DLEAN_EXPORTING]", "c1efb66122fb2b9a"],
+  ["", "21c42906adea99f5"]],
+ "depHash": "ce9e385ad6b7c95b"}

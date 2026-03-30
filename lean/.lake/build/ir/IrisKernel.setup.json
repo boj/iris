@@ -10,6 +10,10 @@
   ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Rules.olean"],
   "IrisKernel.Properties":
   ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Properties.olean"],
+  "IrisKernel.KernelCorrectness":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/KernelCorrectness.olean"],
+  "IrisKernel.Kernel":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Kernel.olean"],
   "IrisKernel.FFI":
   ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/FFI.olean"],
   "IrisKernel.Eval":

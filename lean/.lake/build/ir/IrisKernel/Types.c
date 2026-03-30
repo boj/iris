@@ -80,6 +80,7 @@ static lean_object* lp_iris_x2dkernel_IrisKernel_instReprTag___closed__0;
 uint8_t lean_nat_dec_le(lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Inf_elim___redArg(lean_object*, lean_object*);
+static lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_TypeAbst_elim___redArg(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Inject_elim___redArg___boxed(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Inject_elim(lean_object*, uint8_t, lean_object*, lean_object*);
@@ -106,8 +107,10 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr(uint
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instReprCostVar;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Nat_elim___redArg___boxed(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_NLogN_elim___redArg(lean_object*, lean_object*);
+static lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instHashableNodeId_hash___boxed(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Par_elim(lean_object*, lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instHashableCostVar;
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instBEqTag_beq(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instHashableTypeId_hash___boxed(lean_object*);
@@ -156,6 +159,7 @@ LEAN_EXPORT uint64_t lp_iris_x2dkernel_IrisKernel_instHashableTypeId_hash(lean_o
 static lean_object* lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__1;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Int_elim___redArg___boxed(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_List_beq___at___00IrisKernel_instBEqContext_beq_spec__0___boxed(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default;
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqTag_decEq(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeDef_Primitive_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_Context_weaken(lean_object*, lean_object*, lean_object*);
@@ -175,6 +179,7 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Polynomial_elim_
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__12;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Lit_elim___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqBinding_decEq(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedContext__1;
 uint8_t l_instDecidableEqList___redArg(lean_object*, lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__7;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instBEqContext_beq___boxed(lean_object*, lean_object*);
@@ -226,6 +231,7 @@ static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeId_repr___redArg___
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__32;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim(lean_object*, lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Project_elim(lean_object*, uint8_t, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Amortized_elim___redArg(lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instHashableNodeId___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Let_elim___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Float64_elim___redArg___boxed(lean_object*);
@@ -287,6 +293,7 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_ctorElim___redArg
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_ctorElim(lean_object*, lean_object*, uint8_t, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Lambda_elim(lean_object*, uint8_t, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeEnv_empty;
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Lambda_elim___redArg(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instDecidableEqBinding_decEq___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Extern_elim(lean_object*, uint8_t, lean_object*, lean_object*);
@@ -315,6 +322,7 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_ctorElim___boxed(
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Effect_elim___redArg___boxed(lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__40;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Bytes_elim(lean_object*, uint8_t, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedBinding;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeId_repr___redArg___closed__11;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instBEqBinderId_beq___boxed(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqNodeId_decEq(lean_object*, lean_object*);
@@ -340,6 +348,7 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instReprCostVar_repr___box
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_TypeAbst_elim___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedTypeId;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeDef_Sum_elim(lean_object*, lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedBinderId;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__10;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Int_elim___redArg(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instDecidableEqTypeId_decEq___boxed(lean_object*, lean_object*);
@@ -347,6 +356,8 @@ static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed_
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_Context_lookup_go(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Guard_elim___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instReprTypeId_repr(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Amortized_elim(lean_object*, lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_HWScaled_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__3;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Extern_elim___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 lean_object* l_Repr_addAppParen(lean_object*, lean_object*);
@@ -403,9 +414,11 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeDef_ctorIdx___boxed(le
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_Bool_elim___redArg___boxed(lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instBEqBinding;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeDef_ctorElim___boxed(lean_object*, lean_object*, lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instReprBinderId;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_NLogN_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_TypeDef_Vec_elim___redArg(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment__1;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Project_elim___redArg(lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__4;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__7;
@@ -416,6 +429,7 @@ static lean_object* lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed_
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_List_isPrefixOf___at___00IrisKernel_Context_isPrefix_spec__0(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Polynomial_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__19;
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedContext;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__3;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Unknown_elim___redArg(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqBinding(lean_object*, lean_object*);
@@ -427,10 +441,12 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_List_repr___at___00IrisKernel_instRep
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_ofNat___boxed(lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instHashableBinderId___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_TypeAbst_elim(lean_object*, uint8_t, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_HWScaled_elim___redArg(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Apply_elim(lean_object*, uint8_t, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Unknown_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instHashableBoundVar_hash___boxed(lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__9;
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedContext_default;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instBEqTag___closed__0;
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Zero_elim(lean_object*, lean_object*, lean_object*, lean_object*);
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprCostVar___closed__0;
@@ -470,6 +486,7 @@ LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_NodeKind_Tuple_elim___boxe
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeId_repr___redArg___closed__1;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__39;
 static lean_object* lp_iris_x2dkernel_IrisKernel_instReprNodeKind_repr___closed__38;
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound__1;
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqNodeId_decEq(lean_object* x_1, lean_object* x_2) {
 _start:
 {
@@ -956,6 +973,14 @@ _start:
 {
 lean_object* x_1; 
 x_1 = lp_iris_x2dkernel_IrisKernel_instHashableBinderId___closed__0;
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinderId() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_unsigned_to_nat(0u);
 return x_1;
 }
 }
@@ -3955,11 +3980,23 @@ lean_object* x_11;
 x_11 = lean_unsigned_to_nat(9u);
 return x_11;
 }
-default: 
+case 10:
 {
 lean_object* x_12; 
 x_12 = lean_unsigned_to_nat(10u);
 return x_12;
+}
+case 11:
+{
+lean_object* x_13; 
+x_13 = lean_unsigned_to_nat(11u);
+return x_13;
+}
+default: 
+{
+lean_object* x_14; 
+x_14 = lean_unsigned_to_nat(12u);
+return x_14;
 }
 }
 }
@@ -4065,6 +4102,24 @@ lean_inc(x_23);
 lean_dec_ref(x_1);
 x_24 = lean_apply_1(x_2, x_23);
 return x_24;
+}
+case 11:
+{
+lean_object* x_25; lean_object* x_26; 
+x_25 = lean_ctor_get(x_1, 0);
+lean_inc(x_25);
+lean_dec_ref(x_1);
+x_26 = lean_apply_1(x_2, x_25);
+return x_26;
+}
+case 12:
+{
+lean_object* x_27; lean_object* x_28; 
+x_27 = lean_ctor_get(x_1, 0);
+lean_inc(x_27);
+lean_dec_ref(x_1);
+x_28 = lean_apply_1(x_2, x_27);
+return x_28;
 }
 default: 
 {
@@ -4265,6 +4320,46 @@ _start:
 lean_object* x_5; 
 x_5 = lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim___redArg(x_2, x_4);
 return x_5;
+}
+}
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Amortized_elim___redArg(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim___redArg(x_1, x_2);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_Amortized_elim(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4) {
+_start:
+{
+lean_object* x_5; 
+x_5 = lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim___redArg(x_2, x_4);
+return x_5;
+}
+}
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_HWScaled_elim___redArg(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim___redArg(x_1, x_2);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_CostBound_HWScaled_elim(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4) {
+_start:
+{
+lean_object* x_5; 
+x_5 = lp_iris_x2dkernel_IrisKernel_CostBound_ctorElim___redArg(x_2, x_4);
+return x_5;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_box(1);
+return x_1;
 }
 }
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_IrisKernel_PrimType_ctorIdx(uint8_t x_1) {
@@ -5953,6 +6048,33 @@ x_1 = lp_iris_x2dkernel_IrisKernel_instBEqBinding___closed__0;
 return x_1;
 }
 }
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0() {
+_start:
+{
+lean_object* x_1; lean_object* x_2; 
+x_1 = lean_unsigned_to_nat(0u);
+x_2 = lean_alloc_ctor(0, 2, 0);
+lean_ctor_set(x_2, 0, x_1);
+lean_ctor_set(x_2, 1, x_1);
+return x_2;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0;
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default;
+return x_1;
+}
+}
 LEAN_EXPORT uint8_t lp_iris_x2dkernel_IrisKernel_instDecidableEqContext_decEq(lean_object* x_1, lean_object* x_2) {
 _start:
 {
@@ -6476,6 +6598,22 @@ x_1 = lp_iris_x2dkernel_IrisKernel_instBEqContext___closed__0;
 return x_1;
 }
 }
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext_default() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_box(0);
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_box(0);
+return x_1;
+}
+}
 static lean_object* _init_lp_iris_x2dkernel_IrisKernel_Context_empty() {
 _start:
 {
@@ -6688,6 +6826,61 @@ lean_ctor_set(x_13, 0, x_12);
 return x_13;
 }
 }
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0() {
+_start:
+{
+lean_object* x_1; lean_object* x_2; lean_object* x_3; lean_object* x_4; 
+x_1 = lean_box(1);
+x_2 = lean_unsigned_to_nat(0u);
+x_3 = lean_box(0);
+x_4 = lean_alloc_ctor(0, 4, 0);
+lean_ctor_set(x_4, 0, x_3);
+lean_ctor_set(x_4, 1, x_2);
+lean_ctor_set(x_4, 2, x_2);
+lean_ctor_set(x_4, 3, x_1);
+return x_4;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0;
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default;
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound__1() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_box(1);
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext__1() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lean_box(0);
+return x_1;
+}
+}
+static lean_object* _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment__1() {
+_start:
+{
+lean_object* x_1; 
+x_1 = lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0;
+return x_1;
 }
 }
 LEAN_EXPORT lean_object* lp_iris_x2dkernel_List_mapTR_loop___at___00IrisKernel_typeDefReferences_spec__0(lean_object* x_1, lean_object* x_2) {
@@ -6944,6 +7137,8 @@ lp_iris_x2dkernel_IrisKernel_instHashableBinderId___closed__0 = _init_lp_iris_x2
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instHashableBinderId___closed__0);
 lp_iris_x2dkernel_IrisKernel_instHashableBinderId = _init_lp_iris_x2dkernel_IrisKernel_instHashableBinderId();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instHashableBinderId);
+lp_iris_x2dkernel_IrisKernel_instInhabitedBinderId = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinderId();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedBinderId);
 lp_iris_x2dkernel_IrisKernel_instReprTypeId___closed__0 = _init_lp_iris_x2dkernel_IrisKernel_instReprTypeId___closed__0();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instReprTypeId___closed__0);
 lp_iris_x2dkernel_IrisKernel_instReprTypeId = _init_lp_iris_x2dkernel_IrisKernel_instReprTypeId();
@@ -7082,6 +7277,8 @@ lp_iris_x2dkernel_IrisKernel_instReprNodeKind___closed__0 = _init_lp_iris_x2dker
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instReprNodeKind___closed__0);
 lp_iris_x2dkernel_IrisKernel_instReprNodeKind = _init_lp_iris_x2dkernel_IrisKernel_instReprNodeKind();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instReprNodeKind);
+lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound);
 lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__0 = _init_lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__0();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__0);
 lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__1 = _init_lp_iris_x2dkernel_IrisKernel_instReprPrimType_repr___closed__1();
@@ -7144,6 +7341,12 @@ lp_iris_x2dkernel_IrisKernel_instBEqBinding___closed__0 = _init_lp_iris_x2dkerne
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instBEqBinding___closed__0);
 lp_iris_x2dkernel_IrisKernel_instBEqBinding = _init_lp_iris_x2dkernel_IrisKernel_instBEqBinding();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instBEqBinding);
+lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0 = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default___closed__0);
+lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedBinding_default);
+lp_iris_x2dkernel_IrisKernel_instInhabitedBinding = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedBinding();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedBinding);
 lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__0 = _init_lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__0();
 lean_mark_persistent(lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__0);
 lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__1 = _init_lp_iris_x2dkernel_List_repr___at___00IrisKernel_instReprContext_repr_spec__0___redArg___closed__1();
@@ -7180,8 +7383,24 @@ lp_iris_x2dkernel_IrisKernel_instBEqContext___closed__0 = _init_lp_iris_x2dkerne
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instBEqContext___closed__0);
 lp_iris_x2dkernel_IrisKernel_instBEqContext = _init_lp_iris_x2dkernel_IrisKernel_instBEqContext();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instBEqContext);
+lp_iris_x2dkernel_IrisKernel_instInhabitedContext_default = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext_default();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedContext_default);
+lp_iris_x2dkernel_IrisKernel_instInhabitedContext = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedContext);
 lp_iris_x2dkernel_IrisKernel_Context_empty = _init_lp_iris_x2dkernel_IrisKernel_Context_empty();
 lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_Context_empty);
+lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0 = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default___closed__0);
+lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment_default);
+lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment);
+lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound__1 = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound__1();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedCostBound__1);
+lp_iris_x2dkernel_IrisKernel_instInhabitedContext__1 = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedContext__1();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedContext__1);
+lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment__1 = _init_lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment__1();
+lean_mark_persistent(lp_iris_x2dkernel_IrisKernel_instInhabitedJudgment__1);
 return lean_io_result_mk_ok(lean_box(0));
 }
 #ifdef __cplusplus

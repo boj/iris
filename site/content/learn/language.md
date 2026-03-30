@@ -20,7 +20,7 @@ IRIS uses an ML-like surface syntax that compiles to SemanticGraph, the canonica
 let x = 42 in x + 1
 
 -- With type annotation and cost
-let double n : Int -> Int [cost: Unit] =
+let double n : Int -> Int [cost: Const(1)] =
   n * 2
 ```
 

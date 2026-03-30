@@ -1,0 +1,50 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["2616d7509437d230.olean"],
+  "i": "47abea7e074400df.ilean",
+  "c": "1412a7495520058c.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/bojo/Development/ailang/lean/.lake/build/lib/lean /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/bin/lean /home/bojo/Development/ailang/lean/IrisKernel/KernelCorrectness.lean -o /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/KernelCorrectness.olean -i /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/KernelCorrectness.ilean -c /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/KernelCorrectness.c --setup /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/KernelCorrectness.setup.json --json",
+   "level": "trace"},
+  {"message":
+   "IrisKernel/KernelCorrectness.lean:22:8: declaration uses `sorry`",
+   "level": "warning"},
+  {"message":
+   "IrisKernel/KernelCorrectness.lean:33:8: declaration uses `sorry`",
+   "level": "warning"},
+  {"message":
+   "IrisKernel/KernelCorrectness.lean:39:8: declaration uses `sorry`",
+   "level": "warning"},
+  {"message":
+   "IrisKernel/KernelCorrectness.lean:45:8: declaration uses `sorry`",
+   "level": "warning"},
+  {"message":
+   "IrisKernel/KernelCorrectness.lean:51:8: declaration uses `sorry`",
+   "level": "warning"}],
+ "inputs":
+ [["IrisKernel.KernelCorrectness:deps",
+   [["deps",
+     [["«iris-kernel»/IrisKernel:extraDep",
+       [["@«iris-kernel»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["IrisKernel.Types transitive imports (legacy)", "00000000000006bb"],
+        ["IrisKernel.Types:importAllArts", "c7d4e14353374eac"],
+        ["IrisKernel.Rules transitive imports (legacy)", "73a4fcbefeb18ee9"],
+        ["IrisKernel.Rules:importAllArts", "516462e1f0ca5f98"],
+        ["IrisKernel.Eval transitive imports (legacy)", "73a4fcbefeb18ee9"],
+        ["IrisKernel.Eval:importAllArts", "f327abf7c1c22ecf"],
+        ["IrisKernel.Kernel transitive imports (legacy)", "aad032b62e06a140"],
+        ["IrisKernel.Kernel:importAllArts", "713db27c4ac5f091"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["/home/bojo/Development/ailang/lean/IrisKernel/KernelCorrectness.lean",
+   "90f343dcc078409f"],
+  ["options", [["-DautoImplicit=false", "4a85acb881fd49d0"]]],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "6467ce845b247cce"}

@@ -1,6 +1,6 @@
 // Lean compiler output
 // Module: IrisKernel
-// Imports: public import Init public import IrisKernel.Types public import IrisKernel.Rules public import IrisKernel.Properties public import IrisKernel.Consistency public import IrisKernel.Eval public import IrisKernel.FFI
+// Imports: public import Init public import IrisKernel.Types public import IrisKernel.Rules public import IrisKernel.Properties public import IrisKernel.Consistency public import IrisKernel.Eval public import IrisKernel.Kernel public import IrisKernel.KernelCorrectness public import IrisKernel.FFI
 #include <lean/lean.h>
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -19,6 +19,8 @@ lean_object* initialize_iris_x2dkernel_IrisKernel_Rules(uint8_t builtin);
 lean_object* initialize_iris_x2dkernel_IrisKernel_Properties(uint8_t builtin);
 lean_object* initialize_iris_x2dkernel_IrisKernel_Consistency(uint8_t builtin);
 lean_object* initialize_iris_x2dkernel_IrisKernel_Eval(uint8_t builtin);
+lean_object* initialize_iris_x2dkernel_IrisKernel_Kernel(uint8_t builtin);
+lean_object* initialize_iris_x2dkernel_IrisKernel_KernelCorrectness(uint8_t builtin);
 lean_object* initialize_iris_x2dkernel_IrisKernel_FFI(uint8_t builtin);
 static bool _G_initialized = false;
 LEAN_EXPORT lean_object* initialize_iris_x2dkernel_IrisKernel(uint8_t builtin) {
@@ -41,6 +43,12 @@ res = initialize_iris_x2dkernel_IrisKernel_Consistency(builtin);
 if (lean_io_result_is_error(res)) return res;
 lean_dec_ref(res);
 res = initialize_iris_x2dkernel_IrisKernel_Eval(builtin);
+if (lean_io_result_is_error(res)) return res;
+lean_dec_ref(res);
+res = initialize_iris_x2dkernel_IrisKernel_Kernel(builtin);
+if (lean_io_result_is_error(res)) return res;
+lean_dec_ref(res);
+res = initialize_iris_x2dkernel_IrisKernel_KernelCorrectness(builtin);
 if (lean_io_result_is_error(res)) return res;
 lean_dec_ref(res);
 res = initialize_iris_x2dkernel_IrisKernel_FFI(builtin);

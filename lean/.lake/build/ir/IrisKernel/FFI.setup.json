@@ -6,6 +6,8 @@
  "importArts":
  {"IrisKernel.Types":
   ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Types.olean"],
+  "IrisKernel.Kernel":
+  ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Kernel.olean"],
   "IrisKernel.Eval":
   ["/home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Eval.olean"]},
  "dynlibs": []}

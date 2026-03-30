@@ -1,8 +1,8 @@
 {"synthetic": false,
  "schemaVersion": "2025-09-10",
  "outputs":
- {"o": ["f74dfab75aa26916.olean"],
-  "i": "081d768050ec7bc7.ilean",
+ {"o": ["db33dab0258e9f64.olean"],
+  "i": "7a4f216467de0169.ilean",
   "c": "b898f58e47f70d17.c"},
  "log":
  [{"message":
@@ -11,7 +11,9 @@
   {"message":
    "IrisKernel/Properties.lean:29:9: unused variable `d`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
-  {"message": "IrisKernel/Properties.lean:75:8: declaration uses `sorry`",
+  {"message": "IrisKernel/Properties.lean:76:8: declaration uses `sorry`",
+   "level": "warning"},
+  {"message": "IrisKernel/Properties.lean:88:8: declaration uses `sorry`",
    "level": "warning"}],
  "inputs":
  [["IrisKernel.Properties:deps",
@@ -20,8 +22,8 @@
        [["@«iris-kernel»:extraDep", "00000000000006bb"]]],
       ["imports",
        [["IrisKernel.Types transitive imports (legacy)", "00000000000006bb"],
-        ["IrisKernel.Types:importAllArts", "51e6c1b7e4bff075"],
-        ["IrisKernel.Rules transitive imports (legacy)", "4fb08f520d8aa1a7"],
+        ["IrisKernel.Types:importAllArts", "c7d4e14353374eac"],
+        ["IrisKernel.Rules transitive imports (legacy)", "73a4fcbefeb18ee9"],
         ["IrisKernel.Rules:importAllArts", "516462e1f0ca5f98"]]]]],
     ["libs",
      [["import dynlibs", "00000000000006bb"],
@@ -30,7 +32,7 @@
       ["module plugins", "00000000000006bb"]]]]],
   ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
   ["/home/bojo/Development/ailang/lean/IrisKernel/Properties.lean",
-   "b2d028ba09a56c57"],
+   "3e95d1cf3e54d1a6"],
   ["options", [["-DautoImplicit=false", "4a85acb881fd49d0"]]],
   ["Module.leanArgs: #[]", "00000000000006bb"]],
- "depHash": "51a7a26318fe20e1"}
+ "depHash": "059d2067759cf1a9"}

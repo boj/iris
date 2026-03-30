@@ -1,9 +1,9 @@
 {"synthetic": false,
  "schemaVersion": "2025-09-10",
  "outputs":
- {"o": ["66c0ab14333755cc.olean"],
-  "i": "9883fbd17d4d3a04.ilean",
-  "c": "324d836feb68612d.c"},
+ {"o": ["2c37f4396275a1fb.olean"],
+  "i": "3c688f8687d3d7ca.ilean",
+  "c": "f8ee159500dc2ad9.c"},
  "log":
  [{"message":
    ".> LEAN_PATH=/home/bojo/Development/ailang/lean/.lake/build/lib/lean /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/bin/lean /home/bojo/Development/ailang/lean/IrisKernel/Types.lean -o /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Types.olean -i /home/bojo/Development/ailang/lean/.lake/build/lib/lean/IrisKernel/Types.ilean -c /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Types.c --setup /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Types.setup.json --json",
@@ -21,7 +21,7 @@
       ["module plugins", "00000000000006bb"]]]]],
   ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
   ["/home/bojo/Development/ailang/lean/IrisKernel/Types.lean",
-   "6d96f49c0814236c"],
+   "5231a5379a94bb8f"],
   ["options", [["-DautoImplicit=false", "4a85acb881fd49d0"]]],
   ["Module.leanArgs: #[]", "00000000000006bb"]],
- "depHash": "fe13ab8a35b9dfd9"}
+ "depHash": "58d6a4da963a7360"}

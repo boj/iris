@@ -1,0 +1,16 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs": "8a0dec3de64d867b.o",
+ "log":
+ [{"message":
+   ".> gcc -c -o /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c.o.export /home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c -I /nix/store/38kmycn5w6dd230r045zclyl4zahcm1c-lean4-4.28.0/include -fstack-clash-protection -fwrapv -fdata-sections -ffunction-sections -fPIC -fvisibility=hidden -Wno-unused-command-line-argument -O3 -DNDEBUG -DLEAN_EXPORTING",
+   "level": "trace"}],
+ "inputs":
+ [["IrisKernel.Kernel:c",
+   [["/home/bojo/Development/ailang/lean/.lake/build/ir/IrisKernel/Kernel.c",
+     "40b8f161c6696360"],
+    ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"]]],
+  ["Lean 4.28.0, commit v4.28.0", "f336884a5afab07d"],
+  ["traceArgs: #[-O3, -DNDEBUG, -DLEAN_EXPORTING]", "c1efb66122fb2b9a"],
+  ["", "21c42906adea99f5"]],
+ "depHash": "ad47a8d672359eb5"}
