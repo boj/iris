@@ -1,0 +1,50 @@
+-- stage1.iris — The IRIS runtime, written in IRIS.
+--
+-- This is the top-level entry point for IRIS. The C stage0 binary
+-- loads this program (pre-compiled as bootstrap/stage1.json) and
+-- evaluates it with command-line arguments as inputs.
+--
+-- Bootstrap chain:
+--   ./bootstrap/iris-stage0 direct bootstrap/stage1.json <command> <args...>
+--
+-- Commands:
+--   direct <program.json> [int_args...]  — evaluate a pre-compiled JSON graph
+--   run <program.json> [int_args...]     — run through the meta-circular interpreter
+--
+-- The full_interpreter.iris is loaded as a sub-program and used to
+-- evaluate target programs. This means IRIS interprets IRIS:
+--   C evaluator → stage1 → interpreter → your program
+
+-- Read command from first input (0 = direct, 1 = run)
+let command = tuple_get inputs 0
+
+-- Read target program path from second input
+let target_path = tuple_get inputs 1
+
+-- Load the target program from JSON
+-- (The C evaluator handles file_read_json via perform_effect)
+let target = perform_effect 4 target_path
+
+-- Collect remaining arguments into a tuple
+let arg_count = tuple_len inputs
+let args = if arg_count > 2
+  then if arg_count > 3
+    then if arg_count > 4
+      then (tuple_get inputs 2, tuple_get inputs 3, tuple_get inputs 4)
+      else (tuple_get inputs 2, tuple_get inputs 3)
+    else (tuple_get inputs 2,)
+  else ()
+
+-- Evaluate the target program
+let result = if command == 0
+  then
+    -- Direct mode: evaluate with the C tree-walker
+    graph_eval target args
+  else
+    -- Run mode: evaluate through the IRIS interpreter
+    -- Load interpreter.json and use it to interpret the target
+    let interp = perform_effect 4 "bootstrap/interpreter.json"
+    graph_eval interp (target, args)
+
+-- Print result
+result
