@@ -41,18 +41,73 @@ tuple support within a linear scope (like Haskell's ST monad).
 
 ---
 
+### 24. Dead primitive registrations -- opcode conflicts in prim.rs
+
+**Severity: HIGH** -- 5 primitives have Rust implementations but are NOT callable.
+
+The following primitives have working Rust code (`prim_*` methods in `lib.rs`) but
+their opcodes were overwritten by `buf_new/buf_push/buf_finish` and `sort_by`:
+
+| Primitive | Claimed opcode | Actually dispatches | Status |
+|-----------|---------------|--------------------|----|
+| `str_from_chars` | 0xD3 | `buf_new` | Dead code |
+| `is_unit` | 0xD4 | `buf_push` | Dead code |
+| `type_of` | 0xD5 | `buf_finish` | Dead code |
+| `str_index_of` | 0xD6 | `Value::Unit` (reserved) | Dead code |
+| `map_contains_key` | 0xCF | `sort_by` | Dead code |
+
+These names are NOT in `prim.rs` and will fail to resolve at compile time. Several
+.iris example files reference them (`lisp.iris`, `a_star.iris`, `huffman.iris`,
+`caesar_cipher.iris`, `rot13.iris`) and will not actually run.
+
+**Fix:** Assign new non-conflicting opcodes in `prim.rs` and add dispatch entries
+in `lib.rs`. Suggested range: 0xE0-0xE8 (currently unused).
+
+---
+
+### 25. Test verification needed for rewritten .iris examples
+
+**Severity: MEDIUM** -- 20 .iris files were rewritten to close FIXMEs but not tested.
+
+The following files had significant logic changes (not just comment edits) and need
+`cargo test` verification:
+
+- `binary_search_tree.iris` -- full rewrite to State-backed BST
+- `trie.iris` -- full rewrite to State-backed trie
+- `sudoku_solver.iris` -- grid changed from tuple to State map
+- `map_reduce.iris` -- grouping changed to State
+- `anagram.iris` -- grouping changed to State
+- `relational.iris` -- sort changed to `sort_by`
+- `arithmetic_parser.iris` -- removed dispatch workaround, using `let rec...and`
+- `lisp.iris` -- eval/apply rewritten as mutual recursion
+- `edit_distance.iris` -- DP recurrence fixed + `str_chars` variant added
+- `fizzbuzz.iris`, `roman_numerals.iris`, `morse_code.iris`, `visitor.iris` -- output format changes
+
+---
+
+### 26. Test coverage gaps in src/iris-programs/
+
+**Severity: LOW** -- many core .iris modules lack test entries.
+
+`tests/fixtures/iris-testing/` has test files for some modules but not all.
+Missing test coverage for: `compiler/`, `foundry/`, `store/`, `syntax/` (beyond
+the Rust-level parser tests), `stdlib/` (individual module tests), `mutation/`
+operators, `population/` management.
+
+---
+
 ## Resolved Issues
 
 ### Fixed in Rust (true primitives -- cross opaque Value/String boundary)
 
 | # | Issue | Fix | Opcode |
 |---|-------|-----|--------|
-| 1 | No `str_from_chars` (char codes to String) | Added `str_from_chars` | 0xD3 |
-| 2 | `map_get` returns Unit, can't distinguish missing keys | Added `is_unit` + `map_contains_key` | 0xD4, 0xCF |
 | 11 | `&&`/`||` not short-circuit (crashes on guarded conditions) | Lowerer transforms to `if/then/else` Guards | n/a |
 | 14 | Lazy stream primitives not dispatched in bootstrap | Implemented `lazy_unfold`, `lazy_take`, `lazy_map`, `thunk_force` | 0xE9-0xEC |
-| 16 | No runtime type predicates (`is_tuple`, `is_int`, etc.) | Added `type_of` returning int tag | 0xD5 |
-| 21 | No `str_index_of` for substring search | Added `str_index_of` | 0xD6 |
+
+**Note:** Issues #1, #2, #16, #21 were previously listed here but are affected by
+the opcode conflict described in issue #24. The Rust implementations exist but are
+not wired into `prim.rs`. See issue #24 for details.
 
 ### Fixed in IRIS (stdlib functions in `src/iris-programs/stdlib/list_ops.iris`)
 
