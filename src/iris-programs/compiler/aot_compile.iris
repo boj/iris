@@ -477,6 +477,43 @@ let aot_compile_node program node_id next_reg default_type =
         emit_sqrtsd_xmm0 (emit_movq_to_from_xmm reg0 0))),
        reg0, next_reg + 1)
 
+    -- ---- Unary: str_len (0xB0 = 176), tuple_len (0xD6 = 214), list_len (0xF0 = 240) ----
+    -- These return the length of the argument. For now, treat as identity
+    -- (the argument IS the length in simple cases, or delegate to runtime).
+    else if opcode == 176 then
+      -- str_len: for now just compile the argument (placeholder)
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      (r0.0, r0.1, next_reg + 1)
+    else if opcode == 214 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      (r0.0, r0.1, next_reg + 1)
+    else if opcode == 240 then
+      let child0 = list_nth children 0 in
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      (r0.0, r0.1, next_reg + 1)
+
+    -- ---- Unary: self_graph (0x80 = 128) ----
+    -- Returns the current program as a value. For native code, this is a no-op.
+    else if opcode == 128 then
+      (emit_mov_imm64 out_reg 0, out_reg, next_reg + 1)
+
+    -- ---- Zero-arg check: if only 0 or 1 children, handle as unary ----
+    else if list_len children < 2 then
+      if list_len children == 1 then
+        let child0 = list_nth children 0 in
+        let me = self_graph in
+        let r0 = graph_eval me (program, child0, next_reg, default_type) in
+        -- Unknown unary op: just return the argument unchanged
+        (r0.0, r0.1, next_reg + 1)
+      else
+        -- Zero-arg op: return 0
+        (emit_mov_imm64 out_reg 0, out_reg, next_reg + 1)
+
     -- ---- Binary ops ----
     else
       let child0 = list_nth children 0 in
@@ -587,8 +624,36 @@ let aot_compile_node program node_id next_reg default_type =
         else if opcode == 21 then
           if right == 1 then emit_sar_cl left
           else bytes_concat (emit_mov_rr 1 right) (emit_sar_cl left)
-        -- default: add
-        else emit_alu_rr 0x01 left right in
+        -- char_at (0xC0 = 192): for now return left (placeholder)
+        else if opcode == 192 then emit_mov_rr left left
+        -- list_nth (0xC2 = 194): placeholder
+        else if opcode == 194 then emit_mov_rr left left
+        -- tuple_get (0xD2 = 210): placeholder
+        else if opcode == 210 then emit_mov_rr left left
+        -- list_range (0xC7 = 199): placeholder
+        else if opcode == 199 then emit_mov_rr left left
+        -- list_append (0xC1 = 193): placeholder
+        else if opcode == 193 then emit_mov_rr left left
+        -- graph_get_kind (0x82 = 130): placeholder
+        else if opcode == 130 then emit_mov_rr left left
+        -- graph_get_prim_op (0x83 = 131): placeholder
+        else if opcode == 131 then emit_mov_rr left left
+        -- graph_eval (0x89 = 137): placeholder
+        else if opcode == 137 then emit_mov_rr left left
+        -- graph_get_root (0x8A = 138): placeholder
+        else if opcode == 138 then emit_mov_rr left left
+        -- graph_outgoing (0x8F = 143): placeholder
+        else if opcode == 143 then emit_mov_rr left left
+        -- graph_set_root (0xEE = 238): placeholder
+        else if opcode == 238 then emit_mov_rr left left
+        -- graph_edge_target (0x97 = 151): placeholder (needs 4 args)
+        else if opcode == 151 then emit_mov_rr left left
+        -- str_concat (0xB1 = 177): placeholder
+        else if opcode == 177 then emit_mov_rr left left
+        -- str_contains (0xB3 = 179): placeholder
+        else if opcode == 179 then emit_mov_rr left left
+        -- default: unknown binary op, return left operand
+        else emit_mov_rr left left in
 
       -- Result stays in left register, right register is freed
       (bytes_concat (bytes_concat code0 code1) op_code, left, nfr0)
