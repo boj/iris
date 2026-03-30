@@ -30,6 +30,7 @@
 pub mod syntax;
 
 pub mod fragment_cache;
+pub mod mini_eval;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -343,6 +344,19 @@ fn inline_all_refs_in_graph(
     Some(result)
 }
 
+/// Opcodes that eval_flat_reuse handles inline.
+/// Any opcode not listed here must fall through to the tree-walking evaluator.
+fn is_flat_supported_opcode(opcode: u8) -> bool {
+    matches!(opcode,
+        0x00..=0x09  // arithmetic: add, sub, mul, div, mod, neg, abs, min, max, pow
+        | 0x10..=0x11 // bitwise: and, or
+        | 0x20..=0x25 // comparison: eq, ne, lt, gt, le, ge
+        | 0x34        // tuple_get
+        | 0x40..=0x41 // conversion: int_to_float, float_to_int
+        | 0xD8        // sqrt
+    )
+}
+
 fn flatten_subgraph<'a>(
     graph: &SemanticGraph,
     root: NodeId,
@@ -427,6 +441,11 @@ fn flatten_subgraph<'a>(
 
         match &node.payload {
             NodePayload::Prim { opcode } => {
+                // Only flatten opcodes that eval_flat_reuse handles.
+                // Unknown opcodes silently return Unit, which is wrong.
+                if !is_flat_supported_opcode(*opcode) {
+                    return None;
+                }
                 let args: Vec<u16> = edges_from.get(&nid)
                     .map(|edges| edges.iter()
                         .filter(|e| e.label == EdgeLabel::Argument)
@@ -3819,8 +3838,9 @@ impl<'a> BootstrapCtx<'a> {
                 }
             }
             _ => Err(BootstrapError::TypeError(format!(
-                "project: expected Tuple, got {:?}", val
-            ))),
+                "project: expected Tuple at field {}, got {:?} (node {})",
+                fi, val, node_id.0
+            )))
         }
     }
 
@@ -3930,10 +3950,15 @@ impl<'a> BootstrapCtx<'a> {
                 if let Some(c) = self.closure_bindings.get(&binder) {
                     return Ok(RtValue::Closure(c.clone()));
                 }
-                self.env
+                let result = self.env
                     .get(&binder)
                     .cloned()
-                    .unwrap_or(Value::Unit)
+                    .unwrap_or(Value::Unit);
+                if matches!(result, Value::Unit) && index >= 128 {
+                    eprintln!("[DEBUG] InputRef({}) -> Unit, env has: {:?}",
+                        index, self.env.keys().collect::<Vec<_>>());
+                }
+                result
             }
             _ => return Err(BootstrapError::MalformedLiteral { type_tag, len: value.len() }),
         };
@@ -5614,6 +5639,9 @@ impl<'a> BootstrapCtx<'a> {
         let mut elems: Vec<Value> = match &args[0] {
             Value::Tuple(t) => t.as_ref().clone(),
             Value::Unit => vec![],
+            Value::Range(s, e) => {
+                if *e > *s { (*s..*e).map(Value::Int).collect() } else { vec![] }
+            }
             _ => return Err(BootstrapError::TypeError("list_append: first arg must be Tuple".into())),
         };
         elems.push(args[1].clone());

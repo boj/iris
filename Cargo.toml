@@ -47,6 +47,10 @@ rand = "0.8"
 serde_json = "1"
 
 [[bin]]
+name = "iris-stage0"
+path = "src/bin/iris-stage0.rs"
+
+[[bin]]
 name = "iris"
 path = "src/bin/iris.rs"
 
@@ -61,18 +65,13 @@ path = "src/bin/iris-lsp.rs"
 required-features = ["syntax"]
 
 [[bin]]
-name = "iris-c-codegen"
-path = "src/bin/iris-c-codegen.rs"
-required-features = ["syntax"]
-
-[[bin]]
 name = "iris-compile"
 path = "src/bin/iris-compile.rs"
 required-features = ["syntax"]
 
-[[bin]]
-name = "iris-self-compile"
-path = "src/bin/iris-self-compile.rs"
+[[test]]
+name = "test_stage0_e2e"
+path = "tests/test_stage0_e2e.rs"
 
 [[test]]
 name = "test_bootstrap_effects"

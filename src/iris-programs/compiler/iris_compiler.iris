@@ -1,0 +1,28 @@
+-- iris_compiler.iris — The IRIS compiler, written in IRIS.
+--
+-- Chains the three IRIS-written compilation stages:
+--   tokenizer → parser → lowerer
+--
+-- Each stage is a pre-compiled SemanticGraph (loaded from JSON).
+-- This program evaluates each stage in sequence via graph_eval.
+--
+-- Usage:
+--   compile(tokenizer, parser, lowerer, source) -> Program
+--
+-- The tokenizer/parser/lowerer are Program values loaded by the caller.
+-- The source is a String containing IRIS source code.
+-- Returns the compiled SemanticGraph as a Program value.
+
+let compile tokenizer parser lowerer source : Int -> Int -> Int -> Int -> Int =
+  -- Stage 1: Tokenize source string into token list
+  let tokens = graph_eval tokenizer source in
+
+  -- Stage 2: Parse tokens into AST (parser needs tokens + source for error messages)
+  let ast = graph_eval parser (tokens, source) in
+
+  -- Stage 3: Lower AST into SemanticGraph (lowerer needs AST + source)
+  let lowered = graph_eval lowerer (ast, source) in
+
+  -- The lowerer returns either a Program directly or (Program, source_map).
+  -- Return as-is — the caller extracts the Program.
+  lowered

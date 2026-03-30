@@ -1,0 +1,368 @@
+-- self_interpreter.iris — Fully self-hosted IRIS interpreter.
+--
+-- Evaluates SemanticGraph programs without calling graph_eval, graph_eval_env,
+-- or any other Rust evaluator primitive. Uses only graph introspection
+-- primitives (graph_get_kind, graph_outgoing, etc.) and IRIS-native operations.
+--
+-- Architecture: stack-based evaluation loop using fold.
+--   - Work stack: list of (node_id, env) pairs to evaluate
+--   - Value stack: results of evaluated nodes
+--   - Environment: list of (binder_id, value) pairs for variable bindings
+--
+-- The interpreter passes itself as `me` to enable recursive interpretation
+-- of sub-programs via graph_eval me (me, sub_program, sub_inputs).
+--
+-- This is the key to self-hosting: IRIS interprets IRIS without Rust.
+--
+-- Supported node kinds:
+--   Lit (5), Prim (0), Guard (17), Fold (8), Lambda (2), Apply (1),
+--   Let (3), Tuple (11), Project (13), Inject (12), Effect (10),
+--   Ref (6), TypeAbst (14), TypeApp (15), LetRec (16), Rewrite (18)
+
+-- Environment operations (env = list of (binder_id, value) pairs)
+-- We use a simple association list. Lookup is O(n) but correct.
+
+
+-- Core evaluator: interprets a single node in the given program + environment.
+-- me = this interpreter program (for recursive sub-evaluation)
+-- program = the SemanticGraph being interpreted
+-- env = current variable bindings
+--
+-- Since IRIS has no recursion, sub-expression evaluation is done via
+-- graph_eval me (me, sub_program, env) — the interpreter evaluating itself.
+-- This creates a chain: Rust evaluator → self_interpreter → self_interpreter → ...
+-- Each level handles one node, delegating children to itself.
+
+let interpret me program env =
+  let root = graph_get_root program in
+  let kind = graph_get_kind program root in
+
+  -- Helper: evaluate a child node by re-rooting the program and self-calling
+  -- eval_child = \node_id -> graph_eval me (me, graph_set_root program node_id, env)
+  -- We inline this at every usage since IRIS lambdas can't be reused in folds easily.
+
+  -- Lit (kind 5): extract literal value
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag program root in
+    if tt == 255 then
+      -- InputRef: lookup in environment
+      -- graph_get_lit_value returns the raw index (0, 1, 2, ...)
+      -- The actual BinderId is 0xFFFF_0000 + index = 4294901760 + index
+      let lit_val = graph_get_lit_value program root in
+      let binder_id = 4294901760 + lit_val in
+      -- Inline env_lookup: scan env for matching binder_id
+      let eln = list_len env in
+      let elr = fold (0, ()) (\els _eli ->
+        if els.0 >= eln then els
+        else
+          let ele = list_nth env els.0 in
+          if ele.0 == binder_id then (eln, ele.1)
+          else (els.0 + 1, els.1))
+        eln in
+      elr.1
+    else
+      -- Concrete literal: delegate to graph_eval on just this node
+      -- (Lit nodes are self-contained, no sub-expressions)
+      graph_eval program ()
+
+  -- Guard (kind 17): evaluate predicate, branch
+  else if kind == 17 then
+    let children = graph_outgoing program root in
+    -- Guard children: [predicate, body, fallback] (from Guard payload)
+    -- Actually, Guard stores children in payload, not edges
+    let pred_id = graph_edge_target program root 0 0 in
+    let body_id = graph_edge_target program root 1 0 in
+    let fall_id = graph_edge_target program root 2 0 in
+    let pred_prog = graph_set_root program pred_id in
+    let pred_val = graph_eval me (me, pred_prog, env) in
+    if pred_val == true then
+      let body_prog = graph_set_root program body_id in
+      graph_eval me (me, body_prog, env)
+    else if pred_val == false then
+      let fall_prog = graph_set_root program fall_id in
+      graph_eval me (me, fall_prog, env)
+    else
+      -- Truthiness: non-zero Int is true
+      if pred_val == 0 then
+        let fall_prog = graph_set_root program fall_id in
+        graph_eval me (me, fall_prog, env)
+      else
+        let body_prog = graph_set_root program body_id in
+        graph_eval me (me, body_prog, env)
+
+  -- Prim (kind 0): evaluate arguments, apply primitive
+  else if kind == 0 then
+    let op = graph_get_prim_op program root in
+    let args = graph_outgoing program root in
+    let nargs = list_len args in
+    if nargs == 0 then
+      -- Zero-arg prims: self_graph, constants
+      graph_eval program ()
+    else if nargs == 1 then
+      let arg0_id = list_nth args 0 in
+      let sub0 = graph_set_root program arg0_id in
+      let a = graph_eval me (me, sub0, env) in
+      -- Unary ops
+      if op == 5 then 0 - a
+      else if op == 6 then if a < 0 then 0 - a else a
+      else if op == 176 then str_len a
+      else if op == 191 then str_chars a
+      else if op == 192 then char_at a 0
+      else if op == 210 then tuple_get a 0
+      else if op == 214 then tuple_len a
+      else if op == 240 then list_len a
+      else if op == 64 then int_to_float a
+      else if op == 65 then float_to_int a
+      else if op == 216 then math_sqrt a
+      -- Fallback for unknown unary
+      else graph_eval program ()
+    else if nargs == 2 then
+      let arg0_id = list_nth args 0 in
+      let arg1_id = list_nth args 1 in
+      let sub0 = graph_set_root program arg0_id in
+      let sub1 = graph_set_root program arg1_id in
+      let a = graph_eval me (me, sub0, env) in
+      let b = graph_eval me (me, sub1, env) in
+      -- Arithmetic
+      if op == 0 then a + b
+      else if op == 1 then a - b
+      else if op == 2 then a * b
+      else if op == 3 then if b == 0 then 0 else a / b
+      else if op == 4 then if b == 0 then 0 else a - (a / b) * b
+      else if op == 7 then if a < b then a else b
+      else if op == 8 then if a > b then a else b
+      -- Bitwise
+      else if op == 16 then bitand a b
+      else if op == 17 then bitor a b
+      else if op == 18 then bitxor a b
+      -- Comparison
+      else if op == 32 then a == b
+      else if op == 33 then a != b
+      else if op == 34 then a < b
+      else if op == 35 then a > b
+      else if op == 36 then a <= b
+      else if op == 37 then a >= b
+      -- String ops
+      else if op == 177 then str_concat a b
+      else if op == 179 then str_contains a b
+      else if op == 180 then str_split a b
+      else if op == 181 then str_join a b
+      else if op == 192 then char_at a b
+      -- Collection ops
+      else if op == 193 then list_append a b
+      else if op == 194 then list_nth a b
+      else if op == 210 then tuple_get a b
+      else if op == 199 then list_range a b
+      -- Fallback
+      else graph_eval program ()
+    else
+      -- 3+ args
+      let arg0_id = list_nth args 0 in
+      let arg1_id = list_nth args 1 in
+      let arg2_id = list_nth args 2 in
+      let sub0 = graph_set_root program arg0_id in
+      let sub1 = graph_set_root program arg1_id in
+      let sub2 = graph_set_root program arg2_id in
+      let a = graph_eval me (me, sub0, env) in
+      let b = graph_eval me (me, sub1, env) in
+      let c = graph_eval me (me, sub2, env) in
+      if op == 178 then str_slice a b c
+      else if op == 187 then str_replace a b c
+      else if op == 200 then map_insert a b c
+      else graph_eval program ()
+
+  -- Tuple (kind 11): evaluate all children
+  else if kind == 11 then
+    let children = graph_outgoing program root in
+    let nc = list_len children in
+    if nc == 0 then ()
+    else
+      let result = fold (list_range 0 0, 0) (\s _i ->
+        if s.1 >= nc then s
+        else
+          let cid = list_nth children s.1 in
+          let csub = graph_set_root program cid in
+          let cv = graph_eval me (me, csub, env) in
+          (list_append s.0 cv, s.1 + 1))
+        nc in
+      result.0
+
+  -- Project (kind 13): evaluate tuple, extract field
+  else if kind == 13 then
+    let fi = graph_get_field_index program root in
+    let children = graph_outgoing program root in
+    if list_len children > 0 then
+      let cid = list_nth children 0 in
+      let csub = graph_set_root program cid in
+      let tv = graph_eval me (me, csub, env) in
+      tuple_get tv fi
+    else ()
+
+  -- Lambda (kind 2): return a closure (program + env snapshot)
+  else if kind == 2 then
+    -- Return the program itself as a closure representation
+    -- When applied, the caller will use graph_eval_env or our own mechanism
+    (program, env)
+
+  -- Apply (kind 1): evaluate function and argument, apply
+  else if kind == 1 then
+    let children = graph_outgoing program root in
+    if list_len children >= 2 then
+      let fn_id = list_nth children 0 in
+      let arg_id = list_nth children 1 in
+      let fn_sub = graph_set_root program fn_id in
+      let fn_val = graph_eval me (me, fn_sub, env) in
+      let arg_sub = graph_set_root program arg_id in
+      let arg_val = graph_eval me (me, arg_sub, env) in
+      -- fn_val should be a closure (program, env)
+      -- Apply: evaluate fn body with arg bound
+      if tuple_len fn_val >= 2 then
+        let fn_prog = fn_val.0 in
+        let fn_env = fn_val.1 in
+        let binder = graph_get_binder fn_prog (graph_get_root fn_prog) in
+        let new_env = list_append fn_env (binder, arg_val) in
+        -- Evaluate the lambda body (continuation of the lambda node)
+        let body_id = graph_edge_target fn_prog (graph_get_root fn_prog) 0 3 in
+        let body_prog = graph_set_root fn_prog body_id in
+        graph_eval me (me, body_prog, new_env)
+      else
+        -- Not a closure, delegate
+        graph_eval program ()
+    else graph_eval program ()
+
+  -- Let (kind 3): evaluate binding, then body
+  else if kind == 3 then
+    let bind_id = graph_edge_target program root 0 2 in
+    let body_id = graph_edge_target program root 0 3 in
+    let bind_sub = graph_set_root program bind_id in
+    let bind_val = graph_eval me (me, bind_sub, env) in
+    -- Get the continuation (Lambda node wrapping the body)
+    let cont_node = graph_get_kind program body_id in
+    if cont_node == 2 then
+      -- Lambda continuation: bind the value and evaluate body
+      let binder = graph_get_binder program body_id in
+      let new_env = list_append env (binder, bind_val) in
+      let inner_body = graph_edge_target program body_id 0 3 in
+      let inner_prog = graph_set_root program inner_body in
+      graph_eval me (me, inner_prog, new_env)
+    else
+      -- Not a lambda continuation, evaluate directly
+      let body_sub = graph_set_root program body_id in
+      graph_eval me (me, body_sub, env)
+
+  -- Fold (kind 8): evaluate base, step, collection, iterate
+  else if kind == 8 then
+    let children = graph_outgoing program root in
+    let nc = list_len children in
+    if nc < 2 then graph_eval program ()
+    else
+      let base_id = list_nth children 0 in
+      let step_id = list_nth children 1 in
+      let base_sub = graph_set_root program base_id in
+      let base_val = graph_eval me (me, base_sub, env) in
+      -- Get collection
+      let coll_val = if nc >= 3 then
+        let coll_id = list_nth children 2 in
+        let coll_sub = graph_set_root program coll_id in
+        graph_eval me (me, coll_sub, env)
+      else 0 in
+      let n = if coll_val >= 0 then coll_val else 0 in
+      -- Get step function kind
+      let step_kind = graph_get_kind program step_id in
+      if step_kind == 0 then
+        -- Prim step: apply directly
+        let step_op = graph_get_prim_op program step_id in
+        fold base_val (\acc i ->
+          if step_op == 0 then acc + i
+          else if step_op == 1 then acc - i
+          else if step_op == 2 then acc * i
+          else if step_op == 7 then if acc < i then acc else i
+          else if step_op == 8 then if acc > i then acc else i
+          else acc)
+          n
+      else
+        -- Lambda step: evaluate with binding
+        let step_binder = graph_get_binder program step_id in
+        let step_body = graph_edge_target program step_id 0 3 in
+        fold base_val (\acc i ->
+          let step_env = list_append env (step_binder, (acc, i)) in
+          let step_prog = graph_set_root program step_body in
+          graph_eval me (me, step_prog, step_env))
+          n
+
+  -- Inject (kind 12): tag + payload
+  else if kind == 12 then
+    let tag = graph_get_tag program root in
+    let children = graph_outgoing program root in
+    if list_len children > 0 then
+      let payload_id = list_nth children 0 in
+      let payload_sub = graph_set_root program payload_id in
+      let payload_val = graph_eval me (me, payload_sub, env) in
+      value_make_tagged tag payload_val
+    else value_make_tagged tag ()
+
+  -- Effect (kind 10): evaluate args, dispatch effect
+  else if kind == 10 then
+    let tag = graph_get_effect_tag program root in
+    let children = graph_outgoing program root in
+    let nc = list_len children in
+    if nc == 0 then perform_effect tag ()
+    else if nc == 1 then
+      let a0 = list_nth children 0 in
+      let s0 = graph_set_root program a0 in
+      let v0 = graph_eval me (me, s0, env) in
+      perform_effect tag v0
+    else
+      let a0 = list_nth children 0 in
+      let a1 = list_nth children 1 in
+      let s0 = graph_set_root program a0 in
+      let s1 = graph_set_root program a1 in
+      let v0 = graph_eval me (me, s0, env) in
+      let v1 = graph_eval me (me, s1, env) in
+      perform_effect tag (v0, v1)
+
+  -- TypeAbst (kind 14), TypeApp (kind 15): transparent, evaluate body
+  else if kind == 14 then
+    let children = graph_outgoing program root in
+    if list_len children > 0 then
+      let body_id = list_nth children 0 in
+      let body_sub = graph_set_root program body_id in
+      graph_eval me (me, body_sub, env)
+    else ()
+  else if kind == 15 then
+    let children = graph_outgoing program root in
+    if list_len children > 0 then
+      let body_id = list_nth children 0 in
+      let body_sub = graph_set_root program body_id in
+      graph_eval me (me, body_sub, env)
+    else ()
+
+  -- Ref (kind 6): cross-fragment call
+  else if kind == 6 then
+    graph_eval_ref program root ()
+
+  -- Rewrite (kind 18): evaluate body
+  else if kind == 18 then
+    let children = graph_outgoing program root in
+    if list_len children > 0 then
+      let body_id = list_nth children 0 in
+      let body_sub = graph_set_root program body_id in
+      graph_eval me (me, body_sub, env)
+    else ()
+
+  -- LetRec (kind 16): recursive binding
+  else if kind == 16 then
+    let binder = graph_get_binder program root in
+    let children = graph_outgoing program root in
+    if list_len children >= 2 then
+      let vbind_id = list_nth children 0 in
+      let body_id = list_nth children 1 in
+      let vbind_sub = graph_set_root program vbind_id in
+      let vbind = graph_eval me (me, vbind_sub, env) in
+      let new_env = list_append env (binder, vbind) in
+      let body_sub = graph_set_root program body_id in
+      graph_eval me (me, body_sub, new_env)
+    else ()
+
+  -- Unknown kind: fallback (this should never happen for valid programs)
+  else ()

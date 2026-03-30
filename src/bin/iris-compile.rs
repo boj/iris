@@ -31,8 +31,9 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Take the first (main) fragment's graph — fragments are (name, Fragment, spans)
-    let graph = &result.fragments[0].1.graph;
+    // Take the last fragment's graph (the main entry point).
+    // Earlier fragments are helpers that get referenced via Ref nodes.
+    let graph = &result.fragments.last().unwrap().1.graph;
     let json = serde_json::to_string(graph)
         .unwrap_or_else(|e| { eprintln!("error: serialization failed: {}", e); std::process::exit(1); });
 

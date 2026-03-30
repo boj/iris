@@ -62,10 +62,12 @@ struct LowerCtx {
     scopes: Vec<BTreeMap<String, Binding>>,
     source_map: SourceMap,
     salt_counter: u64,
-    /// Tracks lambda nesting depth. Each nested lambda gets a unique input-ref
-    /// index (0x80 + depth) so inner lambdas don't collide with outer lambda
-    /// params or function params (which use indices 0..N).
-    lambda_depth: u32,
+    /// Monotonically increasing counter for lambda binder allocation.
+    /// Each lambda gets a unique input-ref index (0x80 + counter) so that
+    /// sequential lambdas at the same nesting depth don't share binder IDs.
+    /// This prevents node sharing bugs where a fold's collection expression
+    /// references InputRef nodes from a different fold's lambda.
+    lambda_counter: u32,
     /// Record field name -> index mappings, keyed by type name.
     record_fields: BTreeMap<String, Vec<String>>,
     /// Type variable bindings for parametric type monomorphization.
@@ -88,7 +90,7 @@ impl LowerCtx {
             scopes: vec![BTreeMap::new()],
             source_map: BTreeMap::new(),
             salt_counter: 0,
-            lambda_depth: 0,
+            lambda_counter: 0,
             record_fields: BTreeMap::new(),
             type_var_env: BTreeMap::new(),
             adt_defs: BTreeMap::new(),
@@ -907,12 +909,11 @@ impl LowerCtx {
     }
 
     fn lower_lambda(&mut self, params: &[String], body: &Expr) -> Result<NodeId, SyntaxError> {
-        // Each lambda nesting level uses a unique input-ref index (0x80 + depth)
-        // so that inner lambdas don't shadow outer lambda params or function
-        // params (which use indices 0..N where N < 128 in practice).
-        let ref_index = (0x80 + self.lambda_depth) as u8;
+        // Each lambda gets a unique input-ref index via a monotonic counter.
+        // Index starts at 0x80 to avoid colliding with function params (0..N).
+        let ref_index = (0x80 + self.lambda_counter) as u8;
         let binder_id = BinderId(0xFFFF_0000 + ref_index as u32);
-        self.lambda_depth += 1;
+        self.lambda_counter += 1;
         self.push_scope();
         if params.len() == 1 {
             self.bind(params[0].clone(), Binding::LambdaParam(ref_index));
@@ -931,7 +932,6 @@ impl LowerCtx {
         }
         let body_id = self.lower_expr(body)?;
         self.pop_scope();
-        self.lambda_depth -= 1;
         let t = self.int_type();
         let lambda_id = self.insert_node(Node { id: NodeId(0), kind: NodeKind::Lambda,
             type_sig: t, cost: CostTerm::Unit, arity: 0, resolution_depth: 0, salt: 0,
@@ -998,9 +998,9 @@ impl LowerCtx {
                         _ => "_ctor_inner".to_string(),
                     };
                     self.push_scope();
-                    let ref_index = (0x80 + self.lambda_depth) as u8;
+                    let ref_index = (0x80 + self.lambda_counter) as u8;
                     let binder_id = BinderId(0xFFFF_0000 + ref_index as u32);
-                    self.lambda_depth += 1;
+                    self.lambda_counter += 1;
                     self.bind(binder_name, Binding::LambdaParam(ref_index));
 
                     // For nested constructor patterns (e.g. Some(Some(x))),
@@ -1011,7 +1011,6 @@ impl LowerCtx {
                     // If there's a guard, wrap: if guard then body else <fall_through>
                     let body_with_guard = self.wrap_guard(&arm.guard, raw_body)?;
                     self.pop_scope();
-                    self.lambda_depth -= 1;
                     let t = self.int_type();
                     let lambda_id = self.insert_node(Node {
                         id: NodeId(0), kind: NodeKind::Lambda, type_sig: t,

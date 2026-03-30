@@ -67,9 +67,11 @@ When writing IRIS programs that replace Rust scaffolding, these are absolute req
 
 ## Build Conventions
 - Rust workspace: iris-types + iris-bootstrap (2 crates)
-- C library at iris-clcu/ (CLCU container runtime)
+- CLCU hardware layer at iris-clcu/ (AVX-512 container runtime, not yet integrated)
 - BLAKE3 for all hashing
 - Zero unsafe in proof kernel
 - NixOS: use `nix-shell -p <packages> --run '<command>'` for tools not on PATH
 - Default build: `cargo build` (evaluator + types)
 - With parser/lowerer: `cargo build --features syntax`
+- Stage0 binary: `cargo build --release --features syntax --bin iris-stage0 && cp target/release/iris-stage0 bootstrap/`
+- Stage0 is the frozen bootstrap seed — all commands: compile, run, direct, interp, test, rebuild

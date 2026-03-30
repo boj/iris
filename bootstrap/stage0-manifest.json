@@ -1,10 +1,13 @@
 {
-  "description": "C bootstrap evaluator — loads JSON-compiled IRIS programs and evaluates them. 72KB, no Rust dependency.",
-  "language": "C11",
-  "source": "bootstrap/c-runtime/",
-  "build": "cd bootstrap/c-runtime && make",
-  "build_date": "2026-03-29",
+  "description": "IRIS stage0 bootstrap seed — frozen Rust binary that loads JSON-compiled IRIS programs",
+  "binary": "bootstrap/iris-stage0",
+  "build": "cargo build --release --features syntax --bin iris-stage0 && cp target/release/iris-stage0 bootstrap/",
+  "build_date": "2026-03-30",
   "target_triple": "x86_64-unknown-linux-gnu",
-  "sha256": "computed at build time",
-  "lean_kernel": "lean/iris-kernel-server (built separately via lake)"
+  "artifacts": [
+    "bootstrap/tokenizer.json",
+    "bootstrap/parser.json",
+    "bootstrap/lowerer.json",
+    "bootstrap/interpreter.json"
+  ]
 }
