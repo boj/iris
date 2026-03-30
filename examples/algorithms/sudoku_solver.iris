@@ -1,16 +1,13 @@
 -- Sudoku Solver
 -- Solves 9x9 Sudoku puzzles using backtracking search.
--- Board: flat 81-element tuple. Cell (r,c) is at index r*9+c. 0 = empty, 1-9 = filled.
+-- Board: State map keyed by cell index (int_to_string of 0-80).
+-- Cell (r,c) is at index r*9+c. 0 = empty, 1-9 = filled.
+--
+-- Using State (BTreeMap) gives O(log 81) ≈ O(1) per cell update
+-- instead of O(81) for immutable-tuple copies.
 --
 -- Algorithm: find first empty cell, try digits 1-9, recurse. If a digit fails
 -- (no solution found downstream), backtrack and try the next digit.
---
--- FIXME: Slow due to immutable tuples -- each set_cell copies all 81 elements.
--- A mutable array or sparse representation would be ~100x faster.
-
--- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
 -- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
@@ -20,16 +17,21 @@ let fold_while init step_fn xs =
   ) xs in
   result.1
 
--- Get cell value at (row, col).
-let cell board r c : Tuple -> Int -> Int -> Int [cost: Const(1)] =
-  list_nth board (r * 9 + c)
+-- Get cell value at index idx from State board.
+let get_cell board idx : State -> Int -> Int [cost: Const(1)] =
+  let v = map_get board (int_to_string idx) in
+  if v == () then 0 else v
 
--- Set cell value, returning new board.
-let set_cell board r c val : Tuple -> Int -> Int -> Int -> Tuple [cost: Const(1)] =
-  list_set board (r * 9 + c) val
+-- Set cell value at index idx, returning new State board.
+let set_cell board idx val : State -> Int -> Int -> State [cost: Const(1)] =
+  map_insert board (int_to_string idx) val
+
+-- Get cell value at (row, col).
+let cell board r c : State -> Int -> Int -> Int [cost: Const(1)] =
+  get_cell board (r * 9 + c)
 
 -- Check if placing `val` at (r, c) is valid (no conflict in row, col, or box).
-let is_valid board r c val : Tuple -> Int -> Int -> Int -> Bool [cost: Const(27)] =
+let is_valid board r c val : State -> Int -> Int -> Int -> Bool [cost: Const(27)] =
   -- Check row: no duplicate in row r
   let row_ok = fold true (\ok j ->
     ok && cell board r j != val
@@ -49,49 +51,59 @@ let is_valid board r c val : Tuple -> Int -> Int -> Int -> Bool [cost: Const(27)
   row_ok && col_ok && box_ok
 
 -- Find the first empty cell (value 0). Returns (row, col) or (-1, -1) if none.
-let find_empty board : Tuple -> Tuple [cost: Const(81)] =
+let find_empty board : State -> Tuple [cost: Const(81)] =
   fold_while (-1, -1) (\pair ->
     let result = pair.0 in
     let idx = pair.1 in
     if idx >= 81 then (false, result)
-    else if list_nth board idx == 0 then (false, (idx / 9, idx % 9))
+    else if get_cell board idx == 0 then (false, (idx / 9, idx % 9))
     else (true, result)
   ) (list_range 0 82)
 
 -- Solve the board using backtracking.
-let rec solve board : Tuple -> Tuple [cost: Unknown] =
+let rec solve board : State -> State [cost: Unknown] =
   let empty = find_empty board in
   let r = empty.0 in
   let c = empty.1 in
   if r == -1 then board  -- no empty cells, solved!
   else
     -- Try values 1-9
-    fold_while () (\pair ->
-      let best = pair.0 in
-      let val = pair.1 in
+    fold_while board (\best val ->
       if val > 9 then (false, best)
       else if is_valid board r c val then
-        let new_board = set_cell board r c val in
+        let new_board = set_cell board (r * 9 + c) val in
         let result = solve new_board in
         -- Check if solved (no zeros remaining)
-        let solved = fold true (\ok i -> ok && list_nth result i != 0) (list_range 0 81) in
+        let solved = fold true (\ok idx -> ok && get_cell result idx != 0) (list_range 0 81) in
         if solved then (false, result)
         else (true, best)
       else (true, best)
     ) (list_range 1 10)
 
--- Check if a board is completely solved.
-let is_solved board : Tuple -> Bool [cost: Const(81)] =
-  fold true (\ok i -> ok && list_nth board i != 0) (list_range 0 81)
+-- Build a State board from a flat 81-element tuple.
+let board_from_tuple xs : Tuple -> State [cost: Const(81)] =
+  fold state_empty (\m idx ->
+    let v = list_nth xs idx in
+    if v == 0 then m
+    else map_insert m (int_to_string idx) v
+  ) (list_range 0 81)
+
+-- Check if a board is completely solved (no zeros).
+let is_solved board : State -> Bool [cost: Const(81)] =
+  fold true (\ok idx -> ok && get_cell board idx != 0) (list_range 0 81)
 
 -- Count empty cells.
-let count_empty board : Tuple -> Int [cost: Const(81)] =
-  fold 0 (\acc v -> if v == 0 then acc + 1 else acc) board
+let count_empty board : State -> Int [cost: Const(81)] =
+  fold 0 (\acc idx -> if get_cell board idx == 0 then acc + 1 else acc) (list_range 0 81)
+
+-- Extract first row as a tuple (for result checking).
+let first_row board : State -> Tuple [cost: Const(9)] =
+  map (\j -> cell board 0 j) (list_range 0 9)
 
 -- Test: solve a simple puzzle
 -- (Use a mostly-filled board for speed since backtracking is expensive)
 let test_sudoku x : Int -> Tuple =
-  let board = (
+  let flat = (
     5, 3, 0, 0, 7, 0, 0, 0, 0,
     6, 0, 0, 1, 9, 5, 0, 0, 0,
     0, 9, 8, 0, 0, 0, 0, 6, 0,
@@ -102,7 +114,8 @@ let test_sudoku x : Int -> Tuple =
     0, 0, 0, 4, 1, 9, 0, 0, 5,
     0, 0, 0, 0, 8, 0, 0, 7, 9
   ) in
+  let board = board_from_tuple flat in
   let empty_count = count_empty board in
   let solution = solve board in
   let solved = is_solved solution in
-  (empty_count, solved, list_take solution 9)
+  (empty_count, solved, first_row solution)

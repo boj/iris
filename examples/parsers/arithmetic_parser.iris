@@ -95,66 +95,9 @@ and parse_expr tokens pos : Tuple -> Int -> Tuple [cost: Unknown] =
       else (false, state)
     ) (list_range 0 100)
 
--- FIXME: IRIS does not support `and` for mutually recursive functions.
--- The `and` keyword for mutual recursion is not part of the surface syntax.
--- Workaround: combine parse_expr, parse_term, parse_factor into one function
--- with a mode parameter, or use open recursion.
-
--- Combined parser using mode parameter (0=expr, 1=term, 2=factor).
-let rec parse tokens pos mode : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
-  if mode == 2 then
-    -- Factor
-    let tok = peek tokens pos in
-    if tok == -10 then
-      let result = parse tokens (advance pos) 0 in
-      let close = peek tokens result.1 in
-      if close == -11 then (result.0, advance result.1)
-      else (-99999, result.1)
-    else if tok >= 0 then (tok, advance pos)
-    else (-99999, pos)
-  else if mode == 1 then
-    -- Term
-    let left = parse tokens pos 2 in
-    if left.0 == -99999 then left
-    else
-      fold_while left (\pair ->
-        let state = pair.0 in
-        let step = pair.1 in
-        let op = peek tokens state.1 in
-        if op == -3 then
-          let right = parse tokens (advance state.1) 2 in
-          if right.0 == -99999 then (false, right)
-          else (true, (state.0 * right.0, right.1))
-        else if op == -4 then
-          let right = parse tokens (advance state.1) 2 in
-          if right.0 == -99999 then (false, right)
-          else if right.0 == 0 then (false, (-99999, right.1))
-          else (true, (state.0 / right.0, right.1))
-        else (false, state)
-      ) (list_range 0 100)
-  else
-    -- Expr
-    let left = parse tokens pos 1 in
-    if left.0 == -99999 then left
-    else
-      fold_while left (\pair ->
-        let state = pair.0 in
-        let step = pair.1 in
-        let op = peek tokens state.1 in
-        if op == -1 then
-          let right = parse tokens (advance state.1) 1 in
-          if right.0 == -99999 then (false, right)
-          else (true, (state.0 + right.0, right.1))
-        else if op == -2 then
-          let right = parse tokens (advance state.1) 1 in
-          if right.0 == -99999 then (false, right)
-          else (true, (state.0 - right.0, right.1))
-        else (false, state)
-      ) (list_range 0 100)
-
 -- Evaluate an expression string (as token tuple).
 let eval_expr tokens : Tuple -> Int [cost: Unknown] =
-  let result = parse tokens 0 0 in
+  let result = parse_expr tokens 0 in
   result.0
 
 -- Test: 2 + 3 * 4 = 14, (2 + 3) * 4 = 20

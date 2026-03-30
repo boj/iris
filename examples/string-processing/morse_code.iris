@@ -42,12 +42,22 @@ let char_to_morse code : Int -> Tuple [cost: Const(2)] =
     else ()
   else ()
 
--- Encode a string to a list of Morse sequences.
--- FIXME: Returns tuple-of-tuples. Ideally we'd produce a flat string like ".- -... -.-."
--- but IRIS lacks a convenient way to map integer tuples back to string characters.
-let encode_morse s : String -> Tuple [cost: Linear(s)] =
+-- Convert a single dot/dash integer (0=dot, 1=dash) to its character.
+let dot_dash_str bit : Int -> String [cost: Const(1)] =
+  if bit == 0 then "." else "-"
+
+-- Convert a morse sequence tuple (e.g. (0,1)) to a string like ".-".
+let morse_seq_to_str seq : Tuple -> String [cost: Linear(seq)] =
+  str_join (map dot_dash_str seq) ""
+
+-- Encode a string to a flat Morse code string with letters separated by spaces.
+-- e.g. "SOS" -> "... --- ..."
+-- str_chars returns single-char strings; char_at c 0 gets the Unicode codepoint.
+let encode_morse s : String -> String [cost: Linear(s)] =
   let chars = str_chars (str_upper s) in
-  map char_to_morse chars
+  let codes = map (\c -> char_at c 0) chars in
+  let seqs = map char_to_morse codes in
+  str_join (map morse_seq_to_str seqs) " "
 
 -- Test
 let test_morse x : Int -> Tuple =

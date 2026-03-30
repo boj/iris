@@ -27,17 +27,16 @@ let sym_cons x : Int -> Int = -13
 let sym_list x : Int -> Int = -14
 let sym_null x : Int -> Int = -15
 
--- Check if a value is a list (tuple).
--- FIXME: is_unit can distinguish () from integers, but we also need
--- to distinguish Tuple from Int. There's no is_tuple primitive.
--- We'll use a convention: atoms are ints, lists are tuples.
+-- Type dispatch convention: atoms are non-negative ints (literals) or
+-- negative ints (symbols). Lists are tuples. is_unit detects the empty
+-- list (). There is no is_tuple primitive; callers must use the encoding
+-- invariant (symbols are negative, literals non-negative, lists are tuples).
 
--- Evaluate an atom expression in an environment.
--- Handles the two atom forms: symbols (negative ints → env lookup) and
--- literals (non-negative ints → self-evaluating). List forms are handled
--- by eval_list below.
+-- Mutually recursive evaluator: lisp_eval dispatches atoms; eval_list
+-- handles compound expressions. `let rec ... and ...` lets them call
+-- each other without any combined-function workaround.
 let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
-  -- If it's a positive integer, it's a literal
+  -- If it's the empty tuple (), it evaluates to 0
   if is_unit expr then 0
   else
     -- Check if it's a symbol (negative int = variable lookup)
@@ -53,7 +52,7 @@ let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
 -- Apply a built-in operation to already-evaluated arguments.
 -- op is a symbol ID (negative int); args is a tuple of evaluated values.
 -- Returns the integer result of the operation.
-let apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
+and apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
   if op == -1 then  -- +
     fold 0 (+) args
   else if op == -2 then  -- -
@@ -73,26 +72,23 @@ let apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
 
 -- Evaluate a list expression: (op arg1 arg2 ...)
 -- Handles special forms (if, quote) before falling through to apply_builtin.
--- NOTE: args are NOT recursively evaluated (no full eval pass), which limits
--- nesting depth. A production Lisp would call lisp_eval on each argument.
-let eval_list expr env : Tuple -> State -> Int [cost: Unknown] =
+-- Arguments are recursively evaluated via lisp_eval before application.
+and eval_list expr env : Tuple -> State -> Int [cost: Unknown] =
   let n = list_len expr in
   if n == 0 then 0
   else
     let op = list_nth expr 0 in
-    -- Special form: if
+    -- Special form: if — evaluate condition, then choose branch
     if op == -5 then
-      let cond = list_nth expr 1 in
-      -- FIXME: need recursive eval but let rec doesn't work across
-      -- multiple top-level functions in IRIS. We inline the condition check.
-      if cond != 0 then list_nth expr 2
-      else list_nth expr 3
-    -- Special form: quote
+      let cond = lisp_eval (list_nth expr 1) env in
+      if cond != 0 then lisp_eval (list_nth expr 2) env
+      else lisp_eval (list_nth expr 3) env
+    -- Special form: quote — return unevaluated
     else if op == -6 then
       list_nth expr 1
     else
-      -- Normal function application: evaluate args, apply
-      let args = map (\a -> a) (list_drop expr 1) in
+      -- Normal function application: evaluate each argument, then apply
+      let args = map (\a -> lisp_eval a env) (list_drop expr 1) in
       apply_builtin op args
 
 -- Test: (+ 1 2) = 3, (* 3 (+ 1 2)) as (* 3 3) = 9

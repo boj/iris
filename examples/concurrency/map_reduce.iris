@@ -12,13 +12,23 @@ let mr_map mapper data : (Int -> Tuple) -> Tuple -> Tuple [cost: Unknown] =
     list_concat acc (mapper item)
   ) data
 
--- Shuffle/Group: group by key.
+-- Shuffle/Group: group by key using State map for O(n log n) grouping.
 -- Returns a tuple of (key, values_tuple) pairs.
--- FIXME: This is O(n^2) without a proper hash map for grouping.
+-- State maps key_str -> values_tuple; unique Int keys are collected separately.
 let mr_group pairs : Tuple -> Tuple [cost: Unknown] =
+  -- Pass 1: accumulate values per key in a State map (O(n log n))
+  let m = fold state_empty (\acc p ->
+    let k = p / 1000 in
+    let v = p % 1000 in
+    let k_str = int_to_string k in
+    let existing = map_get acc k_str in
+    let new_vals = if existing == () then (v,) else list_append existing v in
+    map_insert acc k_str new_vals
+  ) pairs in
+  -- Pass 2: collect unique Int keys (sorted), then look up values from map (O(k log n))
   let keys = list_dedup (list_sort (map (\p -> p / 1000) pairs)) in
   map (\k ->
-    let values = map (\p -> p % 1000) (filter (\p -> p / 1000 == k) pairs) in
+    let values = map_get m (int_to_string k) in
     (k, values)
   ) keys
 

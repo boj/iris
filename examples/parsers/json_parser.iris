@@ -17,11 +17,8 @@ let fold_while init step_fn xs =
 --   (4, elements)   -- array
 --   (5, kv_pairs)   -- object (tuple of (key, value) pairs)
 --
--- FIXME: Parsing strings character-by-character is very slow because
--- str_slice/str_chars creates many intermediate allocations. A proper
--- streaming parser or byte-level access would be much faster.
--- FIXME: IRIS has no way to pattern-match on individual characters
--- extracted from strings; must compare with char_at or str_eq on slices.
+-- Note: character access uses char_at which returns the Unicode codepoint
+-- as an Int; comparisons against ASCII codes dispatch on character type.
 
 -- Skip whitespace starting at position pos in string s.
 let rec skip_ws s pos : String -> Int -> Int [cost: Unknown] =
@@ -69,12 +66,7 @@ let parse_string s pos : String -> Int -> Tuple [cost: Unknown] =
     let content = str_slice s start end_pos in
     ((1, content), end_pos + 1)
 
--- Forward declaration stub for recursive parsing.
--- FIXME: IRIS does not support mutually recursive top-level functions.
--- We must use a single combined function with mode parameter, or use
--- let rec within a single scope. This limits the parser's structure.
-
--- Combined parser: mode determines what to parse.
+-- Recursive JSON parser. parse_json calls itself for nested arrays and objects.
 let rec parse_json s pos : String -> Int -> Tuple [cost: Unknown] =
   let p = skip_ws s pos in
   if p >= str_len s then ((3,), p)  -- null at EOF

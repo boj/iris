@@ -57,21 +57,26 @@ let rec ast_depth node : Tuple -> Int [cost: Unknown] =
   else 0
 
 -- Pretty-print to a flat string representation.
--- Returns a tuple of character codes.
--- FIXME: Building strings from nested ASTs requires repeated str_concat,
--- which is O(n^2) in total output length. A StringBuilder/buffer pattern
--- would be more efficient but IRIS lacks mutable strings.
+-- Uses buf_new/buf_push/buf_finish to assemble multi-part strings in O(n) parts.
 let rec ast_to_string node : Tuple -> String [cost: Unknown] =
   let tag = list_nth node 0 in
   if tag == 0 then int_to_string (list_nth node 1)
   else if tag == 1 then
     let op = list_nth node 1 in
     let op_str = if op == 0 then "+" else if op == 1 then "-" else if op == 2 then "*" else "/" in
-    str_concat "(" (str_concat (ast_to_string (list_nth node 2))
-      (str_concat " " (str_concat op_str
-        (str_concat " " (str_concat (ast_to_string (list_nth node 3)) ")")))))
+    let left_s = ast_to_string (list_nth node 2) in
+    let right_s = ast_to_string (list_nth node 3) in
+    let b = buf_push (buf_new) "(" in
+    let b = buf_push b left_s in
+    let b = buf_push b " " in
+    let b = buf_push b op_str in
+    let b = buf_push b " " in
+    let b = buf_push b right_s in
+    buf_finish (buf_push b ")")
   else if tag == 2 then
-    str_concat "(-" (str_concat (ast_to_string (list_nth node 1)) ")")
+    let child_s = ast_to_string (list_nth node 1) in
+    let b = buf_push (buf_new) "(-" in
+    buf_finish (buf_push (buf_push b child_s) ")")
   else "?"
 
 -- Constant folding optimizer: simplify constant sub-expressions bottom-up.

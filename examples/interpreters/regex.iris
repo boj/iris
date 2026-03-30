@@ -12,11 +12,10 @@ let fold_while init step_fn xs =
 -- Supports: literal chars, . (any), * (zero or more), + (one or more), ? (optional)
 -- Patterns and strings are represented as tuples of character codes.
 --
--- FIXME: A proper regex engine needs backtracking or NFA simulation.
--- This simplified version handles basic patterns without alternation or grouping.
--- FIXME: IRIS lacks a way to break out of a recursive match early when the first
--- successful path is found. fold_while helps but the NFA state explosion makes
--- this fundamentally difficult without mutable state or continuations.
+-- Note: This is a greedy recursive-descent matcher, not a full NFA/DFA engine.
+-- It handles the common quantifiers (* + ?) but not alternation or grouping.
+-- Early exit on success is achieved with fold_while (stops at first match).
+-- A full NFA simulation would be needed for correctness on all regex patterns.
 
 -- Special pattern codes
 -- 46 = '.', 42 = '*', 43 = '+', 63 = '?'

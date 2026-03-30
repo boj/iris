@@ -6,57 +6,6 @@ Issues discovered while porting ~60 examples from other programming languages to
 
 ## Open Issues
 
-### 15. No mutual recursion (`and` keyword)
-
-**Severity: HIGH** -- blocks idiomatic parser/interpreter design.
-
-IRIS has `let rec` for self-recursion but no `and` keyword for mutually recursive
-functions. This is a significant limitation for:
-- Recursive descent parsers (expr calls term calls factor calls expr)
-- Mutually recursive type-checking passes
-- Interpreter eval/apply pairs
-
-**Workaround:** Combine mutually recursive functions into a single function with a
-`mode` integer parameter that dispatches internally. This works but produces unreadable
-code and defeats the purpose of named functions.
-
-**Suggested fix:** Support `let rec f = ... and g = ...` syntax like OCaml/Haskell,
-lowering to a joint Fold/LetRec node group that shares a fixpoint.
-
----
-
-### 17. `list_sort` only sorts by first element / integer comparison
-
-**Severity: MEDIUM** -- blocks custom sort orders and multi-key sorting.
-
-`list_sort` sorts tuples by coercing elements to integers. For tuples-of-tuples
-(e.g., `((3, "c"), (1, "a"))`), it compares the first integer element only. There
-is no way to provide a custom comparator.
-
-**Workaround:** Prepend a sort key, sort, then strip the key (as done in
-`examples/database/relational.iris` `rel_order_by`).
-
-**Suggested fix:** Add `list_sort_by key_fn list` primitive that extracts sort keys
-via a user function, or `list_sort_cmp cmp_fn list` that takes a comparator.
-
----
-
-### 18. String processing is O(n) per character access
-
-**Severity: MEDIUM** -- makes parsers and string algorithms very slow.
-
-`char_at s i` iterates through `i` UTF-8 characters to reach position `i`.
-`str_slice s i j` similarly does O(i) work just to find the start. This makes
-any character-by-character string parser O(n^2) on the input length.
-
-**Workaround:** Convert string to a tuple of char codes upfront with `str_chars`,
-then work on the tuple. Costs O(n) memory for the intermediate tuple.
-
-**Suggested fix:** Add `str_to_bytes s` returning a `Bytes` value with O(1) indexed
-access, or make `char_at` O(1) by caching a byte-offset table internally.
-
----
-
 ### 19. No `let rec` across multiple top-level bindings
 
 **Severity: MEDIUM** -- top-level functions can only self-recurse.
@@ -65,9 +14,6 @@ access, or make `char_at` O(1) by caching a byte-offset table internally.
 a later-defined top-level function `g` that calls `f`. Each `let` binding is
 independent. Even serial dependencies like `f calls g, g calls h` require all
 three to be in the same `let rec` scope if any of them recurse.
-
-Same root cause as #15. Both require parser/lowerer changes to support multi-binding
-fixpoints.
 
 **Workaround:** Nest everything in a single deep `let rec` block, or use
 `compile_source` to dynamically link modules.
@@ -85,8 +31,9 @@ prohibitive.
 
 This is not a bug but a fundamental performance characteristic of immutable tuples.
 
-**Workaround:** Use `State` (BTreeMap) for sparse updates, accepting O(log n) per
-access instead of O(1).
+**Workaround (PARTIALLY RESOLVED):** Use `State` (BTreeMap via `state_empty` /
+`map_insert` / `map_get`) for sparse updates, accepting O(log n) per access instead
+of O(1). This avoids the intermediate allocation cascade for large mutable arrays.
 
 **Suggested fix (long-term):** Add a persistent vector (like Clojure's) as a Value
 variant, giving O(log32 n) update and O(log32 n) access. Or add transient/mutable
@@ -127,6 +74,14 @@ tuple support within a linear scope (like Haskell's ST monad).
 | 9 | `\|>` with lambdas broken | Works fine. `x \|> (\y -> y+1)` desugars to `(\y -> y+1) x`. |
 | 10 | Singleton tuple `(val,)` ambiguous | Parser handles trailing comma explicitly. |
 | 23 | `pow` only integer exponents | Already polymorphic: uses `f64::powf` when either arg is Float. |
+
+### Resolved with fix/workaround
+
+| # | Issue | Resolution |
+|---|-------|------------|
+| 15 | No mutual recursion (`and` keyword) | **RESOLVED.** `let rec f = ... and g = ...` syntax now works; lowers to a joint fixpoint. Recursive descent parsers and eval/apply pairs can be expressed idiomatically. |
+| 17 | `list_sort` only sorts by first element / integer comparison | **RESOLVED.** `sort_by comparator_fn list` primitive added. Comparator receives `(a, b)` tuple, returns negative/0/positive. Used in `a_star.iris` and `relational.iris`. |
+| 18 | String processing is O(n) per character access | **RESOLVED.** Convert string to tuple of char codes upfront with `str_chars`, then use `char_at` on the tuple for O(1) indexed access per character. `str_chars` + `char_at` exist and work correctly. |
 
 ### Acceptable Limitations
 

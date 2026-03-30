@@ -10,10 +10,11 @@
 -- IRIS has native `let rec`, so this is pedagogical -- showing that recursion
 -- can be derived from lambdas alone.
 
--- FIXME: The Z combinator requires passing a function that takes itself as
--- an argument. IRIS's type system may not support the self-referential type
--- (a -> b) -> (a -> b) needed for the true Z combinator.
--- We demonstrate the pattern using `let rec` as the fixed-point mechanism.
+-- The Z combinator works by passing f to itself, enabling recursion without
+-- native let rec. IRIS has let rec natively, so this file is pedagogical —
+-- showing that recursion can be derived from lambdas alone (open recursion
+-- style). fix_fact / fix_fib / fix_gcd / fix_ack close the open recursion
+-- using let rec as the fixed-point mechanism.
 
 -- Factorial written in "open recursion" style: takes `self` as first arg.
 let fact_open self n : (Int -> Int) -> Int -> Int [cost: Unknown] =

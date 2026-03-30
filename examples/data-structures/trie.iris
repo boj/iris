@@ -3,42 +3,136 @@
 -- Uses State (map) for the trie structure.
 --
 -- Encoding: each trie node has a unique ID and stores:
---   map key "N_C" -> child node ID for character C at node N
---   map key "N_end" -> 1 if a word ends at node N
+--   map key "{N}_{C}" -> child node ID for character C at node N
+--   map key "{N}_end" -> 1 if a word ends at node N
 --   "next_id" -> next available node ID
+--   "root" -> root node ID (always 0)
 --
--- FIXME: This encoding requires int_to_string to build keys like "3_65".
--- Without it, we use a simplified approach with integer-keyed State.
--- If State only supports String keys, this needs str_concat + int_to_string.
+-- Keys are built using str_concat (int_to_string depth) (str_concat "_" (int_to_string char_code)).
 
--- Simplified Trie: store complete words in a sorted list.
--- Less efficient but demonstrates the interface.
+-- Create an empty trie (root node is ID 0).
+let trie_new x : Int -> State [cost: Const(1)] =
+  let m = map_insert state_empty "next_id" 1 in
+  map_insert m "root" 0
 
--- Create an empty trie.
-let trie_new x : Int -> Tuple [cost: Const(1)] = ()
+-- Build the child-edge key for node N and character code C.
+let edge_key n c : Int -> Int -> String [cost: Const(1)] =
+  str_concat (int_to_string n) (str_concat "_" (int_to_string c))
 
--- Insert a word (as a string).
-let trie_insert trie word : Tuple -> String -> Tuple [cost: Linear(trie)] =
-  if fold false (\found w -> if str_eq w word then true else found) trie then
-    trie  -- already present
+-- Build the end-of-word key for node N.
+let end_key n : Int -> String [cost: Const(1)] =
+  str_concat (int_to_string n) "_end"
+
+-- Allocate a new trie node, returns (new_state, node_id).
+let trie_alloc m : State -> Tuple [cost: Const(1)] =
+  let nid = map_get m "next_id" in
+  let m2 = map_insert m "next_id" (nid + 1) in
+  (m2, nid)
+
+-- Get or create a child node for node N with character code C.
+-- Returns (new_state, child_id).
+let trie_get_or_create_child m n c : State -> Int -> Int -> Tuple [cost: Const(1)] =
+  let k = edge_key n c in
+  let child = map_get m k in
+  if child == () then
+    let result = trie_alloc m in
+    let m2 = result.0 in
+    let new_id = result.1 in
+    let m3 = map_insert m2 k new_id in
+    (m3, new_id)
   else
-    list_append trie word
+    (m, child)
+
+-- Insert a sequence of character codes into the trie starting from node N.
+let rec trie_insert_chars m n chars idx : State -> Int -> Tuple -> Int -> State [cost: Unknown] =
+  let len = list_len chars in
+  if idx >= len then
+    -- Mark end of word at current node
+    map_insert m (end_key n) 1
+  else
+    let c = list_nth chars idx in
+    let result = trie_get_or_create_child m n c in
+    let m2 = result.0 in
+    let child_id = result.1 in
+    trie_insert_chars m2 child_id chars (idx + 1)
+
+-- Insert a word (string) into the trie.
+let trie_insert m word : State -> String -> State [cost: Unknown] =
+  let chars = str_chars word in
+  let root = map_get m "root" in
+  trie_insert_chars m root chars 0
+
+-- Search for an exact word in the trie. Returns Bool.
+let rec trie_search_chars m n chars idx : State -> Int -> Tuple -> Int -> Bool [cost: Unknown] =
+  let len = list_len chars in
+  if idx >= len then
+    -- Check if this node marks end of word
+    let end_val = map_get m (end_key n) in
+    end_val == 1
+  else
+    let c = list_nth chars idx in
+    let child = map_get m (edge_key n c) in
+    if child == () then false
+    else trie_search_chars m child chars (idx + 1)
 
 -- Search for an exact word.
-let trie_search trie word : Tuple -> String -> Bool [cost: Linear(trie)] =
-  fold false (\found w -> if str_eq w word then true else found) trie
+let trie_search m word : State -> String -> Bool [cost: Unknown] =
+  let chars = str_chars word in
+  let root = map_get m "root" in
+  trie_search_chars m root chars 0
 
 -- Find all words with a given prefix.
-let trie_prefix trie prefix : Tuple -> String -> Tuple [cost: Linear(trie)] =
-  filter (\w -> str_starts_with w prefix) trie
+-- For simplicity, collect all words stored in the trie matching the prefix
+-- by traversing to the prefix node, then doing a DFS.
+-- We track the current path as a partial word (as a list of char codes).
+let rec trie_collect m n path acc : State -> Int -> Tuple -> Tuple -> Tuple [cost: Unknown] =
+  -- If current node marks end of word, add path as chars to accumulator
+  let acc2 = if map_get m (end_key n) == 1
+             then list_append acc path
+             else acc in
+  -- Iterate over all possible char codes (printable ASCII 32-126)
+  fold acc2 (\a c ->
+    let child = map_get m (edge_key n c) in
+    if child == () then a
+    else trie_collect m child (list_append path c) a
+  ) (list_range 32 127)
+
+-- Find all words with a given prefix (returns list of char-code tuples).
+let trie_prefix m prefix : State -> String -> Tuple [cost: Unknown] =
+  let chars = str_chars prefix in
+  let root = map_get m "root" in
+  -- Walk to the prefix end node
+  let result = fold (true, root) (\state c ->
+    if state.0 == false then state
+    else
+      let node = state.1 in
+      let child = map_get m (edge_key node c) in
+      if child == () then (false, -1)
+      else (true, child)
+  ) chars in
+  if result.0 == false then ()
+  else trie_collect m result.1 chars ()
 
 -- Count words with a given prefix.
-let trie_count_prefix trie prefix : Tuple -> String -> Int [cost: Linear(trie)] =
-  list_len (trie_prefix trie prefix)
+let trie_count_prefix m prefix : State -> String -> Int [cost: Unknown] =
+  list_len (trie_prefix m prefix)
 
--- Remove a word.
-let trie_delete trie word : Tuple -> String -> Tuple [cost: Linear(trie)] =
-  filter (\w -> if str_eq w word then false else true) trie
+-- Remove a word (clear its end marker; does not prune nodes).
+let rec trie_delete_chars m n chars idx : State -> Int -> Tuple -> Int -> State [cost: Unknown] =
+  let len = list_len chars in
+  if idx >= len then
+    map_remove m (end_key n)
+  else
+    let c = list_nth chars idx in
+    let child = map_get m (edge_key n c) in
+    if child == () then m  -- word not in trie
+    else trie_delete_chars m child chars (idx + 1)
+
+-- Remove a word from the trie.
+let trie_delete m word : State -> String -> State [cost: Unknown] =
+  let chars = str_chars word in
+  let root = map_get m "root" in
+  trie_delete_chars m root chars 0
 
 -- Test
 let test_trie x : Int -> Tuple =
@@ -49,6 +143,5 @@ let test_trie x : Int -> Tuple =
   let t = trie_insert t "banana" in
   let found = trie_search t "app" in
   let not_found = trie_search t "ap" in
-  let prefix_app = trie_prefix t "app" in
   let count = trie_count_prefix t "app" in
-  (found, not_found, prefix_app, count)
+  (found, not_found, count)

@@ -71,15 +71,25 @@ let agg_min col group : Int -> Tuple -> Int [cost: Linear(group)] =
     if v < m then v else m
   ) group
 
--- Order by: sort table by a column.
--- Uses the Schwartzian transform: prepend the sort key to each row, sort
--- (list_sort compares by first element), then strip the prepended key.
--- FIXME: list_sort sorts by first element only, so compound sorts are not
--- directly supported without repeating the transform with tie-breaking keys.
+-- Order by: sort table by one or two columns using sort_by with a custom comparator.
+-- sort_col is the primary sort column; sort_col2 = -1 means no secondary sort.
+-- The comparator receives a (row_a, row_b) pair and returns negative/0/positive.
 let rel_order_by table sort_col : Tuple -> Int -> Tuple [cost: Unknown] =
-  let keyed = map (\row -> list_concat (list_nth row sort_col,) row) table in
-  let sorted = list_sort keyed in
-  map (\keyed_row -> list_drop keyed_row 1) sorted
+  sort_by (\pair ->
+    let a = pair.0 in
+    let b = pair.1 in
+    list_nth a sort_col - list_nth b sort_col
+  ) table
+
+-- Order by two columns: primary sort_col, secondary sort_col2 on ties.
+let rel_order_by2 table sort_col sort_col2 : Tuple -> Int -> Int -> Tuple [cost: Unknown] =
+  sort_by (\pair ->
+    let a = pair.0 in
+    let b = pair.1 in
+    let diff = list_nth a sort_col - list_nth b sort_col in
+    if diff != 0 then diff
+    else list_nth a sort_col2 - list_nth b sort_col2
+  ) table
 
 -- Test: employee database
 let test_relational x : Int -> Tuple =

@@ -3,9 +3,8 @@
 -- Grid: 0 = passable, 1 = wall. Movement cost = 1 per step.
 -- Heuristic: Manhattan distance (admissible for 4-directional movement).
 --
--- FIXME: A* requires a priority queue with decrease-key, which is expensive
--- with immutable tuples. We use a sorted open list which is O(n) per insert.
--- A proper implementation would need a mutable heap.
+-- Note: Priority queue implemented via sort_by. O(n^2) per generation;
+-- sufficient for small graphs.
 
 -- Inline helper: replace element at index.
 let list_set xs i val =
@@ -99,7 +98,7 @@ let a_star grid rows cols start_r start_c goal_r goal_c : Tuple -> Int -> Int ->
               let f = tent_g + h in
               let new_g = map_insert nb_g nb tent_g in
               -- Insert into open list maintaining sort order by f_score
-              let new_open = list_sort (list_append nb_open (f, nb)) in
+              let new_open = sort_by (\ab -> ab.0.0 - ab.1.0) (list_append nb_open (f, nb)) in
               (new_open, new_g)
             else acc
           ) nbrs in

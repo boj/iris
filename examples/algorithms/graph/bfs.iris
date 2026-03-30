@@ -29,14 +29,33 @@ let rec bfs_aux graph queue visited : Tuple -> Tuple -> Tuple -> Tuple [cost: Un
 let bfs graph start : Tuple -> Int -> Tuple [cost: Unknown] =
   bfs_aux graph (start,) ()
 
--- BFS with distance tracking: returns (node, distance) pairs.
--- FIXME: Returning parallel tuples instead of pairs because IRIS tuples are flat.
--- A proper tuple-of-tuples or record type would be cleaner here.
+-- BFS with distance tracking: returns a tuple of (node, dist) pairs.
+-- IRIS tuples can be nested — ((node, dist), ...) — so we accumulate
+-- (node, dist) tuples directly. Queue entries are also (node, dist) pairs.
+let rec bfs_dist_aux graph queue visited : Tuple -> Tuple -> Tuple -> Tuple [cost: Unknown] =
+  let n = list_len queue in
+  if n == 0 then visited
+  else
+    let entry = list_nth queue 0 in       -- entry = (node, dist)
+    let node = entry.0 in
+    let dist = entry.1 in
+    let rest_queue = list_drop queue 1 in
+    -- Check if node is already in visited (search by node id)
+    let already = fold false (\found pair -> if pair.0 == node then true else found) visited in
+    if already then
+      bfs_dist_aux graph rest_queue visited
+    else
+      let new_visited = list_append visited (node, dist) in
+      let neighbors = list_nth graph node in
+      let new_queue = fold rest_queue (\q nb ->
+        let nb_visited = fold false (\found pair -> if pair.0 == nb then true else found) new_visited in
+        if nb_visited then q
+        else list_append q (nb, dist + 1)
+      ) neighbors in
+      bfs_dist_aux graph new_queue new_visited
+
 let bfs_distances graph start : Tuple -> Int -> Tuple [cost: Unknown] =
-  let visited = bfs graph start in
-  -- Approximate: BFS order gives us the nodes, but computing exact distances
-  -- requires tracking the level during traversal.
-  visited
+  bfs_dist_aux graph ((start, 0),) ()
 
 -- Test: undirected graph (each edge listed in both directions)
 --   0 -- 1, 0 -- 2
@@ -45,4 +64,9 @@ let bfs_distances graph start : Tuple -> Int -> Tuple [cost: Unknown] =
 let test_bfs x : Int -> Tuple =
   let graph = ((1, 2), (0, 3), (0, 3), (1, 2, 4), (3,)) in
   let order = bfs graph 0 in
-  order
+  -- bfs_distances returns ((node, dist), ...) nested tuples
+  -- node 0: dist 0, nodes 1 and 2: dist 1, node 3: dist 2, node 4: dist 3
+  let dists = bfs_distances graph 0 in
+  let d0 = (list_nth dists 0).1 in  -- dist to node 0 = 0
+  let d4 = (list_nth dists 4).1 in  -- dist to node 4 = 3
+  (order, d0, d4)

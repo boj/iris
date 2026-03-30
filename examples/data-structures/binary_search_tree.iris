@@ -10,69 +10,132 @@
 --   "{id}_right" -> right child ID
 --   "root" -> root node ID
 
--- FIXME: IRIS lacks int_to_string for building dynamic keys.
--- This BST uses integer keys (node IDs) mapped via map_insert/map_get
--- with integer keys, which requires State to support Int keys.
--- If State only supports String keys, this needs int_to_string.
+-- Create an empty BST state.
+let bst_empty x : Int -> State [cost: Const(1)] =
+  let m = map_insert state_empty "next_id" 0 in
+  map_insert m "root" -1
 
--- Using a simpler encoding: BST as a sorted tuple (degenerate but functional).
--- Insert maintains sorted order, search uses binary search.
--- Trade-off: O(n) insert (must scan to find insertion point) but O(log n) search.
--- A proper pointer-based BST would need dynamic node IDs (see FIXME above).
+-- Allocate a new node, returns (new_state, node_id).
+let bst_alloc_node m val : State -> Int -> Tuple [cost: Const(1)] =
+  let nid = map_get m "next_id" in
+  let m = map_insert m "next_id" (nid + 1) in
+  let key_val = str_concat (int_to_string nid) "_val" in
+  let key_left = str_concat (int_to_string nid) "_left" in
+  let key_right = str_concat (int_to_string nid) "_right" in
+  let m = map_insert m key_val val in
+  let m = map_insert m key_left -1 in
+  let m = map_insert m key_right -1 in
+  (m, nid)
 
--- Insert a value into a sorted tuple (maintaining sorted order).
-let rec bst_insert xs val : Tuple -> Int -> Tuple [cost: Linear(xs)] =
-  let n = list_len xs in
-  if n == 0 then (val,)
+-- Get a node's value field.
+let node_val m nid : State -> Int -> Int [cost: Const(1)] =
+  map_get m (str_concat (int_to_string nid) "_val")
+
+-- Get a node's left child ID.
+let node_left m nid : State -> Int -> Int [cost: Const(1)] =
+  map_get m (str_concat (int_to_string nid) "_left")
+
+-- Get a node's right child ID.
+let node_right m nid : State -> Int -> Int [cost: Const(1)] =
+  map_get m (str_concat (int_to_string nid) "_right")
+
+-- Set a node's left child.
+let node_set_left m nid child_id : State -> Int -> Int -> State [cost: Const(1)] =
+  map_insert m (str_concat (int_to_string nid) "_left") child_id
+
+-- Set a node's right child.
+let node_set_right m nid child_id : State -> Int -> Int -> State [cost: Const(1)] =
+  map_insert m (str_concat (int_to_string nid) "_right") child_id
+
+-- Insert a value into the BST. Returns updated state.
+let rec bst_insert_node m node_id val : State -> Int -> Int -> State [cost: Unknown] =
+  if node_id == -1 then m  -- should not happen; allocation handled by caller
   else
-    let mid_idx = n / 2 in
-    let mid = list_nth xs mid_idx in
-    if val == mid then xs  -- no duplicates
-    else if val < mid then
-      list_concat (bst_insert (list_take xs mid_idx) val)
-                  (list_drop xs mid_idx)
+    let v = node_val m node_id in
+    if val == v then m  -- duplicate, no change
+    else if val < v then
+      let left = node_left m node_id in
+      if left == -1 then
+        let result = bst_alloc_node m val in
+        let m2 = result.0 in
+        let new_id = result.1 in
+        node_set_left m2 node_id new_id
+      else
+        bst_insert_node m left val
     else
-      list_concat (list_take xs (mid_idx + 1))
-                  (bst_insert (list_drop xs (mid_idx + 1)) val)
+      let right = node_right m node_id in
+      if right == -1 then
+        let result = bst_alloc_node m val in
+        let m2 = result.0 in
+        let new_id = result.1 in
+        node_set_right m2 node_id new_id
+      else
+        bst_insert_node m right val
+
+-- Public insert: handles the root case.
+let bst_insert m val : State -> Int -> State [cost: Unknown] =
+  let root = map_get m "root" in
+  if root == -1 then
+    let result = bst_alloc_node m val in
+    let m2 = result.0 in
+    let new_id = result.1 in
+    map_insert m2 "root" new_id
+  else
+    bst_insert_node m root val
 
 -- Search for a value. Returns true/false.
-let rec bst_search xs val : Tuple -> Int -> Bool [cost: Unknown] =
-  let n = list_len xs in
-  if n == 0 then false
+let rec bst_search m node_id val : State -> Int -> Int -> Bool [cost: Unknown] =
+  if node_id == -1 then false
   else
-    let mid_idx = n / 2 in
-    let mid = list_nth xs mid_idx in
-    if val == mid then true
-    else if val < mid then bst_search (list_take xs mid_idx) val
-    else bst_search (list_drop xs (mid_idx + 1)) val
+    let v = node_val m node_id in
+    if val == v then true
+    else if val < v then bst_search m (node_left m node_id) val
+    else bst_search m (node_right m node_id) val
 
--- Find minimum (leftmost element).
-let bst_min xs : Tuple -> Int [cost: Const(1)] =
-  if list_len xs == 0 then -1
-  else list_nth xs 0
+-- In-order traversal: returns sorted tuple of all values.
+let rec bst_inorder m node_id : State -> Int -> Tuple [cost: Unknown] =
+  if node_id == -1 then ()
+  else
+    let left_vals = bst_inorder m (node_left m node_id) in
+    let right_vals = bst_inorder m (node_right m node_id) in
+    list_concat left_vals (list_append right_vals (node_val m node_id))
 
--- Find maximum (rightmost element).
-let bst_max xs : Tuple -> Int [cost: Const(1)] =
-  let n = list_len xs in
-  if n == 0 then -1
-  else list_nth xs (n - 1)
+-- Actually: append val between left and right for sorted order.
+let rec bst_inorder_sorted m node_id : State -> Int -> Tuple [cost: Unknown] =
+  if node_id == -1 then ()
+  else
+    let left_vals = bst_inorder_sorted m (node_left m node_id) in
+    let v = node_val m node_id in
+    let right_vals = bst_inorder_sorted m (node_right m node_id) in
+    list_concat (list_append left_vals v) right_vals
 
--- Delete a value from the BST.
-let bst_delete xs val : Tuple -> Int -> Tuple [cost: Linear(xs)] =
-  filter (\x -> x != val) xs
+-- Find minimum value (leftmost node).
+let rec bst_min m node_id : State -> Int -> Int [cost: Unknown] =
+  if node_id == -1 then -1
+  else
+    let left = node_left m node_id in
+    if left == -1 then node_val m node_id
+    else bst_min m left
 
--- In-order traversal (already sorted, so just return the tuple).
-let bst_inorder xs : Tuple -> Tuple [cost: Const(1)] = xs
+-- Find maximum value (rightmost node).
+let rec bst_max m node_id : State -> Int -> Int [cost: Unknown] =
+  if node_id == -1 then -1
+  else
+    let right = node_right m node_id in
+    if right == -1 then node_val m node_id
+    else bst_max m right
 
 -- Build a BST from an unsorted tuple.
-let bst_from_list xs : Tuple -> Tuple [cost: Unknown] =
-  fold () (\tree x -> bst_insert tree x) xs
+let bst_from_list xs : Tuple -> State [cost: Unknown] =
+  fold (bst_empty 0) (\m x -> bst_insert m x) xs
 
 -- Test
 let test_bst x : Int -> Tuple =
-  let tree = bst_from_list (5, 3, 7, 1, 4, 6, 8, 2) in
-  let found = bst_search tree 4 in
-  let not_found = bst_search tree 9 in
-  let minimum = bst_min tree in
-  let maximum = bst_max tree in
-  (tree, found, not_found, minimum, maximum)
+  let m = bst_from_list (5, 3, 7, 1, 4, 6, 8, 2) in
+  let root = map_get m "root" in
+  let found = bst_search m root 4 in
+  let not_found = bst_search m root 9 in
+  let minimum = bst_min m root in
+  let maximum = bst_max m root in
+  let sorted = bst_inorder_sorted m root in
+  (found, not_found, minimum, maximum, sorted)
