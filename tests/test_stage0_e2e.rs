@@ -619,7 +619,7 @@ fn native_compile_and_run(source: &str, name: &str, args: &[&str]) -> String {
         10_000_000, &elf_reg).unwrap();
 
     if let Value::Bytes(ref b) = elf {
-        let path = std::env::temp_dir().join(format!("iris_native_{}", name));
+        let path = std::env::temp_dir().join(format!("iris_native_{}_{}", name, std::process::id()));
         std::fs::write(&path, b).unwrap();
         std::process::Command::new("chmod").args(["+x", path.to_str().unwrap()]).output().unwrap();
         let output = std::process::Command::new(path.to_str().unwrap())

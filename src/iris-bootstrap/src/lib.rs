@@ -5722,6 +5722,7 @@ impl<'a> BootstrapCtx<'a> {
             Some(Value::Tuple(t)) => Ok(Value::Int(t.len() as i64)),
             Some(Value::Range(s, e)) => Ok(Value::Int(if *e > *s { *e - *s } else { 0 })),
             Some(Value::String(s)) => Ok(Value::Int(s.len() as i64)),
+            Some(Value::Unit) => Ok(Value::Int(0)),
             _ => Err(BootstrapError::TypeError("list_len: expected Tuple, Range, or String".into())),
         }
     }

@@ -144,3 +144,8 @@ required-features = ["syntax"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "iris-native"
+path = "src/bin/iris-native.rs"
+required-features = ["syntax"]

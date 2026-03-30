@@ -718,17 +718,63 @@ let aot_compile_node program node_id next_reg default_type =
       let coll_id = list_nth children 2 in
       let step_kind = graph_get_kind program step_id in
 
-      -- Strategy (a): Prim step -> unrolled fold (register-based)
+      -- Strategy (a): Prim step
       if step_kind == 0 then
         let step_op = graph_get_prim_op program step_id in
         let coll_children = graph_outgoing program coll_id in
         let n_elems = list_len coll_children in
-        -- Accumulator stays in base_reg (= out_reg)
-        -- Each element loads into a temp register, then ALU op with acc
+        let coll_kind = graph_get_kind program coll_id in
+        -- Check: static unroll (known elements) vs runtime counted loop
+        let is_runtime_prim = if n_elems == 0 then 1
+          else if coll_kind == 5 then 0
+          else if coll_kind == 11 then 0
+          else 1 in
+
+        if is_runtime_prim == 1 then
+          -- Runtime-counted Prim-step loop: fold acc op i for i in 0..n
+          let r_coll = graph_eval me (program, coll_id, next_reg + 1, default_type) in
+          let coll_code = r_coll.0 in
+          let coll_reg = r_coll.1 in
+          -- Emit the prim ALU operation on (base_reg, rbx)
+          -- We need base_reg and rbx in the right positions
+          -- ALU op: acc_reg OP= rbx (loop counter as element)
+          -- base_reg is a raw register number (not a slot index)
+          let alu_op =
+            if step_op == 0 then emit_alu_rr 0x01 base_reg 3  -- add base, rbx
+            else if step_op == 1 then emit_alu_rr 0x29 base_reg 3
+            else if step_op == 2 then emit_imul_rr base_reg 3
+            else emit_alu_rr 0x01 base_reg 3 in
+          let alu_len = bytes_len alu_op in
+          -- Setup: rbx=0 (counter), r12=limit
+          let setup = bytes_from_ints (
+            0x31, 0xdb                   -- xor ebx, ebx
+          ) in
+          -- Note: coll_reg is a raw register number (slot index = raw reg in this codegen)
+          let set_limit = bytes_concat (emit_mov_rax_from coll_reg) (bytes_from_ints (
+            0x49, 0x89, 0xc4  -- mov r12, rax
+          )) in
+          -- Loop: cmp rbx, r12; jge done; alu; inc rbx; jmp loop
+          let fwd_disp = alu_len + 3 + 5 in  -- alu + inc + jmp
+          let fwd = encode_i32 fwd_disp in
+          let loop_head = bytes_from_ints (
+            0x4c, 0x39, 0xe3,              -- cmp rbx, r12 (REX.WR for r12)
+            0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
+          ) in
+          let loop_tail = bytes_from_ints (0x48, 0xff, 0xc3) in  -- inc rbx
+          let back_dist = alu_len + 3 + 5 + 9 in
+          let back = encode_i32 (0 - back_dist) in
+          let loop_jmp = bytes_from_ints (
+            0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
+          ) in
+          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+            base_code coll_code) setup) set_limit) loop_head) alu_op) (bytes_concat loop_tail loop_jmp),
+           base_reg, next_reg + 1)
+
+        else
+        -- Static unrolled Prim-step fold
         let fold_body = fold (bytes_from_ints ()) (\acc_bytes i ->
           if i < n_elems then
             let elem_id = list_nth coll_children i in
-            -- Use next_reg+1 for element (base_reg is at next_reg)
             let re = graph_eval me (program, elem_id, next_reg + 1, default_type) in
             let elem_code = re.0 in
             let elem_reg = re.1 in
@@ -736,9 +782,7 @@ let aot_compile_node program node_id next_reg default_type =
               if step_op == 0 then emit_alu_rr 0x01 base_reg elem_reg
               else if step_op == 1 then emit_alu_rr 0x29 base_reg elem_reg
               else if step_op == 2 then emit_imul_rr base_reg elem_reg
-              -- min (7): if base > elem, take elem
               else if step_op == 7 then bytes_concat (emit_cmp_rr base_reg elem_reg) (emit_cmovg base_reg elem_reg)
-              -- max (8): if base < elem, take elem
               else if step_op == 8 then bytes_concat (emit_cmp_rr base_reg elem_reg) (emit_cmovl base_reg elem_reg)
               else emit_alu_rr 0x01 base_reg elem_reg in
             bytes_concat acc_bytes (bytes_concat elem_code step_code)
@@ -788,8 +832,11 @@ let aot_compile_node program node_id next_reg default_type =
             0x48, 0x89, 0x45, 0xa0,                     -- mov [rbp-96], rax (acc)
             0x31, 0xdb                                   -- xor ebx, ebx (counter = 0)
           )) in
-          -- mov r12, coll_reg (limit)
-          let set_limit = emit_mov_rr 12 (reg_num coll_reg) in
+          -- mov r12, coll_reg (limit): move coll result to r12 via rax
+          -- Note: coll_reg IS a raw register number (not a slot index)
+          let set_limit = bytes_concat (emit_mov_rax_from coll_reg) (bytes_from_ints (
+            0x49, 0x89, 0xc4  -- mov r12, rax
+          )) in
 
           -- Loop header: cmp rbx, r12; jge .done
           -- forward jump skips: load_elem(4) + body + body_save + loop_tail(3) + loop_jmp(5)
@@ -797,7 +844,7 @@ let aot_compile_node program node_id next_reg default_type =
           let fwd = encode_i32 fwd_disp in
           -- cmp rbx, r12; jge .done (skip body if counter >= limit)
           let loop_header = bytes_from_ints (
-            0x49, 0x39, 0xe3,           -- cmp rbx, r12
+            0x4c, 0x39, 0xe3,           -- cmp rbx, r12 (REX.WR for r12)
             0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
           ) in
 
