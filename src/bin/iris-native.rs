@@ -61,10 +61,31 @@ fn main() {
     let aot_source = std::fs::read_to_string("src/iris-programs/compiler/aot_compile.iris").unwrap();
     let (aot, aot_reg) = compile_with_registry(&aot_source);
 
-    // Compile elf_wrapper.iris
+    // Compile elf_wrapper.iris (includes elf_wrap_rt)
     eprintln!("Compiling elf_wrapper.iris...");
     let elf_source = std::fs::read_to_string("src/iris-programs/compiler/elf_wrapper.iris").unwrap();
-    let (elf_wrap, elf_reg) = compile_with_registry(&elf_source);
+    let elf_result = iris_bootstrap::syntax::compile(&elf_source);
+    assert!(elf_result.errors.is_empty(), "elf_wrapper errors: {:?}", elf_result.errors);
+    let mut elf_reg = BTreeMap::new();
+    let mut elf_wrap_fn = None;
+    let mut elf_wrap_rt_fn = None;
+    for (n, f, _) in &elf_result.fragments {
+        elf_reg.insert(f.id, f.graph.clone());
+        if n == "elf_wrap" { elf_wrap_fn = Some(f.graph.clone()); }
+        if n == "elf_wrap_rt" { elf_wrap_rt_fn = Some(f.graph.clone()); }
+    }
+
+    // Compile native_runtime.iris
+    eprintln!("Compiling native_runtime.iris...");
+    let rt_source = std::fs::read_to_string("src/iris-programs/compiler/native_runtime.iris").unwrap();
+    let (rt_fn, rt_reg) = compile_with_registry(&rt_source);
+    let runtime_bytes = iris_bootstrap::evaluate_with_registry(
+        &rt_fn, &[], 1_000_000, &rt_reg,
+    ).unwrap_or_else(|e| { eprintln!("runtime failed: {}", e); std::process::exit(1); });
+
+    if let Value::Bytes(ref b) = runtime_bytes {
+        eprintln!("Runtime: {} bytes", b.len());
+    }
 
     // Step 1: AOT compile
     eprintln!("AOT compiling {}...", source_path);
@@ -78,10 +99,23 @@ fn main() {
     }
 
     // Step 2: ELF wrap
-    let elf = iris_bootstrap::evaluate_with_registry(
-        &elf_wrap, &[code, Value::Int(n_args)],
-        10_000_000, &elf_reg,
-    ).unwrap_or_else(|e| { eprintln!("elf_wrap failed: {}", e); std::process::exit(1); });
+    let use_runtime = std::env::var("IRIS_NATIVE_RT").is_ok();
+    let elf = if use_runtime {
+        if let Some(ref wrap_rt) = elf_wrap_rt_fn {
+            eprintln!("Using elf_wrap_rt (with runtime)");
+            iris_bootstrap::evaluate_with_registry(
+                wrap_rt, &[code, runtime_bytes, Value::Int(n_args)],
+                10_000_000, &elf_reg,
+            ).unwrap_or_else(|e| { eprintln!("elf_wrap_rt failed: {}", e); std::process::exit(1); })
+        } else {
+            panic!("elf_wrap_rt not found");
+        }
+    } else {
+        iris_bootstrap::evaluate_with_registry(
+            &elf_wrap_fn.unwrap(), &[code, Value::Int(n_args)],
+            10_000_000, &elf_reg,
+        ).unwrap_or_else(|e| { eprintln!("elf_wrap failed: {}", e); std::process::exit(1); })
+    };
 
     if let Value::Bytes(ref b) = elf {
         std::fs::write(&output_path, b)

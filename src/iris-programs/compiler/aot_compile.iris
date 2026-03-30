@@ -1004,6 +1004,7 @@ let aot_compile program =
   -- Move result to rax
   let mov_result = emit_mov_rax_from result_reg in
   -- Extended System V AMD64 prologue (80 bytes stack frame for fold slots)
+  -- Prologue: save callee-saved regs (NOT r15 — reserved for heap pointer)
   let prologue = bytes_from_ints (
     0x55,                         -- push rbp
     0x48, 0x89, 0xe5,             -- mov rbp, rsp
@@ -1011,7 +1012,6 @@ let aot_compile program =
     0x41, 0x54,                   -- push r12
     0x41, 0x55,                   -- push r13
     0x41, 0x56,                   -- push r14
-    0x41, 0x57,                   -- push r15
     0x48, 0x83, 0xec, 80,         -- sub rsp, 80 (fold slots)
     0x48, 0x89, 0x7d, 0xd0,       -- mov [rbp-48], rdi  (arg0)
     0x48, 0x89, 0x75, 0xc8,       -- mov [rbp-56], rsi  (arg1)
@@ -1020,10 +1020,9 @@ let aot_compile program =
     0x4c, 0x89, 0x45, 0xb0,       -- mov [rbp-80], r8   (arg4)
     0x4c, 0x89, 0x4d, 0xa8        -- mov [rbp-88], r9   (arg5)
   ) in
-  -- Epilogue: lea rsp,[rbp-40] to skip over callee-saved + frame
+  -- Epilogue: restore callee-saved regs (no r15)
   let epilogue = bytes_from_ints (
-    0x48, 0x8d, 0x65, 0xd8,       -- lea rsp, [rbp-40]
-    0x41, 0x5f,                   -- pop r15
+    0x48, 0x8d, 0x65, 0xe0,       -- lea rsp, [rbp-32] (4 pushes = 32 bytes)
     0x41, 0x5e,                   -- pop r14
     0x41, 0x5d,                   -- pop r13
     0x41, 0x5c,                   -- pop r12

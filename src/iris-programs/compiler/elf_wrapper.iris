@@ -341,3 +341,68 @@ let elf_wrap machine_code arg_count : Bytes -> Int -> Bytes [cost: Const(12)] =
   let phdr = program_header_bytes file_size mem_size in
   -- Concatenate: header(64) + phdr(56) + stub(N) + code(M)
   bytes_concat header (bytes_concat phdr (bytes_concat stub machine_code))
+
+-- =========================================================================
+-- ELF wrap with runtime: includes native_runtime before compiled code
+-- =========================================================================
+
+-- Assemble ELF with runtime prefix. The startup stub calls rt_init first,
+-- then the compiled function. The compiled function can call runtime
+-- functions at known offsets.
+--
+-- Layout: header(64) + phdr(56) + stub + rt_init_call + post_call + runtime + code
+--
+-- The runtime is at a known offset from the compiled code start, so
+-- aot_compile can emit relative calls to runtime functions.
+let elf_wrap_rt machine_code runtime_code arg_count : Bytes -> Bytes -> Int -> Bytes [cost: Const(14)] =
+  let code_size = bytes_len machine_code in
+  let rt_size = bytes_len runtime_code in
+  -- Build the stub (same as elf_wrap but with rt_init call inserted)
+  let setup = bytes_from_ints (
+    0x48, 0x89, 0xe5,
+    0x4c, 0x8b, 0x65, 0x00,
+    0x48, 0x83, 0xec, 0x30,
+    0x31, 0xc0,
+    0x48, 0x89, 0x44, 0x24, 0x00,
+    0x48, 0x89, 0x44, 0x24, 0x08,
+    0x48, 0x89, 0x44, 0x24, 0x10,
+    0x48, 0x89, 0x44, 0x24, 0x18,
+    0x48, 0x89, 0x44, 0x24, 0x20,
+    0x48, 0x89, 0x44, 0x24, 0x28
+  ) in
+  let arg_code = build_arg_parsers arg_count in
+  let reg_load = build_reg_load arg_count in
+  let align = bytes_from_ints (
+    0x48, 0x83, 0xe4, 0xf0,
+    0x48, 0x83, 0xec, 0x08
+  ) in
+  let post_call = bytes_concat
+    (bytes_from_ints (0x49, 0x89, 0xc4, 0x48, 0x83, 0xec, 0x20))
+    emit_print_result_and_exit in
+  -- rt_init_call is BEFORE arg_code. It must skip over:
+  --   arg_code + reg_load + align + fn_call(5) + post_call
+  -- to reach the runtime block.
+  let rt_skip = bytes_len arg_code + bytes_len reg_load + bytes_len align + 5 + bytes_len post_call in
+  let rt_init_call = bytes_from_ints (0xe8,
+    bitand rt_skip 255, bitand (shr rt_skip 8) 255,
+    bitand (shr rt_skip 16) 255, bitand (shr rt_skip 24) 255) in
+  -- fn_call is AFTER align. It must skip over:
+  --   post_call + runtime
+  -- to reach the compiled code.
+  let fn_skip = bytes_len post_call + rt_size in
+  let fn_call = bytes_from_ints (0xe8,
+    bitand fn_skip 255, bitand (shr fn_skip 8) 255,
+    bitand (shr fn_skip 16) 255, bitand (shr fn_skip 24) 255) in
+  -- Assemble stub: setup + rt_init_call + arg_parse + reg_load + align + fn_call + post_call
+  -- rt_init must come BEFORE reg_load because it clobbers rdi
+  let stub = bytes_concat setup (bytes_concat rt_init_call (bytes_concat arg_code
+    (bytes_concat reg_load (bytes_concat align (bytes_concat fn_call post_call))))) in
+  let stub_size = bytes_len stub in
+  -- File layout: header(64) + phdr(56) + stub + runtime + code
+  let total_code = stub_size + rt_size + code_size in
+  let file_size = elf_header_total + total_code in
+  let remainder = file_size % 4096 in
+  let mem_size = if remainder == 0 then file_size else file_size + 4096 - remainder in
+  let header = elf_header_bytes in
+  let phdr = program_header_bytes file_size mem_size in
+  bytes_concat header (bytes_concat phdr (bytes_concat stub (bytes_concat runtime_code machine_code)))
