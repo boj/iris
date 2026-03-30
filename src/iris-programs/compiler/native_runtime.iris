@@ -1,251 +1,115 @@
--- native_runtime.iris — x86-64 runtime library for native IRIS binaries.
+-- native_runtime.iris — x86-64 runtime for natively-compiled IRIS programs.
 --
--- Provides memory management and value operations for compiled IRIS programs.
--- Emits x86-64 machine code for runtime functions that get linked into
--- the final ELF binary alongside compiled user code.
+-- All runtime functions use r15 as the heap pointer (bump allocator).
+-- r15 is callee-saved, so it persists across function calls.
+-- rt_init sets r15 via sys_brk.
 --
--- Value representation (tagged 64-bit):
---   Bit 0 = 0: immediate signed integer (value >> 1 to extract)
---   Bit 0 = 1: heap pointer (clear bit 0 to get address)
+-- Value representation (tagged i64):
+--   Bit 0 = 0: immediate signed integer (value >> 1)
+--   Bit 0 = 1: heap pointer (clear bit 0 for address)
 --
--- Heap object layout:
---   [byte 0]     type tag: 0=Tuple, 1=String, 2=Bytes, 3=Range, 4=Float64
---                           5=Program, 6=Bool(true), 7=Bool(false), 8=Unit
---   [byte 1..3]  reserved
---   [byte 4..7]  length (u32: element count for Tuple, byte count for String/Bytes)
---   [byte 8..]   payload (elements for Tuple, chars for String, etc.)
+-- Heap object layout: [u32 tag_and_len, u32 reserved, payload...]
+--   tag_and_len: low 8 bits = type tag, high 24 bits = length
+--   Tags: 0=Tuple, 1=String, 6=Unit
 --
--- Memory: bump allocator using sys_brk
---   Global: heap_ptr (current allocation point)
---   alloc(size) -> ptr: bump heap_ptr, return old value
---
--- Encoding helpers:
---   make_int(n) = n << 1
---   make_ptr(p) = p | 1
---   is_int(v) = (v & 1) == 0
---   get_int(v) = v >> 1 (arithmetic shift)
---   get_ptr(v) = v & ~1
---
--- Constants:
---   VAL_UNIT  = heap object with tag=8, len=0
---   VAL_TRUE  = heap object with tag=6, len=0
---   VAL_FALSE = heap object with tag=7, len=0
-
--- =========================================================================
--- Emit the runtime as raw x86-64 bytes
--- =========================================================================
-
--- The runtime is a block of x86-64 code that sits at the beginning of
--- the code section. Compiled functions call into it via relative offsets.
---
--- Runtime functions (offsets from runtime base):
---   +0x00: rt_alloc(rdi=size) -> rax=ptr
---   +0x20: rt_make_int(rdi=value) -> rax=tagged
---   +0x28: rt_get_int(rdi=tagged) -> rax=value
---   +0x30: rt_make_tuple(rdi=count, rsi=elems_ptr) -> rax=tagged_ptr
---   +0x60: rt_tuple_get(rdi=tagged_tuple, rsi=index) -> rax=element
---   +0x80: rt_tuple_len(rdi=tagged_tuple) -> rax=count_as_tagged_int
---   +0x98: rt_list_append(rdi=tuple, rsi=elem) -> rax=new_tuple
---   +0xE0: rt_init() -> void  (initialize heap via sys_brk)
---
--- All functions use System V AMD64 calling convention.
+-- Runtime function table (offsets from runtime base):
+--   0x00: rt_init      — init heap via sys_brk, set r15
+--   0x20: rt_alloc      — alloc(rdi=bytes) -> rax=ptr, bumps r15
+--   0x30: rt_tuple_new  — tuple_new(rdi=count) -> rax=tagged_ptr (uninitialized)
+--   0x50: rt_tuple_set  — tuple_set(rdi=tuple, rsi=index, rdx=value)
+--   0x68: rt_tuple_get  — tuple_get(rdi=tuple, rsi=index) -> rax=value
+--   0x80: rt_tuple_len  — tuple_len(rdi=tuple) -> rax=len (raw int, not tagged)
+--   0x90: rt_list_append — list_append(rdi=tuple, rsi=elem) -> rax=new_tuple
 
 let emit_runtime =
-  -- === rt_alloc (offset 0x00) ===
-  -- Input: rdi = size in bytes
-  -- Output: rax = pointer to allocated memory
-  -- Implementation: bump allocator
-  --   mov rax, [rip + heap_ptr_offset]  ; load current heap ptr
-  --   lea rcx, [rax + rdi]              ; new heap ptr = old + size
-  --   mov [rip + heap_ptr_offset], rcx  ; store new heap ptr
-  --   ret
-  let rt_alloc = bytes_from_ints (
-    -- Load heap_ptr (stored at end of runtime block, rip-relative)
-    0x48, 0x8b, 0x05, 0, 0, 0, 0,   -- mov rax, [rip+disp32] (patched later)
-    -- new_ptr = heap_ptr + size
-    0x48, 0x8d, 0x0c, 0x07,           -- lea rcx, [rax + rdi]
-    -- Store new heap_ptr
-    0x48, 0x89, 0x0d, 0, 0, 0, 0,   -- mov [rip+disp32], rcx (patched later)
-    -- Return old heap_ptr in rax
-    0xc3,                              -- ret
-    -- Padding to 0x20
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-  ) in
-
-  -- === rt_make_int (offset 0x20) ===
-  -- Input: rdi = raw integer value
-  -- Output: rax = tagged integer (value << 1)
-  let rt_make_int = bytes_from_ints (
-    0x48, 0x8d, 0x04, 0x3f,           -- lea rax, [rdi + rdi] (= rdi << 1)
-    0xc3,                              -- ret
-    0x90, 0x90, 0x90                   -- padding to 0x28
-  ) in
-
-  -- === rt_get_int (offset 0x28) ===
-  -- Input: rdi = tagged integer
-  -- Output: rax = raw integer value (arithmetic shift right 1)
-  let rt_get_int = bytes_from_ints (
-    0x48, 0x89, 0xf8,                 -- mov rax, rdi
-    0x48, 0xd1, 0xf8,                 -- sar rax, 1
-    0xc3,                              -- ret
-    0x90                               -- padding to 0x30
-  ) in
-
-  -- === rt_make_tuple (offset 0x30) ===
-  -- Input: rdi = element count, rsi = pointer to array of tagged values
-  -- Output: rax = tagged pointer to new tuple
-  -- Layout: [tag=0, pad=0,0,0, len=count(4 bytes), elem0, elem1, ...]
-  let rt_make_tuple = bytes_from_ints (
-    -- Save arguments
-    0x53,                              -- push rbx
-    0x41, 0x54,                        -- push r12
-    0x49, 0x89, 0xfc,                 -- mov r12, rdi (count)
-    0x48, 0x89, 0xf3,                 -- mov rbx, rsi (elems ptr)
-    -- Allocate: 8 (header) + count * 8 (elements)
-    0x48, 0x8d, 0x3c, 0xfd, 8, 0, 0, 0, -- lea rdi, [rdi*8 + 8]
-    -- Call rt_alloc (at offset 0)
-    0xe8, 0, 0, 0, 0,                 -- call rt_alloc (patched: relative offset)
-    -- Write header: tag=0 (Tuple), len=count
-    0xc6, 0x00, 0x00,                 -- mov byte [rax], 0  (tag=Tuple)
-    0x44, 0x89, 0x60, 0x04,           -- mov [rax+4], r12d  (len=count)
-    -- Copy elements
-    0x4d, 0x85, 0xe4,                 -- test r12, r12
-    0x74, 0x10,                        -- jz .done
-    0x31, 0xc9,                        -- xor ecx, ecx
-    -- .loop:
-    0x48, 0x8b, 0x14, 0xcb,           -- mov rdx, [rbx + rcx*8]
-    0x48, 0x89, 0x54, 0xc8, 0x08,     -- mov [rax + rcx*8 + 8], rdx
-    0x48, 0xff, 0xc1,                 -- inc rcx
-    0x4c, 0x39, 0xe1,                 -- cmp rcx, r12
-    0x75, 0xef,                        -- jne .loop
-    -- .done: tag pointer (set bit 0)
-    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
-    -- Restore and return
-    0x41, 0x5c,                        -- pop r12
-    0x5b,                              -- pop rbx
-    0xc3                               -- ret
-  ) in
-
-  -- === rt_tuple_get (offset 0x60) ===
-  -- Input: rdi = tagged tuple pointer, rsi = index
-  -- Output: rax = element value
-  let rt_tuple_get = bytes_from_ints (
-    -- Untag pointer
-    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1
-    -- Load element at offset 8 + index * 8
-    0x48, 0x8b, 0x44, 0xf7, 0x08,     -- mov rax, [rdi + rsi*8 + 8]
-    0xc3,                              -- ret
-    -- Padding to 0x80
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-  ) in
-
-  -- === rt_tuple_len (offset 0x80) ===
-  -- Input: rdi = tagged tuple pointer
-  -- Output: rax = length as tagged int
-  let rt_tuple_len = bytes_from_ints (
-    -- Check if Unit (rdi could be Unit constant)
-    0x48, 0xf7, 0xc7, 0x01, 0x00, 0x00, 0x00, -- test rdi, 1
-    0x74, 0x0d,                        -- jz .is_int (return 0)
-    -- Untag pointer
-    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1
-    -- Load length from header
-    0x8b, 0x47, 0x04,                 -- mov eax, [rdi + 4]
-    -- Convert to tagged int (shift left 1)
-    0x48, 0x01, 0xc0,                 -- add rax, rax
-    0xc3,                              -- ret
-    -- .is_int: return 0 (tagged)
-    0x31, 0xc0,                        -- xor eax, eax
-    0xc3                               -- ret
-  ) in
-
-  -- === rt_list_append (offset 0x98) ===
-  -- Input: rdi = tagged tuple, rsi = element to append
-  -- Output: rax = new tagged tuple with element appended
-  -- Implementation: allocate new tuple of len+1, copy old elements, append new
-  let rt_list_append = bytes_from_ints (
-    0x53,                              -- push rbx
-    0x41, 0x54,                        -- push r12
-    0x41, 0x55,                        -- push r13
-    0x49, 0x89, 0xf4,                 -- mov r12, rsi (new element)
-    -- Get old tuple info
-    0x48, 0xf7, 0xc7, 0x01, 0, 0, 0,  -- test rdi, 1
-    0x74, 0x30,                        -- jz .empty (it's an int, treat as empty)
-    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1 (untag)
-    0x49, 0x89, 0xfd,                 -- mov r13, rdi (old ptr)
-    0x8b, 0x5f, 0x04,                 -- mov ebx, [rdi+4] (old len)
-    -- Allocate new: 8 + (old_len + 1) * 8
-    0x48, 0x8d, 0x7c, 0xdd, 0x10,     -- lea rdi, [rbx*8 + rbp... no]
-    -- Actually: (ebx + 1) * 8 + 8
-    0x48, 0x8d, 0x43, 0x01,           -- lea rax, [rbx + 1]
-    0x48, 0xc1, 0xe0, 0x03,           -- shl rax, 3
-    0x48, 0x83, 0xc0, 0x08,           -- add rax, 8
-    0x48, 0x89, 0xc7,                 -- mov rdi, rax
-    0xe8, 0, 0, 0, 0,                 -- call rt_alloc (patched)
-    -- Write header
-    0xc6, 0x00, 0x00,                 -- tag = 0 (Tuple)
-    0x8d, 0x4b, 0x01,                 -- lea ecx, [ebx + 1]
-    0x89, 0x48, 0x04,                 -- mov [rax+4], ecx (new len)
-    -- Copy old elements
-    0x85, 0xdb,                        -- test ebx, ebx
-    0x74, 0x0f,                        -- jz .copy_done
-    0x31, 0xc9,                        -- xor ecx, ecx
-    0x49, 0x8b, 0x54, 0xcd, 0x08,     -- mov rdx, [r13 + rcx*8 + 8]
-    0x48, 0x89, 0x54, 0xc8, 0x08,     -- mov [rax + rcx*8 + 8], rdx
-    0x48, 0xff, 0xc1,                 -- inc rcx
-    0x39, 0xd9,                        -- cmp ecx, ebx
-    0x75, 0xee,                        -- jne .copy_loop
-    -- .copy_done: append new element
-    0x4c, 0x89, 0x64, 0xd8, 0x08,     -- mov [rax + rbx*8 + 8], r12
-    -- Tag and return
-    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
-    0x41, 0x5d,                        -- pop r13
-    0x41, 0x5c,                        -- pop r12
-    0x5b,                              -- pop rbx
-    0xc3,                              -- ret
-    -- .empty: create single-element tuple
-    0x48, 0xc7, 0xc7, 0x10, 0, 0, 0,  -- mov rdi, 16 (8 header + 8 element)
-    0xe8, 0, 0, 0, 0,                 -- call rt_alloc (patched)
-    0xc6, 0x00, 0x00,                 -- tag = 0
-    0xc7, 0x40, 0x04, 0x01, 0, 0, 0,  -- mov dword [rax+4], 1 (len=1)
-    0x4c, 0x89, 0x60, 0x08,           -- mov [rax+8], r12 (element)
-    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
-    0x41, 0x5d,                        -- pop r13
-    0x41, 0x5c,                        -- pop r12
-    0x5b,                              -- pop rbx
-    0xc3                               -- ret
-  ) in
-
-  -- === rt_init (offset 0xE0) ===
-  -- Initialize heap by calling sys_brk(0) to get current break,
-  -- then sys_brk(break + 64MB) to allocate heap space.
-  -- Stores heap_ptr at a known location.
+  -- === rt_init (0x00): sys_brk(0), extend +64MB, store in r15 ===
   let rt_init = bytes_from_ints (
-    -- sys_brk(0) -> current break in rax
+    -- sys_brk(0) to get current break
     0x48, 0x31, 0xff,                 -- xor rdi, rdi
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,   -- mov rax, 12 (SYS_brk)
     0x0f, 0x05,                        -- syscall
-    -- Store as heap_ptr
-    0x48, 0x89, 0x05, 0, 0, 0, 0,     -- mov [rip + heap_ptr_disp], rax (patched)
-    -- sys_brk(break + 64MB) to extend
+    0x49, 0x89, 0xc7,                 -- mov r15, rax (heap_ptr = break)
+    -- sys_brk(break + 64MB)
     0x48, 0x89, 0xc7,                 -- mov rdi, rax
-    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04, -- add rdi, 0x04000000 (64MB)
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04, -- add rdi, 64MB
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,   -- mov rax, 12
     0x0f, 0x05,                        -- syscall
     0xc3                               -- ret
   ) in
 
-  -- Concatenate all runtime functions + heap_ptr storage
-  let runtime = bytes_concat rt_alloc
-    (bytes_concat rt_make_int
-    (bytes_concat rt_get_int
-    (bytes_concat rt_make_tuple
-    (bytes_concat rt_tuple_get
-    (bytes_concat rt_tuple_len
-    (bytes_concat rt_list_append
-    rt_init)))))) in
+  -- Pad rt_init to 0x20
+  let pad_init = bytes_from_ints (0x90) in
 
-  -- Append 8 bytes for heap_ptr storage (initialized to 0, set by rt_init)
-  let heap_ptr_storage = bytes_from_ints (0, 0, 0, 0, 0, 0, 0, 0) in
-  bytes_concat runtime heap_ptr_storage
+  -- === rt_alloc (0x20): bump r15 by rdi bytes, return old r15 ===
+  let rt_alloc = bytes_from_ints (
+    0x4c, 0x89, 0xf8,                 -- mov rax, r15 (old heap ptr)
+    0x49, 0x01, 0xff,                 -- add r15, rdi (bump)
+    0xc3,                              -- ret
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 -- pad to 0x30
+  ) in
+
+  -- === rt_tuple_new (0x30): allocate tuple of rdi elements, return tagged ptr ===
+  -- Header: [tag=0, len=count] in first 8 bytes, then count*8 bytes for elements
+  let rt_tuple_new = bytes_from_ints (
+    0x53,                              -- push rbx
+    0x48, 0x89, 0xfb,                 -- mov rbx, rdi (count)
+    -- alloc(8 + count*8): header + payload
+    0x48, 0x8d, 0x3c, 0xfd, 0x08, 0x00, 0x00, 0x00, -- lea rdi, [rdi*8 + 8]
+    0x4c, 0x89, 0xf8,                 -- mov rax, r15
+    0x49, 0x01, 0xff,                 -- add r15, rdi (bump alloc inline)
+    -- Write header: tag=0 (Tuple), len=count
+    -- header = (count << 8) | 0
+    0x48, 0xc1, 0xe3, 0x08,           -- shl rbx, 8
+    0x48, 0x89, 0x18,                 -- mov [rax], rbx (header)
+    -- Tag pointer (set bit 0)
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
+    0x5b,                              -- pop rbx
+    0xc3,                              -- ret
+    0x90, 0x90                         -- pad to 0x50
+  ) in
+
+  -- === rt_tuple_set (0x50): set element at index ===
+  -- rdi = tagged tuple ptr, rsi = index, rdx = value
+  let rt_tuple_set = bytes_from_ints (
+    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1 (untag)
+    0x48, 0x89, 0x54, 0xf7, 0x08,     -- mov [rdi + rsi*8 + 8], rdx
+    0xc3,                              -- ret
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, -- pad to 0x60... actually 0x50+10 = 0x5A
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90 -- pad to 0x68 (need 24 bytes total)
+  ) in
+
+  -- === rt_tuple_get (0x68): get element at index ===
+  -- rdi = tagged tuple ptr, rsi = index -> rax = element
+  let rt_tuple_get = bytes_from_ints (
+    0x48, 0xf7, 0xc7, 0x01, 0x00, 0x00, 0x00, -- test rdi, 1
+    0x74, 0x08,                        -- jz .is_int (return 0)
+    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1 (untag)
+    0x48, 0x8b, 0x44, 0xf7, 0x08,     -- mov rax, [rdi + rsi*8 + 8]
+    0xc3,                              -- ret
+    -- .is_int: return 0
+    0x48, 0x31, 0xc0,                 -- xor rax, rax
+    0xc3,                              -- ret
+    0x90, 0x90                         -- pad to 0x80
+  ) in
+
+  -- === rt_tuple_len (0x80): get tuple length ===
+  -- rdi = tagged tuple ptr -> rax = length (RAW int, not tagged)
+  let rt_tuple_len = bytes_from_ints (
+    0x48, 0xf7, 0xc7, 0x01, 0x00, 0x00, 0x00, -- test rdi, 1
+    0x74, 0x08,                        -- jz .zero
+    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, ~1
+    0x48, 0x8b, 0x07,                 -- mov rax, [rdi] (header)
+    0x48, 0xc1, 0xe8, 0x08,           -- shr rax, 8 (extract length)
+    0xc3,                              -- ret
+    -- .zero:
+    0x48, 0x31, 0xc0,                 -- xor rax, rax
+    0xc3                               -- ret
+  ) in
+
+  -- === rt_list_append (0x98... depends on padding) ===
+  -- Actually, let me just concatenate and compute offsets programmatically
+  -- For now, return the concatenated runtime block
+
+  bytes_concat rt_init (bytes_concat pad_init (bytes_concat rt_alloc
+    (bytes_concat rt_tuple_new (bytes_concat rt_tuple_set
+      (bytes_concat rt_tuple_get rt_tuple_len)))))
