@@ -70,3 +70,21 @@
 
 **Assistant:** Here's where we are:
 
+
+---
+
+**2026-03-30 14:21**
+
+**Human:** Investigate it
+
+**Assistant:** The compiler works:
+
+
+---
+
+**2026-03-30 14:33**
+
+**Human:** Investigate it
+
+**Assistant:** Everything works. The native stage0:
+
