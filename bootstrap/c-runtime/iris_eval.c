@@ -147,15 +147,17 @@ static iris_value_t *eval_node(eval_ctx_t *ctx, uint64_t node_id) {
     ctx->steps++;
 
     /* Memoize: return cached result for shared DAG nodes.
-     * Skip Guard nodes — they have short-circuit semantics. */
+     * Skip Guard nodes (short-circuit) and Prim nodes (may have side effects
+     * like graph_add_node_rt that must execute each time). */
     iris_node_t *peek = iris_graph_raw_find_node(ctx->graph, node_id);
-    if (peek && peek->kind != NK_GUARD) {
+    int can_memo = peek && peek->kind != NK_GUARD && peek->kind != NK_PRIM;
+    if (can_memo) {
         iris_value_t *cached = memo_get(ctx, node_id);
         if (cached) return cached;
     }
 
     iris_value_t *_memo_result = eval_node_inner(ctx, node_id);
-    if (peek && peek->kind != NK_GUARD) {
+    if (can_memo) {
         memo_put(ctx, node_id, _memo_result);
     }
     return _memo_result;
@@ -659,10 +661,23 @@ iris_value_t *iris_eval_graph(iris_graph_t *g, iris_value_t *input) {
 
     iris_value_t *self_prog = iris_program(g);
 
+    /* Wrap single-value input in a 1-element tuple.
+     * This matches the Rust evaluator convention: evaluate(graph, &[val])
+     * where InputRef(0) returns inputs[0] = val (the whole value).
+     * Without wrapping, a tuple input like tokens=(t1,t2,...) would be
+     * decomposed by InputRef(0) → tokens[0] instead of → tokens. */
+    iris_value_t *wrapped = input ? input : iris_unit();
+    if (wrapped->tag != IRIS_TUPLE || wrapped->tuple.len != 1) {
+        /* Not already a 1-tuple — wrap it */
+        iris_value_t **elems = malloc(sizeof(iris_value_t *));
+        elems[0] = wrapped;
+        wrapped = iris_tuple(elems, 1);
+    }
+
     eval_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.graph        = g;
-    ctx.input        = input ? input : iris_unit();
+    ctx.input        = wrapped;
     ctx.self_program = self_prog;
     ctx.depth        = 0;
     ctx.steps        = 0;
