@@ -1640,3 +1640,101 @@ fn native_str_replace() {
         Value::String("hello IRIS".into()),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ref resolution tests (graph_eval_ref)
+// ---------------------------------------------------------------------------
+
+/// Helper: evaluate a multi-function program via the IRIS interpreter with a
+/// registry, so graph_eval_ref can resolve Ref nodes.
+fn eval_via_interpreter_with_registry(src: &str, name: &str, args: &[Value]) -> Value {
+    // Compile the interpreter
+    let interp_src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/iris-programs/interpreter/full_interpreter.iris"
+    ))
+    .expect("failed to read interpreter source");
+    let interp_result = syntax::compile(&interp_src);
+    assert!(
+        interp_result.errors.is_empty(),
+        "interpreter compile errors: {:?}",
+        interp_result.errors
+    );
+    let interp_graph = interp_result
+        .fragments
+        .last()
+        .expect("no fragments in interpreter")
+        .1
+        .graph
+        .clone();
+
+    // Compile the target program
+    let (target_graph, reg) = compile_and_find(src, name);
+
+    // Build the inputs to the interpreter: (program, inputs_tuple)
+    let program_val = Value::Program(Rc::new(target_graph));
+    let inputs_tuple = Value::tuple(args.to_vec());
+    let interp_inputs = vec![program_val, inputs_tuple];
+
+    // Evaluate the interpreter WITH the registry so graph_eval_ref can resolve Refs
+    iris_bootstrap::evaluate_with_fragments(&interp_graph, &interp_inputs, 5_000_000, &reg)
+        .expect("interpreter evaluation failed")
+}
+
+#[test]
+fn ref_simple_cross_function_call() {
+    // Two functions: `double` and `quad` which calls `double` twice.
+    // The call from quad to double creates a Ref node.
+    let src = "let double x = x + x\nlet quad x = double (double x)";
+
+    // Direct evaluation (Rust evaluator with registry)
+    let direct = eval_direct(src, "quad", &[Value::Int(3)]);
+    assert_eq!(direct, Value::Int(12), "direct: quad(3) should be 12");
+
+    // Via IRIS interpreter with registry (tests graph_eval_ref)
+    let interp = eval_via_interpreter_with_registry(src, "quad", &[Value::Int(3)]);
+    assert_eq!(interp, Value::Int(12), "interpreter: quad(3) should be 12");
+}
+
+#[test]
+fn ref_chain_three_functions() {
+    // Three functions chained: inc -> double_inc -> triple_inc
+    let src = "\
+let inc x = x + 1
+let double_inc x = inc (inc x)
+let triple_inc x = inc (double_inc x)";
+
+    let direct = eval_direct(src, "triple_inc", &[Value::Int(10)]);
+    assert_eq!(direct, Value::Int(13), "direct: triple_inc(10) should be 13");
+
+    let interp = eval_via_interpreter_with_registry(src, "triple_inc", &[Value::Int(10)]);
+    assert_eq!(interp, Value::Int(13), "interpreter: triple_inc(10) should be 13");
+}
+
+#[test]
+fn ref_helper_with_two_args() {
+    // Cross-function call with multiple arguments.
+    let src = "\
+let my_add a b = a + b
+let sum3 x y z = my_add (my_add x y) z";
+
+    let direct = eval_direct(src, "sum3", &[Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_eq!(direct, Value::Int(6), "direct: sum3(1,2,3) should be 6");
+
+    let interp = eval_via_interpreter_with_registry(src, "sum3", &[Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_eq!(interp, Value::Int(6), "interpreter: sum3(1,2,3) should be 6");
+}
+
+#[test]
+fn ref_constant_function() {
+    // Call a zero-argument function from another.
+    let src = "\
+let magic = 42
+let use_magic x = x + magic";
+
+    let direct = eval_direct(src, "use_magic", &[Value::Int(8)]);
+    assert_eq!(direct, Value::Int(50), "direct: use_magic(8) should be 50");
+
+    let interp = eval_via_interpreter_with_registry(src, "use_magic", &[Value::Int(8)]);
+    assert_eq!(interp, Value::Int(50), "interpreter: use_magic(8) should be 50");
+}
