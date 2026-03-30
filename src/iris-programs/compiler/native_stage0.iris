@@ -1,0 +1,17 @@
+-- native_stage0.iris — Compile an IRIS program to a standalone native binary.
+--
+-- Pipeline: source program → aot_compile → link with runtime → elf_wrap → ELF
+--
+-- For now, handles programs that return Int (the aot_compile.iris subset).
+-- The runtime provides memory allocation and value operations for future
+-- extension to the full self-interpreter.
+--
+-- Usage: evaluate this with (target_program, arg_count) as inputs.
+-- Returns: Bytes (complete ELF binary).
+
+let native_compile target n_args =
+  -- Step 1: Generate machine code for the program
+  let code = aot_compile target in
+
+  -- Step 2: Wrap in ELF with startup stub
+  elf_wrap code n_args

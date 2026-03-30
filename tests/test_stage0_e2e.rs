@@ -583,3 +583,100 @@ fn test_native_compile_simple() {
     
     let _ = std::fs::remove_file(&target_json);
 }
+
+#[cfg(feature = "syntax")]
+fn native_compile_and_run(source: &str, name: &str, args: &[&str]) -> String {
+    use iris_types::eval::Value;
+    use iris_types::fragment::FragmentId;
+    use iris_types::graph::SemanticGraph;
+    use std::collections::BTreeMap;
+
+    // Compile aot_compile + elf_wrapper with registries
+    let aot_src = std::fs::read_to_string("src/iris-programs/compiler/aot_compile.iris").unwrap();
+    let aot_r = iris_bootstrap::syntax::compile(&aot_src);
+    let mut aot_reg: BTreeMap<FragmentId, SemanticGraph> = BTreeMap::new();
+    let mut aot_fn = None;
+    for (n, f, _) in &aot_r.fragments {
+        aot_reg.insert(f.id, f.graph.clone());
+        if n == "aot_compile" { aot_fn = Some(f.graph.clone()); }
+    }
+    let elf_src = std::fs::read_to_string("src/iris-programs/compiler/elf_wrapper.iris").unwrap();
+    let elf_r = iris_bootstrap::syntax::compile(&elf_src);
+    let mut elf_reg: BTreeMap<FragmentId, SemanticGraph> = BTreeMap::new();
+    let mut elf_fn = None;
+    for (n, f, _) in &elf_r.fragments {
+        elf_reg.insert(f.id, f.graph.clone());
+        if n == "elf_wrap" { elf_fn = Some(f.graph.clone()); }
+    }
+
+    let target_json = compile_with_rust(source, name);
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let code = iris_bootstrap::evaluate_with_registry(
+        &aot_fn.unwrap(), &[Value::Program(std::rc::Rc::new(target))],
+        10_000_000, &aot_reg).unwrap();
+    let elf = iris_bootstrap::evaluate_with_registry(
+        &elf_fn.unwrap(), &[code, Value::Int(args.len() as i64)],
+        10_000_000, &elf_reg).unwrap();
+
+    if let Value::Bytes(ref b) = elf {
+        let path = std::env::temp_dir().join(format!("iris_native_{}", name));
+        std::fs::write(&path, b).unwrap();
+        std::process::Command::new("chmod").args(["+x", path.to_str().unwrap()]).output().unwrap();
+        let output = std::process::Command::new(path.to_str().unwrap())
+            .args(args).output().expect("run native");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target_json);
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        let _ = std::fs::remove_file(&target_json);
+        panic!("not bytes: {:?}", elf)
+    }
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_add() {
+    assert_eq!(native_compile_and_run("let f x y = x + y", "nat_add", &["13", "29"]), "42");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_mul() {
+    assert_eq!(native_compile_and_run("let f x = x * x", "nat_mul", &["7"]), "49");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_guard() {
+    assert_eq!(native_compile_and_run(
+        "let f x = if x > 0 then x else 0 - x", "nat_guard", &["-5"]), "5");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_nested() {
+    assert_eq!(native_compile_and_run(
+        "let f x = (x + 3) * (x - 1)", "nat_nested", &["10"]), "117");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_let() {
+    assert_eq!(native_compile_and_run(
+        "let f x = let y = x + 1 in y * y", "nat_let", &["4"]), "25");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_fold() {
+    assert_eq!(native_compile_and_run(
+        "let f n = fold 0 (\\acc i -> acc + i) n", "nat_fold", &["10"]), "45");
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_native_fold_prim() {
+    // Prim-step fold (not lambda)
+    assert_eq!(native_compile_and_run(
+        "let f = fold 0 add 5", "nat_fold_prim", &[]), "10");
+}

@@ -688,7 +688,7 @@ let aot_compile_node program node_id next_reg default_type =
     let me = self_graph in
     let r0 = graph_eval me (program, child0, next_reg, default_type) in
     let code0 = r0.0 in
-    let field_idx = graph_get_prim_op program node_id in
+    let field_idx = graph_get_field_index program node_id in
     let offset = field_idx * 8 in
     let off = encode_i32 offset in
     -- Load from stack: mov out_reg, [rsp + offset]
@@ -760,13 +760,73 @@ let aot_compile_node program node_id next_reg default_type =
         let body_reg = r_body.1 in
         let body_len = bytes_len body_code in
         -- Move body result to rax for store to acc slot
-        let body_save = bytes_concat (emit_mov_rax_from body_reg) (bytes_from_ints (0x48, 0x89, 0x45, 0xa0)) in
+        -- Save body result to acc, then clean up stack from InputRef(128) push
+        let body_save = bytes_concat (emit_mov_rax_from body_reg) (bytes_from_ints (
+          0x48, 0x89, 0x45, 0xa0,       -- mov [rbp-96], rax (store acc)
+          0x48, 0x83, 0xc4, 0x10        -- add rsp, 16 (pop pushed acc+elem)
+        )) in
         let body_save_len = bytes_len body_save in
 
         let coll_children = graph_outgoing program coll_id in
         let n_elems = list_len coll_children in
 
-        -- Store elements to stack array (same as v2)
+        -- Check if collection is a runtime value (Int) or static (Tuple elements)
+        let coll_kind = graph_get_kind program coll_id in
+        let is_runtime = if n_elems == 0 then 1
+          else if coll_kind == 5 then 0  -- Lit (static)
+          else if coll_kind == 11 then 0 -- Tuple (static)
+          else 1 in
+
+        if is_runtime == 1 then
+          -- Runtime-counted loop: compile collection to get limit value in a register
+          let r_coll = graph_eval me (program, coll_id, next_reg + 1, default_type) in
+          let coll_code = r_coll.0 in
+          let coll_reg = r_coll.1 in
+
+          -- Setup: acc = base_val, counter = 0, limit = coll_reg
+          let setup = bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
+            0x48, 0x89, 0x45, 0xa0,                     -- mov [rbp-96], rax (acc)
+            0x31, 0xdb                                   -- xor ebx, ebx (counter = 0)
+          )) in
+          -- mov r12, coll_reg (limit)
+          let set_limit = emit_mov_rr 12 (reg_num coll_reg) in
+
+          -- Loop header: cmp rbx, r12; jge .done
+          -- forward jump skips: load_elem(4) + body + body_save + loop_tail(3) + loop_jmp(5)
+          let fwd_disp = 4 + body_len + body_save_len + 3 + 5 in
+          let fwd = encode_i32 fwd_disp in
+          -- cmp rbx, r12; jge .done (skip body if counter >= limit)
+          let loop_header = bytes_from_ints (
+            0x49, 0x39, 0xe3,           -- cmp rbx, r12
+            0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
+          ) in
+
+          -- Load element: elem = counter (rbx) for Int range
+          let load_elem = bytes_from_ints (
+            0x48, 0x89, 0x5d, 0x98      -- mov [rbp-104], rbx (elem = i)
+          ) in
+
+          let loop_tail = bytes_from_ints (
+            0x48, 0xff, 0xc3            -- inc rbx
+          ) in
+          -- back jump: load_elem(4) + body(body_len) + body_save(body_save_len)
+          --   + loop_tail(3) + loop_jmp(5) + loop_header(9)
+          let back_dist = body_len + body_save_len + 4 + 3 + 5 + 9 in
+          let back_neg = 0 - back_dist in
+          let back = encode_i32 back_neg in
+          let loop_jmp = bytes_from_ints (
+            0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
+          ) in
+
+          let load_final = emit_load_rbp out_reg 0xa0 in
+
+          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+            base_code coll_code) setup) set_limit) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) load_final,
+           out_reg, next_reg + 1)
+
+        else
+        -- Static collection: original unrolled approach
+        -- Store elements to stack array
         let elem_codes = fold (bytes_from_ints ()) (\acc_bytes i ->
           if i < n_elems then
             let elem_id = list_nth coll_children i in
@@ -775,30 +835,26 @@ let aot_compile_node program node_id next_reg default_type =
             let elem_result = re.1 in
             let store_offset = i * 8 in
             let so = encode_i32 store_offset in
-            -- mov rax, elem_result; mov [rsp + offset], rax
             bytes_concat acc_bytes (bytes_concat elem_code
               (bytes_concat (emit_mov_rax_from elem_result)
                 (bytes_from_ints (0x48, 0x89, 0x84, 0x24, list_nth so 0, list_nth so 1, list_nth so 2, list_nth so 3))))
           else acc_bytes
         ) (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) in
 
-        -- Allocate stack array
         let array_size = n_elems * 8 in
         let as_enc = encode_i32 array_size in
         let alloc_array = if n_elems > 0 then
           bytes_from_ints (0x48, 0x81, 0xec, list_nth as_enc 0, list_nth as_enc 1, list_nth as_enc 2, list_nth as_enc 3)
         else bytes_from_ints () in
 
-        -- Setup: store base result as initial acc
         let setup = bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
-          0x48, 0x89, 0x45, 0xa0,                     -- mov [rbp-96], rax (acc)
-          0x31, 0xdb,                                  -- xor ebx, ebx (counter)
-          0x49, 0xc7, 0xc4                             -- mov r12, imm32
+          0x48, 0x89, 0x45, 0xa0,
+          0x31, 0xdb,
+          0x49, 0xc7, 0xc4
         )) in
         let n_enc = encode_i32 n_elems in
         let setup2 = bytes_from_ints (list_nth n_enc 0, list_nth n_enc 1, list_nth n_enc 2, list_nth n_enc 3) in
 
-        -- Loop structure (same displacement math as v2)
         let fwd_disp = body_len + body_save_len + 3 + 5 in
         let fwd = encode_i32 fwd_disp in
         let loop_header = bytes_from_ints (
@@ -807,12 +863,12 @@ let aot_compile_node program node_id next_reg default_type =
         ) in
 
         let load_elem = bytes_from_ints (
-          0x48, 0x8b, 0x04, 0xdc,     -- mov rax, [rsp + rbx*8]
-          0x48, 0x89, 0x45, 0x98      -- mov [rbp-104], rax (elem)
+          0x48, 0x8b, 0x04, 0xdc,
+          0x48, 0x89, 0x45, 0x98
         ) in
 
         let loop_tail = bytes_from_ints (
-          0x48, 0xff, 0xc3            -- inc rbx
+          0x48, 0xff, 0xc3
         ) in
         let back_dist = body_len + body_save_len + 3 + 9 + 8 in
         let back_neg = 0 - back_dist in
@@ -821,7 +877,6 @@ let aot_compile_node program node_id next_reg default_type =
           0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
         ) in
 
-        -- Load final accumulator into out_reg
         let load_final = emit_load_rbp out_reg 0xa0 in
 
         let dealloc_array = if n_elems > 0 then
