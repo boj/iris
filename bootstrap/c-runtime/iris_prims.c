@@ -725,13 +725,16 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
             return (nargs >= 1) ? iris_list_len(args[0]) : iris_int(0);
 
         /* Graph construction & mutation */
-        case 0xED: /* graph_new */
-            return iris_program(iris_graph_raw_alloc());
+        case 0xED: { /* graph_new */
+            iris_graph_t *g = iris_graph_raw_alloc();
+
+            return iris_program(g);
+        }
 
         case 0x84: { /* graph_add_node_rt(program, kind) → node_id */
-            if (nargs < 2) return iris_int(-1);
+
             iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
-            if (!g) return iris_int(-1);
+
             uint8_t nk = (uint8_t)iris_as_int(args[1]);
             /* Generate a unique node ID from node count + salt */
             uint64_t nid = (uint64_t)g->node_count + 1000;

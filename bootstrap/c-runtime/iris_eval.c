@@ -42,6 +42,13 @@ typedef struct {
     iris_value_t  *val;
 } memo_entry_t;
 
+/* Binder environment: maps binder_id → value for Let/Lambda bindings */
+#define ENV_CAP 256
+typedef struct {
+    uint32_t       binder_id;
+    iris_value_t  *val;
+} env_entry_t;
+
 typedef struct {
     iris_graph_t   *graph;
     iris_value_t   *input;
@@ -50,7 +57,25 @@ typedef struct {
     uint64_t        steps;
     memo_entry_t    memo[MEMO_CAP];
     uint32_t        memo_count;
+    env_entry_t     env[ENV_CAP];
+    uint32_t        env_count;
 } eval_ctx_t;
+
+static iris_value_t *env_get(eval_ctx_t *ctx, uint32_t binder_id) {
+    /* Search from end so inner bindings shadow outer ones */
+    for (int i = (int)ctx->env_count - 1; i >= 0; i--) {
+        if (ctx->env[i].binder_id == binder_id) return ctx->env[i].val;
+    }
+    return NULL;
+}
+
+static void env_push(eval_ctx_t *ctx, uint32_t binder_id, iris_value_t *val) {
+    if (ctx->env_count < ENV_CAP) {
+        ctx->env[ctx->env_count].binder_id = binder_id;
+        ctx->env[ctx->env_count].val = val;
+        ctx->env_count++;
+    }
+}
 
 static iris_value_t *memo_get(eval_ctx_t *ctx, uint64_t node_id) {
     for (uint32_t i = 0; i < ctx->memo_count; i++) {
@@ -169,18 +194,36 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
                 return iris_bool(false);
             case 0x06: /* Unit */
                 return iris_unit();
-            case 0xFF: { /* InputRef */
-                uint8_t param_idx = (lit->value_len >= 1) ? lit->value[0] : 0;
+            case 0xFF: { /* InputRef / BinderRef */
+                /* Read the full parameter index from the value bytes */
+                uint32_t param_idx = 0;
+                if (lit->value_len >= 4) {
+                    memcpy(&param_idx, lit->value, 4);
+                } else if (lit->value_len >= 1) {
+                    param_idx = lit->value[0];
+                }
+
+                /* Check if this is a binder reference (high bits set) */
+                if (param_idx >= 0xFFFF0000u) {
+                    uint32_t binder_id = param_idx - 0xFFFF0000u;
+                    iris_value_t *bound = env_get(ctx, binder_id);
+                    if (bound) return bound;
+                    /* Fall through to input lookup */
+                }
+
+                /* Also check if the raw param_idx matches a binder_id in env */
+                iris_value_t *bound = env_get(ctx, param_idx);
+                if (bound) return bound;
+
+                /* Standard input parameter lookup */
                 iris_value_t *inp = ctx->input;
                 if (!inp) return iris_unit();
-                /* If input is a tuple, extract the param_idx-th element */
                 if (inp->tag == IRIS_TUPLE) {
                     if (param_idx < inp->tuple.len) {
                         return inp->tuple.elems[param_idx];
                     }
                     return iris_unit();
                 }
-                /* If param_idx == 0 and input is scalar, return it directly */
                 if (param_idx == 0) return inp;
                 return iris_unit();
             }
@@ -297,17 +340,64 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
             ctx->depth--;
         }
 
-        /* Iteratively evaluate the continuation with (acc, input) */
+        /* Get the step function's binder (if continuation is a Lambda) */
+        iris_node_t *cont_node = iris_graph_raw_find_node(ctx->graph, cont_id);
+        uint32_t step_binder = 0xFFFFFFFF;
+        uint64_t step_body = cont_id;
+        if (cont_node && cont_node->kind == NK_LAMBDA) {
+            step_binder = cont_node->payload.lambda.binder_id;
+            uint64_t body_id;
+            if (find_continuation(ctx->graph, cont_id, &body_id)) {
+                step_body = body_id;
+            }
+        }
+
+        /* Evaluate the collection (second arg if present) */
+        iris_value_t *collection = ctx->input;
+        if (nargs > 1) {
+            ctx->depth++;
+            collection = eval_node(ctx, arg_ids[1]);
+            ctx->depth--;
+        }
+
+        /* If collection is a tuple, fold over its elements */
+        if (collection && collection->tag == IRIS_TUPLE) {
+            for (uint32_t iter = 0; iter < collection->tuple.len; iter++) {
+                iris_value_t *elem = collection->tuple.elems[iter];
+                iris_value_t *step_elems[2] = { acc, elem };
+                iris_value_t *step_input = iris_tuple(step_elems, 2);
+
+                eval_ctx_t step_ctx = *ctx;
+                step_ctx.input = step_input;
+                step_ctx.depth = ctx->depth + 1;
+                step_ctx.memo_count = 0; /* Fresh memo per iteration */
+
+                if (step_binder != 0xFFFFFFFF) {
+                    env_push(&step_ctx, step_binder, step_input);
+                }
+
+                iris_value_t *result = eval_node(&step_ctx, step_body);
+                ctx->steps = step_ctx.steps;
+                acc = result;
+            }
+            return acc;
+        }
+
+        /* Fallback: iterative fold with termination check */
         for (int iter = 0; iter < 1000; iter++) {
-            /* Build a tuple (acc, input) as the input for the step body */
             iris_value_t *step_elems[2] = { acc, ctx->input };
             iris_value_t *step_input = iris_tuple(step_elems, 2);
 
             eval_ctx_t step_ctx = *ctx;
             step_ctx.input = step_input;
             step_ctx.depth = ctx->depth + 1;
+            step_ctx.memo_count = 0;
 
-            iris_value_t *result = eval_node(&step_ctx, cont_id);
+            if (step_binder != 0xFFFFFFFF) {
+                env_push(&step_ctx, step_binder, step_input);
+            }
+
+            iris_value_t *result = eval_node(&step_ctx, step_body);
             ctx->steps = step_ctx.steps;
 
             /* If result is a tuple (tag, value), check for termination */
@@ -387,18 +477,47 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
 
     case NK_LET: {
         /*
-         * Let: binding edge = value to bind, continuation edge = body.
-         * Evaluate binding, then evaluate body with the binding available.
+         * Let: binding edge = value to bind, continuation edge = body (Lambda).
+         * Evaluate binding, bind result to the Lambda's binder, evaluate body.
          */
         uint64_t bind_id, cont_id;
         int have_bind = find_binding(ctx->graph, node_id, &bind_id);
         int have_cont = find_continuation(ctx->graph, node_id, &cont_id);
 
-        if (have_bind) {
+        if (have_bind && have_cont) {
+            /* Evaluate the binding expression */
             ctx->depth++;
-            /* Evaluate the binding (side effect: available via input) */
-            eval_node(ctx, bind_id);
+            iris_value_t *bound_val = eval_node(ctx, bind_id);
             ctx->depth--;
+
+            /* The continuation should be a Lambda — get its binder and body */
+            iris_node_t *cont_node = iris_graph_raw_find_node(ctx->graph, cont_id);
+            if (cont_node && cont_node->kind == NK_LAMBDA) {
+                uint32_t binder_id = cont_node->payload.lambda.binder_id;
+                uint64_t body_id;
+                if (find_continuation(ctx->graph, cont_id, &body_id)) {
+                    /* Push the binding into the environment */
+                    uint32_t saved_env = ctx->env_count;
+                    env_push(ctx, binder_id, bound_val);
+
+                    /* Clear memo for the body since env changed */
+                    uint32_t saved_memo = ctx->memo_count;
+
+                    ctx->depth++;
+                    iris_value_t *result = eval_node(ctx, body_id);
+                    ctx->depth--;
+
+                    /* Restore env and memo */
+                    ctx->env_count = saved_env;
+                    ctx->memo_count = saved_memo;
+                    return result;
+                }
+            }
+            /* Non-Lambda continuation: just evaluate it */
+            ctx->depth++;
+            iris_value_t *result = eval_node(ctx, cont_id);
+            ctx->depth--;
+            return result;
         }
 
         if (have_cont) {
