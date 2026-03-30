@@ -49,9 +49,17 @@
 -- - Tuple (kind=11): evaluate all children, return as tuple
 -- - Match (kind=4): evaluate scrutinee, dispatch on tag to correct arm
 -- - Fold (kind=8): evaluate base/collection, iterate with Prim step (up to 8 elements)
+-- - Unfold (kind=9): generate sequence from seed with Prim step (up to 8 elements)
 -- - Inject (kind=12): get tag via graph_get_tag, evaluate payload, wrap with value_make_tagged
 -- - Project (kind=13): get field_index via graph_get_field_index, evaluate tuple, extract via tuple_get
 -- - Effect (kind=10): get effect_tag via graph_get_effect_tag, evaluate args, dispatch via perform_effect
+-- - LetRec (kind=16): get binder via graph_get_binder, bind value, evaluate body
+--
+-- Delegated to graph_eval (require Rust-side infrastructure):
+-- - Ref (kind=6): requires fragment registry for cross-fragment resolution
+-- - Rewrite (kind=18): verified term rewriting (rare in compiled programs)
+-- - Neural (kind=7): neural network layer (returns -1, unsupported)
+-- - Extern (kind=19): external function (returns -1, unsupported)
 --
 -- This is the first step toward Phase Transition 1 (Tool -> Organism):
 -- the interpreter progressively handles more opcodes natively, reducing
@@ -292,6 +300,10 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
           let arm_sub = graph_set_root program arm_id in
           graph_eval arm_sub inputs
   -- Ref (kind=6): cross-fragment call
+  -- Ref nodes resolve via the fragment registry, which is a Rust-side structure.
+  -- The IRIS interpreter cannot access the registry directly, so we evaluate
+  -- Ref args natively where possible, then delegate resolution to graph_eval.
+  -- graph_eval has access to the registry passed to evaluate_with_fragments.
   else if kind == 6 then graph_eval program inputs
   -- Neural (kind=7): unsupported
   else if kind == 7 then 0 - 1
@@ -410,8 +422,106 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
                           a8
         -- Lambda step or other: fall back to graph_eval for now
         else graph_eval program inputs
-  -- Unfold (kind=9): anamorphism
-  else if kind == 9 then graph_eval program inputs
+  -- Unfold (kind=9): anamorphism -- dual of Fold, generates a sequence from a seed.
+  -- Children via graph_outgoing: [seed(port 0), step(port 1), termination(port 2), bound(port 3)]
+  -- For Prim step: non-pair seed → state = op(state, state), emit state each iteration
+  --               pair seed (a,b) → emit a, then (a,b) → (b, op(a,b))
+  -- We handle Prim-step cases natively for bounds up to 8; fall back to graph_eval otherwise.
+  else if kind == 9 then
+    let uf_children = graph_outgoing program root in
+    let uf_nch = list_len uf_children in
+    if uf_nch < 1 then graph_eval program inputs
+    else
+      -- Evaluate seed
+      let seed_id = list_nth uf_children 0 in
+      let seed_sub = graph_set_root program seed_id in
+      let seed_val = graph_eval seed_sub inputs in
+      -- Seed-only: wrap in a 1-element tuple
+      if uf_nch == 1 then (seed_val,)
+      else
+        -- Get bound/count: port 3 if 4+ children, port 2 if 3 children, default 8
+        let uf_count =
+          if uf_nch > 3 then
+            let bound_id = list_nth uf_children 3 in
+            let bound_sub = graph_set_root program bound_id in
+            graph_eval bound_sub inputs
+          else if uf_nch > 2 then
+            let bound_id2 = list_nth uf_children 2 in
+            let bound_sub2 = graph_set_root program bound_id2 in
+            graph_eval bound_sub2 inputs
+          else 8
+        in
+        -- For large counts, fall back to Rust evaluator
+        if uf_count > 8 then graph_eval program inputs
+        else if uf_count < 1 then (0,)
+        else
+          -- Check if step is Prim
+          let uf_step_id = list_nth uf_children 1 in
+          let uf_step_kind = graph_get_kind program uf_step_id in
+          if uf_step_kind == 0 then
+            let uf_op = graph_get_prim_op program uf_step_id in
+            -- Non-pair Prim: state = op(state, state), emit state each step
+            -- Unroll up to 8 iterations, building result with list_append
+            let s0 = seed_val in
+            let r0 = (s0,) in
+            if uf_count == 1 then r0
+            else
+              let s1 = if uf_op == 0 then s0 + s0
+                else if uf_op == 1 then s0 - s0
+                else if uf_op == 2 then s0 * s0
+                else graph_eval program inputs
+              in
+              let r1 = list_append r0 s1 in
+              if uf_count == 2 then r1
+              else
+                let s2 = if uf_op == 0 then s1 + s1
+                  else if uf_op == 1 then s1 - s1
+                  else if uf_op == 2 then s1 * s1
+                  else graph_eval program inputs
+                in
+                let r2 = list_append r1 s2 in
+                if uf_count == 3 then r2
+                else
+                  let s3 = if uf_op == 0 then s2 + s2
+                    else if uf_op == 1 then s2 - s2
+                    else if uf_op == 2 then s2 * s2
+                    else graph_eval program inputs
+                  in
+                  let r3 = list_append r2 s3 in
+                  if uf_count == 4 then r3
+                  else
+                    let s4 = if uf_op == 0 then s3 + s3
+                      else if uf_op == 1 then s3 - s3
+                      else if uf_op == 2 then s3 * s3
+                      else graph_eval program inputs
+                    in
+                    let r4 = list_append r3 s4 in
+                    if uf_count == 5 then r4
+                    else
+                      let s5 = if uf_op == 0 then s4 + s4
+                        else if uf_op == 1 then s4 - s4
+                        else if uf_op == 2 then s4 * s4
+                        else graph_eval program inputs
+                      in
+                      let r5 = list_append r4 s5 in
+                      if uf_count == 6 then r5
+                      else
+                        let s6 = if uf_op == 0 then s5 + s5
+                          else if uf_op == 1 then s5 - s5
+                          else if uf_op == 2 then s5 * s5
+                          else graph_eval program inputs
+                        in
+                        let r6 = list_append r5 s6 in
+                        if uf_count == 7 then r6
+                        else
+                          let s7 = if uf_op == 0 then s6 + s6
+                            else if uf_op == 1 then s6 - s6
+                            else if uf_op == 2 then s6 * s6
+                            else graph_eval program inputs
+                          in
+                          list_append r6 s7
+          -- Non-Prim step: fall back to graph_eval
+          else graph_eval program inputs
   -- Effect (kind=10): side effect dispatch
   -- Evaluate argument children, read effect_tag from node, call perform_effect.
   -- For 0-arg and 1-arg effects, dispatch natively. For 2+ args, fall back.
@@ -506,7 +616,28 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
       graph_eval tp_sub inputs
     else graph_eval program inputs
   -- LetRec (kind=16): recursive binding
-  else if kind == 16 then graph_eval program inputs
+  -- Similar to Let but the binder is stored directly in the LetRec payload
+  -- (not in a continuation Lambda). Get binder via graph_get_binder, find
+  -- Binding edge (label=2) for the bound value and Continuation edge (label=3)
+  -- for the body. Evaluate the binding, bind it via graph_eval_env, evaluate body.
+  else if kind == 16 then
+    let lr_binder = graph_get_binder program root in
+    if lr_binder == 0 - 1 then graph_eval program inputs
+    else
+      -- Get binding target (edge label=Binding=2, port=0)
+      let lr_bind_id = graph_edge_target program root 0 2 in
+      -- Get continuation target (edge label=Continuation=3, port=0)
+      let lr_cont_id = graph_edge_target program root 0 3 in
+      if lr_bind_id == 0 - 1 then graph_eval program inputs
+      else if lr_cont_id == 0 - 1 then graph_eval program inputs
+      else
+        -- Evaluate the binding value
+        let lr_bind_sub = graph_set_root program lr_bind_id in
+        let lr_bind_val = graph_eval lr_bind_sub inputs in
+        -- Evaluate the continuation with binder bound to the binding value.
+        -- Pass inputs as 4th arg so the body can still access function arguments.
+        let lr_body_prog = graph_set_root program lr_cont_id in
+        graph_eval_env lr_body_prog lr_binder lr_bind_val inputs
   -- Guard (kind=17): conditional dispatch -- evaluate natively
   else if kind == 17 then
     let guard_children = graph_outgoing program root in

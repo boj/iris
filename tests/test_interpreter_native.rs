@@ -941,3 +941,363 @@ let f t =
     let t2 = Value::tuple(vec![Value::Int(3), Value::Int(10)]);
     assert_both_equal(src, "f", &[t2], Value::Int(7));
 }
+
+// ---------------------------------------------------------------------------
+// Unfold tests (node kind 9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_unfold_add_3() {
+    // unfold 1 add 3 => [1, 1+1=2, 2+2=4]
+    let src = "let f seed = unfold seed add 3";
+    let direct = eval_direct(src, "f", &[Value::Int(1)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(1)]);
+    let expected = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(4)]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold add 3");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold add 3");
+}
+
+#[test]
+fn native_unfold_mul_4() {
+    // unfold 2 mul 4 => [2, 2*2=4, 4*4=16, 16*16=256]
+    let src = "let f seed = unfold seed mul 4";
+    let direct = eval_direct(src, "f", &[Value::Int(2)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(2)]);
+    let expected = Value::tuple(vec![Value::Int(2), Value::Int(4), Value::Int(16), Value::Int(256)]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold mul 4");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold mul 4");
+}
+
+#[test]
+fn native_unfold_add_1() {
+    // unfold 5 add 1 => [5]
+    let src = "let f seed = unfold seed add 1";
+    let direct = eval_direct(src, "f", &[Value::Int(5)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(5)]);
+    let expected = Value::tuple(vec![Value::Int(5)]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold add 1");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold add 1");
+}
+
+#[test]
+fn native_unfold_add_8() {
+    // unfold 1 add 8 => [1, 2, 4, 8, 16, 32, 64, 128]
+    let src = "let f seed = unfold seed add 8";
+    let direct = eval_direct(src, "f", &[Value::Int(1)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(1)]);
+    let expected = Value::tuple(vec![
+        Value::Int(1), Value::Int(2), Value::Int(4), Value::Int(8),
+        Value::Int(16), Value::Int(32), Value::Int(64), Value::Int(128),
+    ]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold add 8");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold add 8");
+}
+
+#[test]
+fn native_unfold_mul_2() {
+    // unfold 3 mul 2 => [3, 3*3=9]
+    let src = "let f seed = unfold seed mul 2";
+    let direct = eval_direct(src, "f", &[Value::Int(3)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(3)]);
+    let expected = Value::tuple(vec![Value::Int(3), Value::Int(9)]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold mul 2");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold mul 2");
+}
+
+#[test]
+fn native_unfold_sub_5() {
+    // unfold 100 sub 5 => [100, 100-100=0, 0-0=0, 0-0=0, 0-0=0]
+    let src = "let f seed = unfold seed sub 5";
+    let direct = eval_direct(src, "f", &[Value::Int(100)]);
+    let interp = eval_via_interpreter(src, "f", &[Value::Int(100)]);
+    let expected = Value::tuple(vec![
+        Value::Int(100), Value::Int(0), Value::Int(0), Value::Int(0), Value::Int(0),
+    ]);
+    assert_eq!(direct, expected, "direct eval mismatch for unfold sub 5");
+    assert_eq!(interp, expected, "interpreter eval mismatch for unfold sub 5");
+}
+
+// ---------------------------------------------------------------------------
+// LetRec tests (node kind 16)
+// ---------------------------------------------------------------------------
+
+// LetRec is not emitted by the syntax lowerer (it maps `let rec` to `let`),
+// so we construct LetRec graphs manually. The structure is:
+//   LetRec(binder=B) with edges:
+//     Binding(port=0) -> value_node  (what's bound)
+//     Continuation(port=0) -> body_node (where B is used)
+
+use iris_types::graph::{Node, NodeId, NodeKind, NodePayload, Edge, EdgeLabel, BinderId};
+use iris_types::types::{TypeId, TypeEnv, TypeDef, PrimType, DecreaseWitness, LIATerm};
+use iris_types::cost::{CostTerm, CostBound};
+use iris_types::hash::SemanticHash;
+use std::collections::HashMap;
+
+/// Build a minimal SemanticGraph for a LetRec that binds a literal and uses it.
+/// Equivalent to: let rec x = 42 in x + 1
+fn make_letrec_graph() -> SemanticGraph {
+    let type_sig = TypeId(0);
+    let mut type_env = TypeEnv { types: BTreeMap::new() };
+    type_env.types.insert(type_sig, TypeDef::Primitive(PrimType::Int));
+
+    let binder = BinderId(999);
+
+    // Lit(42) node - the bound value (type_tag 0x00 = Int)
+    let lit_node = Node {
+        id: NodeId(1),
+        kind: NodeKind::Lit,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 0,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::Lit { type_tag: 0x00, value: 42i64.to_le_bytes().to_vec() },
+    };
+
+    // Lit(1) node - the continuation body (type_tag 0x00 = Int)
+    // Simplest test: LetRec binds 42, continuation is a Lit(1) node.
+    // This tests the plumbing even if the result doesn't depend on the binding.
+    let body_lit = Node {
+        id: NodeId(2),
+        kind: NodeKind::Lit,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 0,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::Lit { type_tag: 0x00, value: 1i64.to_le_bytes().to_vec() },
+    };
+
+    // LetRec node - the root
+    let letrec_node = Node {
+        id: NodeId(100),
+        kind: NodeKind::LetRec,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 2,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::LetRec {
+            binder,
+            decrease: DecreaseWitness::Sized(LIATerm::Const(0), LIATerm::Const(0)),
+        },
+    };
+
+    let edges = vec![
+        Edge { source: NodeId(100), target: NodeId(1), port: 0, label: EdgeLabel::Binding },
+        Edge { source: NodeId(100), target: NodeId(2), port: 0, label: EdgeLabel::Continuation },
+    ];
+
+    let mut nodes = HashMap::new();
+    nodes.insert(NodeId(1), lit_node);
+    nodes.insert(NodeId(2), body_lit);
+    nodes.insert(NodeId(100), letrec_node);
+
+    SemanticGraph {
+        root: NodeId(100),
+        nodes,
+        edges,
+        type_env,
+        cost: CostBound::Unknown,
+        resolution: iris_types::graph::Resolution::Implementation,
+        hash: SemanticHash([0; 32]),
+    }
+}
+
+/// Build a LetRec graph where the body uses the bound value:
+/// let rec x = 10 in x (body is a Prim add with x and 5)
+/// Actually, to use the binder we need a Lambda wrapping the body.
+/// The evaluator's graph_eval_env sets binder in the env, so the
+/// body can be a Lambda that gets its binder from the environment.
+///
+/// Simpler: body is Prim(add) with two Lit children: one is an input ref
+/// and one is a constant. We pass the bound value as input.
+///
+/// Actually the cleanest approach: LetRec node, binding = Lit(10),
+/// continuation = Prim(add, Lit(input_ref=0), Lit(5)).
+/// Then we evaluate with inputs=(10,) where input 0 = the bound value.
+/// But the LetRec uses graph_eval_env to bind the binder to the value,
+/// not inputs. So the body needs a Lambda referencing the binder.
+///
+/// Let's use a Lambda body:
+///   Lambda(binder=999) -> Prim(add, Lit(input_ref for binder), Lit(5))
+///
+/// Wait, that's not how it works either. The LetRec binder is placed
+/// in the env by graph_eval_env. For the body to use it, the body
+/// needs to be evaluated in that env context. Looking at the IRIS
+/// interpreter: it calls graph_eval_env lr_body_prog lr_binder lr_bind_val.
+/// graph_eval_env evaluates the program with the binder bound to the value.
+///
+/// But how does the body "reference" the binder? Through a Lit input ref?
+/// No, input refs are for function arguments. The binder is in the env,
+/// which is different from inputs.
+///
+/// Looking at the Rust eval_letrec: it does self.env.insert(binder, v)
+/// and then self.eval_node(body_target, depth + 1). So the body is
+/// evaluated in the same context, with the binder in the env. When the
+/// body encounters a Lambda node whose binder matches, it can access
+/// the value. But what about a plain reference to the binder?
+///
+/// Actually, the graph_eval_env primitive in the bootstrap evaluator
+/// adds the binder to the environment. When a Lit node with type_tag=0xFF
+/// is encountered, it looks up inputs. But env bindings are separate.
+///
+/// The simplest valid test: LetRec binding = Lit(42), body = Lit(99).
+/// This verifies the plumbing (binder bound, continuation evaluated).
+fn make_letrec_with_add() -> SemanticGraph {
+    let type_sig = TypeId(0);
+    let mut type_env = TypeEnv { types: BTreeMap::new() };
+    type_env.types.insert(type_sig, TypeDef::Primitive(PrimType::Int));
+
+    let binder = BinderId(888);
+
+    // Lit(42) - binding value (type_tag 0x00 = Int)
+    let binding_lit = Node {
+        id: NodeId(10),
+        kind: NodeKind::Lit,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 0,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::Lit { type_tag: 0x00, value: 42i64.to_le_bytes().to_vec() },
+    };
+
+    // Prim(add) - the body: adds input[0] + 1
+    // input[0] is the first function argument (type_tag 0xFF = input ref)
+    let input_ref = Node {
+        id: NodeId(20),
+        kind: NodeKind::Lit,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 0,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::Lit { type_tag: 0xFF, value: 0i64.to_le_bytes().to_vec() },
+    };
+
+    let const_1 = Node {
+        id: NodeId(21),
+        kind: NodeKind::Lit,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 0,
+        resolution_depth: 0,
+        salt: 1,
+        payload: NodePayload::Lit { type_tag: 0x00, value: 1i64.to_le_bytes().to_vec() },
+    };
+
+    let add_node = Node {
+        id: NodeId(30),
+        kind: NodeKind::Prim,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 2,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::Prim { opcode: 0x00 }, // add
+    };
+
+    // LetRec: bind 42, body is add(input[0], 1)
+    // When evaluated with input = (99,), should return 99 + 1 = 100
+    let letrec = Node {
+        id: NodeId(50),
+        kind: NodeKind::LetRec,
+        type_sig,
+        cost: CostTerm::Unit,
+        arity: 2,
+        resolution_depth: 0,
+        salt: 0,
+        payload: NodePayload::LetRec {
+            binder,
+            decrease: DecreaseWitness::Sized(LIATerm::Const(0), LIATerm::Const(0)),
+        },
+    };
+
+    let edges = vec![
+        Edge { source: NodeId(50), target: NodeId(10), port: 0, label: EdgeLabel::Binding },
+        Edge { source: NodeId(50), target: NodeId(30), port: 0, label: EdgeLabel::Continuation },
+        Edge { source: NodeId(30), target: NodeId(20), port: 0, label: EdgeLabel::Argument },
+        Edge { source: NodeId(30), target: NodeId(21), port: 1, label: EdgeLabel::Argument },
+    ];
+
+    let mut nodes = HashMap::new();
+    nodes.insert(NodeId(10), binding_lit);
+    nodes.insert(NodeId(20), input_ref);
+    nodes.insert(NodeId(21), const_1);
+    nodes.insert(NodeId(30), add_node);
+    nodes.insert(NodeId(50), letrec);
+
+    SemanticGraph {
+        root: NodeId(50),
+        nodes,
+        edges,
+        type_env,
+        cost: CostBound::Unknown,
+        resolution: iris_types::graph::Resolution::Implementation,
+        hash: SemanticHash([0; 32]),
+    }
+}
+
+#[test]
+fn native_letrec_simple_body() {
+    // LetRec binds 42, body is Lit(1) -- tests basic LetRec plumbing
+    let graph = make_letrec_graph();
+    let reg = BTreeMap::new();
+
+    // Direct eval
+    let direct = iris_bootstrap::evaluate_with_fragments(&graph, &[], 5_000_000, &reg)
+        .expect("direct eval failed");
+    assert_eq!(direct, Value::Int(1), "direct eval: LetRec body should return 1");
+
+    // Interpreter eval
+    let interp_src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/iris-programs/interpreter/full_interpreter.iris"
+    ))
+    .expect("failed to read interpreter source");
+    let interp_result = syntax::compile(&interp_src);
+    assert!(interp_result.errors.is_empty(), "interpreter compile errors: {:?}", interp_result.errors);
+    let interp_graph = interp_result.fragments.last().unwrap().1.graph.clone();
+
+    let program_val = Value::Program(Rc::new(graph));
+    let inputs_tuple = Value::tuple(vec![]);
+    let interp_inputs = vec![program_val, inputs_tuple];
+
+    let empty_reg = BTreeMap::new();
+    let interp = iris_bootstrap::evaluate_with_fragments(&interp_graph, &interp_inputs, 5_000_000, &empty_reg)
+        .expect("interpreter eval failed");
+    assert_eq!(interp, Value::Int(1), "interpreter eval: LetRec body should return 1");
+}
+
+#[test]
+fn native_letrec_with_input_body() {
+    // LetRec binds 42, body is add(input[0], 1) with input (99,)
+    // Body should evaluate to 99 + 1 = 100, regardless of the binding
+    let graph = make_letrec_with_add();
+    let reg = BTreeMap::new();
+
+    // Direct eval with input = 99
+    let direct = iris_bootstrap::evaluate_with_fragments(&graph, &[Value::Int(99)], 5_000_000, &reg)
+        .expect("direct eval failed");
+    assert_eq!(direct, Value::Int(100), "direct eval: LetRec body should return 100");
+
+    // Interpreter eval
+    let interp_src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/iris-programs/interpreter/full_interpreter.iris"
+    ))
+    .expect("failed to read interpreter source");
+    let interp_result = syntax::compile(&interp_src);
+    assert!(interp_result.errors.is_empty());
+    let interp_graph = interp_result.fragments.last().unwrap().1.graph.clone();
+
+    let program_val = Value::Program(Rc::new(graph));
+    let inputs_tuple = Value::tuple(vec![Value::Int(99)]);
+    let interp_inputs = vec![program_val, inputs_tuple];
+
+    let empty_reg = BTreeMap::new();
+    let interp = iris_bootstrap::evaluate_with_fragments(&interp_graph, &interp_inputs, 5_000_000, &empty_reg)
+        .expect("interpreter eval failed");
+    assert_eq!(interp, Value::Int(100), "interpreter eval: LetRec body should return 100");
+}
