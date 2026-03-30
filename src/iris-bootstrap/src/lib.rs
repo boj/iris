@@ -345,16 +345,26 @@ fn inline_all_refs_in_graph(
     Some(result)
 }
 
-/// Opcodes that eval_flat_reuse handles inline.
-/// Any opcode not listed here must fall through to the tree-walking evaluator.
+/// Opcodes that eval_flat_reuse handles inline or via JIT dispatch.
+/// Unsupported opcodes cause flatten_subgraph to bail out to tree-walking.
 fn is_flat_supported_opcode(opcode: u8) -> bool {
     matches!(opcode,
         0x00..=0x09  // arithmetic: add, sub, mul, div, mod, neg, abs, min, max, pow
         | 0x10..=0x11 // bitwise: and, or
         | 0x20..=0x25 // comparison: eq, ne, lt, gt, le, ge
-        | 0x34        // tuple_get
+        | 0x34        // tuple_get (inline)
         | 0x40..=0x41 // conversion: int_to_float, float_to_int
         | 0xD8        // sqrt
+        // String ops via JIT dispatch (operate on Value, not raw i64)
+        | 0xB0        // str_len
+        | 0xC0        // char_at
+        // Collection ops via JIT dispatch
+        | 0xC1        // list_append
+        | 0xC2        // list_nth
+        | 0xC7        // list_range
+        | 0xD2        // tuple_get (via dispatch)
+        | 0xD6        // tuple_len
+        | 0xF0        // list_len
     )
 }
 
@@ -1123,7 +1133,23 @@ fn eval_flat_reuse(program: &FlatProgram, input: Value, slots: &mut Vec<Value>) 
                         Value::Int(x) => Value::Float64((*x as f64).sqrt()),
                         _ => Value::Unit,
                     },
-                    _ => Value::Unit,
+                    // All other opcodes: dispatch through JIT runtime
+                    _ => {
+                        let va = slots[a0].clone();
+                        let a1 = op.arg1 as usize;
+                        let a2 = op.arg2 as usize;
+                        let vb = if a1 < slots.len() { slots[a1].clone() } else { Value::Unit };
+                        let vc = if a2 < slots.len() { slots[a2].clone() } else { Value::Unit };
+                        let packed_a = crate::jit::pack(va);
+                        let packed_b = crate::jit::pack(vb);
+                        let packed_c = crate::jit::pack(vc);
+                        let result_packed = crate::jit::rt_prim_dispatch(
+                            op.opcode as i64, packed_a, packed_b, packed_c,
+                        );
+                        let result = crate::jit::unpack(result_packed);
+                        // Don't free packed values — they may share Rc with slots
+                        result
+                    },
                 };
             }
             1 => {} // Lit — pre-filled
