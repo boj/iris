@@ -49,6 +49,9 @@
 -- - Tuple (kind=11): evaluate all children, return as tuple
 -- - Match (kind=4): evaluate scrutinee, dispatch on tag to correct arm
 -- - Fold (kind=8): evaluate base/collection, iterate with Prim step (up to 8 elements)
+-- - Inject (kind=12): get tag via graph_get_tag, evaluate payload, wrap with value_make_tagged
+-- - Project (kind=13): get field_index via graph_get_field_index, evaluate tuple, extract via tuple_get
+-- - Effect (kind=10): get effect_tag via graph_get_effect_tag, evaluate args, dispatch via perform_effect
 --
 -- This is the first step toward Phase Transition 1 (Tool -> Organism):
 -- the interpreter progressively handles more opcodes natively, reducing
@@ -409,8 +412,24 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
         else graph_eval program inputs
   -- Unfold (kind=9): anamorphism
   else if kind == 9 then graph_eval program inputs
-  -- Effect (kind=10): side effect
-  else if kind == 10 then graph_eval program inputs
+  -- Effect (kind=10): side effect dispatch
+  -- Evaluate argument children, read effect_tag from node, call perform_effect.
+  -- For 0-arg and 1-arg effects, dispatch natively. For 2+ args, fall back.
+  else if kind == 10 then
+    let eff_tag = graph_get_effect_tag program root in
+    if eff_tag == 0 - 1 then graph_eval program inputs
+    else
+      let eff_args = graph_outgoing program root in
+      let eff_nargs = list_len eff_args in
+      if eff_nargs == 0 then
+        perform_effect eff_tag 0
+      else if eff_nargs == 1 then
+        let ea0_id = list_nth eff_args 0 in
+        let ea0_sub = graph_set_root program ea0_id in
+        let ea0_val = graph_eval ea0_sub inputs in
+        perform_effect eff_tag ea0_val
+      -- 2+ args: fall back to Rust evaluator (perform_effect is arity-2 in syntax)
+      else graph_eval program inputs
   -- Tuple (kind=11): product construction -- evaluate all children
   else if kind == 11 then
     let tup_args = graph_outgoing program root in
@@ -441,10 +460,33 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
       let t2_val = graph_eval t2_sub inputs in
       (t0_val, t1_val, t2_val)
     else graph_eval program inputs
-  -- Inject (kind=12): sum constructor
-  else if kind == 12 then graph_eval program inputs
-  -- Project (kind=13): field access
-  else if kind == 13 then graph_eval program inputs
+  -- Inject (kind=12): sum constructor -- wrap payload in Tagged value
+  else if kind == 12 then
+    let inj_tag = graph_get_tag program root in
+    if inj_tag == 0 - 1 then graph_eval program inputs
+    else
+      let inj_args = graph_outgoing program root in
+      let inj_nargs = list_len inj_args in
+      if inj_nargs > 0 then
+        let inj_child_id = list_nth inj_args 0 in
+        let inj_sub = graph_set_root program inj_child_id in
+        let inj_payload = graph_eval inj_sub inputs in
+        value_make_tagged inj_tag inj_payload
+      else
+        value_make_tagged inj_tag 0
+  -- Project (kind=13): field access -- extract field from tuple
+  else if kind == 13 then
+    let proj_fidx = graph_get_field_index program root in
+    if proj_fidx == 0 - 1 then graph_eval program inputs
+    else
+      let proj_args = graph_outgoing program root in
+      let proj_nargs = list_len proj_args in
+      if proj_nargs > 0 then
+        let proj_child_id = list_nth proj_args 0 in
+        let proj_sub = graph_set_root program proj_child_id in
+        let proj_tuple = graph_eval proj_sub inputs in
+        tuple_get proj_tuple proj_fidx
+      else graph_eval program inputs
   -- TypeAbst (kind=14): transparent wrapper -- evaluate body directly
   else if kind == 14 then
     let ta_args = graph_outgoing program root in
