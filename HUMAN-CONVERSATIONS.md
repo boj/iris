@@ -97,3 +97,21 @@
 
 **Assistant:** Here's the honest assessment:
 
+
+---
+
+**2026-03-30 15:15**
+
+**Human:** Investigate it
+
+**Assistant:** Here's the clear path to making the JIT the primary execution engine:
+
+
+---
+
+**2026-03-30 15:16**
+
+**Human:** Investigate it
+
+**Assistant:** Yes. `iris-stage0-next` — a JIT-based stage0 that compiles IRIS to native x86-64 at runtime. No tree-walking in the hot path. It replaces the current `iris-stage0-native` (which tree-walks everything).
+

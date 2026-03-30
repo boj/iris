@@ -55,6 +55,10 @@ name = "iris-stage0-native"
 path = "src/bin/iris-stage0-native.rs"
 
 [[bin]]
+name = "iris-stage0-next"
+path = "src/bin/iris-stage0-next.rs"
+
+[[bin]]
 name = "iris"
 path = "src/bin/iris.rs"
 
