@@ -1301,3 +1301,342 @@ fn native_letrec_with_input_body() {
         .expect("interpreter eval failed");
     assert_eq!(interp, Value::Int(100), "interpreter eval: LetRec body should return 100");
 }
+
+// ---------------------------------------------------------------------------
+// Bitwise prim tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_bitand() {
+    let src = "let f x y = bitand x y";
+    assert_both_equal(src, "f", &[Value::Int(0xFF), Value::Int(0x0F)], Value::Int(0x0F));
+}
+
+#[test]
+fn native_bitor() {
+    let src = "let f x y = bitor x y";
+    assert_both_equal(src, "f", &[Value::Int(0xF0), Value::Int(0x0F)], Value::Int(0xFF));
+}
+
+#[test]
+fn native_bitxor() {
+    let src = "let f x y = bitxor x y";
+    assert_both_equal(src, "f", &[Value::Int(0xFF), Value::Int(0x0F)], Value::Int(0xF0));
+}
+
+#[test]
+fn native_bitnot() {
+    let src = "let f x = bitnot x";
+    let result_direct = eval_direct(src, "f", &[Value::Int(0)]);
+    let result_interp = eval_via_interpreter(src, "f", &[Value::Int(0)]);
+    // bitnot 0 = -1 (all bits set in two's complement)
+    assert_eq!(result_direct, Value::Int(-1), "direct: bitnot 0 should be -1");
+    assert_eq!(result_interp, Value::Int(-1), "interpreter: bitnot 0 should be -1");
+}
+
+#[test]
+fn native_shl() {
+    let src = "let f x y = shl x y";
+    assert_both_equal(src, "f", &[Value::Int(1), Value::Int(4)], Value::Int(16));
+}
+
+#[test]
+fn native_shr() {
+    let src = "let f x y = shr x y";
+    assert_both_equal(src, "f", &[Value::Int(256), Value::Int(4)], Value::Int(16));
+}
+
+// ---------------------------------------------------------------------------
+// Logical operator tests (&&, ||, ! lowered to Guard/Prim)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_logical_and_true() {
+    let src = "let f x y = if x > 0 && y > 0 then 1 else 0";
+    assert_both_equal(src, "f", &[Value::Int(3), Value::Int(5)], Value::Int(1));
+}
+
+#[test]
+fn native_logical_and_false() {
+    let src = "let f x y = if x > 0 && y > 0 then 1 else 0";
+    assert_both_equal(src, "f", &[Value::Int(3), Value::Int(-1)], Value::Int(0));
+}
+
+#[test]
+fn native_logical_or_true() {
+    let src = "let f x y = if x > 0 || y > 0 then 1 else 0";
+    assert_both_equal(src, "f", &[Value::Int(-1), Value::Int(5)], Value::Int(1));
+}
+
+#[test]
+fn native_logical_or_false() {
+    let src = "let f x y = if x > 0 || y > 0 then 1 else 0";
+    assert_both_equal(src, "f", &[Value::Int(-1), Value::Int(-2)], Value::Int(0));
+}
+
+#[test]
+fn native_logical_not() {
+    let src = "let f x = if !x then 1 else 0";
+    // !0 is bitnot(0) = -1 (truthy), so if !0 then 1 else 0 -> 1
+    assert_both_equal(src, "f", &[Value::Int(0)], Value::Int(1));
+}
+
+// ---------------------------------------------------------------------------
+// String prim tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_str_len() {
+    let src = r#"let f s = str_len s"#;
+    assert_both_equal(src, "f", &[Value::String("hello".into())], Value::Int(5));
+}
+
+#[test]
+fn native_str_len_empty() {
+    let src = r#"let f s = str_len s"#;
+    assert_both_equal(src, "f", &[Value::String("".into())], Value::Int(0));
+}
+
+#[test]
+fn native_str_concat() {
+    let src = r#"let f a b = str_concat a b"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("hello".into()), Value::String(" world".into())],
+        Value::String("hello world".into()),
+    );
+}
+
+#[test]
+fn native_str_contains_true() {
+    let src = r#"let f s sub = str_contains s sub"#;
+    let direct = eval_direct(src, "f", &[Value::String("hello world".into()), Value::String("world".into())]);
+    let interp = eval_via_interpreter(src, "f", &[Value::String("hello world".into()), Value::String("world".into())]);
+    // str_contains returns Bool(true) or Int(1)
+    match (&direct, &interp) {
+        (Value::Bool(true), _) | (Value::Int(1), _) => {},
+        _ => panic!("direct: expected truthy, got {:?}", direct),
+    }
+    match (&interp, &direct) {
+        (Value::Bool(true), _) | (Value::Int(1), _) => {},
+        _ => panic!("interpreter: expected truthy, got {:?}", interp),
+    }
+}
+
+#[test]
+fn native_str_eq_true() {
+    let src = r#"let f a b = str_eq a b"#;
+    let direct = eval_direct(src, "f", &[Value::String("abc".into()), Value::String("abc".into())]);
+    let interp = eval_via_interpreter(src, "f", &[Value::String("abc".into()), Value::String("abc".into())]);
+    match &direct {
+        Value::Bool(true) | Value::Int(1) => {},
+        _ => panic!("direct: expected truthy for str_eq, got {:?}", direct),
+    }
+    match &interp {
+        Value::Bool(true) | Value::Int(1) => {},
+        _ => panic!("interpreter: expected truthy for str_eq, got {:?}", interp),
+    }
+}
+
+#[test]
+fn native_str_to_int() {
+    let src = r#"let f s = str_to_int s"#;
+    assert_both_equal(src, "f", &[Value::String("42".into())], Value::Int(42));
+}
+
+#[test]
+fn native_int_to_string() {
+    let src = r#"let f n = int_to_string n"#;
+    assert_both_equal(src, "f", &[Value::Int(42)], Value::String("42".into()));
+}
+
+#[test]
+fn native_str_trim() {
+    let src = r#"let f s = str_trim s"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("  hello  ".into())],
+        Value::String("hello".into()),
+    );
+}
+
+#[test]
+fn native_str_upper() {
+    let src = r#"let f s = str_upper s"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("hello".into())],
+        Value::String("HELLO".into()),
+    );
+}
+
+#[test]
+fn native_str_lower() {
+    let src = r#"let f s = str_lower s"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("HELLO".into())],
+        Value::String("hello".into()),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Collection prim tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_list_len() {
+    let src = "let f lst = list_len lst";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(3));
+}
+
+#[test]
+fn native_list_len_empty() {
+    let src = "let f lst = list_len lst";
+    let tuple = Value::tuple(vec![]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(0));
+}
+
+#[test]
+fn native_list_append() {
+    let src = "let f lst elem = list_append lst elem";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2)]);
+    let direct = eval_direct(src, "f", &[tuple.clone(), Value::Int(3)]);
+    let interp = eval_via_interpreter(src, "f", &[tuple, Value::Int(3)]);
+    let expected = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_eq!(direct, expected, "direct: list_append mismatch");
+    assert_eq!(interp, expected, "interpreter: list_append mismatch");
+}
+
+#[test]
+fn native_list_nth() {
+    let src = "let f lst idx = list_nth lst idx";
+    let tuple = Value::tuple(vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
+    assert_both_equal(src, "f", &[tuple, Value::Int(1)], Value::Int(20));
+}
+
+#[test]
+fn native_list_take() {
+    let src = "let f lst n = list_take lst n";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+    let direct = eval_direct(src, "f", &[tuple.clone(), Value::Int(2)]);
+    let interp = eval_via_interpreter(src, "f", &[tuple, Value::Int(2)]);
+    let expected = Value::tuple(vec![Value::Int(1), Value::Int(2)]);
+    assert_eq!(direct, expected, "direct: list_take mismatch");
+    assert_eq!(interp, expected, "interpreter: list_take mismatch");
+}
+
+#[test]
+fn native_list_drop() {
+    let src = "let f lst n = list_drop lst n";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+    let direct = eval_direct(src, "f", &[tuple.clone(), Value::Int(2)]);
+    let interp = eval_via_interpreter(src, "f", &[tuple, Value::Int(2)]);
+    let expected = Value::tuple(vec![Value::Int(3), Value::Int(4)]);
+    assert_eq!(direct, expected, "direct: list_drop mismatch");
+    assert_eq!(interp, expected, "interpreter: list_drop mismatch");
+}
+
+#[test]
+fn native_list_range() {
+    // list_range returns a Range value; test by indexing into it with list_nth
+    let src = "let f = list_nth (list_range 0 5) 3";
+    assert_both_equal(src, "f", &[], Value::Int(3));
+}
+
+#[test]
+fn native_list_sort() {
+    let src = "let f lst = list_sort lst";
+    let tuple = Value::tuple(vec![Value::Int(3), Value::Int(1), Value::Int(4), Value::Int(2)]);
+    let direct = eval_direct(src, "f", &[tuple.clone()]);
+    let interp = eval_via_interpreter(src, "f", &[tuple]);
+    let expected = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+    assert_eq!(direct, expected, "direct: list_sort mismatch");
+    assert_eq!(interp, expected, "interpreter: list_sort mismatch");
+}
+
+#[test]
+fn native_list_concat_collections() {
+    let src = "let f a b = list_concat a b";
+    let t1 = Value::tuple(vec![Value::Int(1), Value::Int(2)]);
+    let t2 = Value::tuple(vec![Value::Int(3), Value::Int(4)]);
+    let direct = eval_direct(src, "f", &[t1.clone(), t2.clone()]);
+    let interp = eval_via_interpreter(src, "f", &[t1, t2]);
+    let expected = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+    assert_eq!(direct, expected, "direct: list_concat mismatch");
+    assert_eq!(interp, expected, "interpreter: list_concat mismatch");
+}
+
+// ---------------------------------------------------------------------------
+// Data access prim tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_tuple_get_interp() {
+    let src = "let f t idx = tuple_get t idx";
+    let tuple = Value::tuple(vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
+    assert_both_equal(src, "f", &[tuple, Value::Int(2)], Value::Int(30));
+}
+
+#[test]
+fn native_tuple_len_interp() {
+    let src = "let f t = tuple_len t";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(3));
+}
+
+// ---------------------------------------------------------------------------
+// Math prim tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_math_floor() {
+    let src = "let f x = math_floor x";
+    // math_floor returns Int in the Rust evaluator
+    assert_both_equal(src, "f", &[Value::Float64(3.7)], Value::Int(3));
+}
+
+#[test]
+fn native_math_ceil() {
+    let src = "let f x = math_ceil x";
+    // math_ceil returns Int in the Rust evaluator
+    assert_both_equal(src, "f", &[Value::Float64(3.2)], Value::Int(4));
+}
+
+#[test]
+fn native_math_round() {
+    let src = "let f x = math_round x";
+    // math_round returns Int in the Rust evaluator
+    assert_both_equal(src, "f", &[Value::Float64(3.5)], Value::Int(4));
+}
+
+#[test]
+fn native_math_sqrt() {
+    let src = "let f x = math_sqrt x";
+    assert_both_equal(src, "f", &[Value::Float64(25.0)], Value::Float64(5.0));
+}
+
+// ---------------------------------------------------------------------------
+// String ternary tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_str_slice() {
+    let src = r#"let f s start end_ = str_slice s start end_"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("hello world".into()), Value::Int(0), Value::Int(5)],
+        Value::String("hello".into()),
+    );
+}
+
+#[test]
+fn native_str_replace() {
+    let src = r#"let f s pat rep = str_replace s pat rep"#;
+    assert_both_equal(
+        src, "f",
+        &[Value::String("hello world".into()), Value::String("world".into()), Value::String("IRIS".into())],
+        Value::String("hello IRIS".into()),
+    );
+}

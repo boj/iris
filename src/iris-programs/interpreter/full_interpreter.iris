@@ -28,10 +28,25 @@
 --   0x13 = Extern     external function (unsupported)
 --
 -- Strategy: For Prim nodes, check if the opcode falls in a group that
--- can be handled natively in IRIS (arithmetic 0x00-0x09, comparison
--- 0x20-0x25). For those groups, read the operands via graph introspection
--- and compute directly. For all other opcodes and node kinds, delegate
--- to graph_eval which invokes the full Rust interpreter.
+-- can be handled natively in IRIS. For simple ops (arithmetic, comparison,
+-- bitwise, logic), compute directly. For string, collection, math, and
+-- data ops, evaluate arguments then call the corresponding IRIS primitive.
+-- For all other opcodes and node kinds, delegate to graph_eval which
+-- invokes the full Rust interpreter.
+--
+-- Natively handled opcode groups:
+--   Arithmetic  0x00-0x09 : add, sub, mul, div, mod, neg, abs, min, max, pow
+--   Bitwise     0x10-0x15 : bitand, bitor, bitxor, bitnot, shl, shr
+--   Comparison  0x20-0x25 : eq, ne, lt, gt, le, ge
+--   Conversion  0x40-0x44 : int_to_float, float_to_int, etc.
+--   String      0xB0-0xBF : str_len, str_concat, str_slice, str_contains, etc.
+--   Char        0xC0      : char_at
+--   Collection  0xC1-0xCE : list_append, list_nth, list_take, list_drop, etc.
+--   Data        0xD2,0xD6 : tuple_get, tuple_len
+--   Math        0xD8-0xDF : sqrt, log, exp, sin, cos, floor, ceil, round
+--   Constants   0xE0-0xE3 : pi, e, random_int, random_float
+--   Bytes       0xE8      : bytes_len
+--   List        0xF0      : list_len
 --
 -- Native evaluation of a Prim node works as follows:
 -- 1. Use graph_outgoing to get the argument node IDs
@@ -77,8 +92,27 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
     let op = graph_get_prim_op program root in
     let args = graph_outgoing program root in
     let nargs = list_len args in
-    -- Binary operations (2 args): arithmetic, comparison
-    if nargs > 1 then
+    -- Ternary operations (3 args): str_slice, str_replace, map_insert
+    if nargs > 2 then
+      let arg0_id = list_nth args 0 in
+      let arg1_id = list_nth args 1 in
+      let arg2_id = list_nth args 2 in
+      let sub0 = graph_set_root program arg0_id in
+      let sub1 = graph_set_root program arg1_id in
+      let sub2 = graph_set_root program arg2_id in
+      let a = graph_eval sub0 inputs in
+      let b = graph_eval sub1 inputs in
+      let c = graph_eval sub2 inputs in
+      -- str_slice 0xB2 (178)
+      if op == 178 then str_slice a b c
+      -- str_replace 0xBB (187)
+      else if op == 187 then str_replace a b c
+      -- map_insert 0xC8 (200)
+      else if op == 200 then map_insert a b c
+      -- Fall back for other ternary ops
+      else graph_eval program inputs
+    -- Binary operations (2 args): arithmetic, comparison, bitwise, string, collection
+    else if nargs > 1 then
       let arg0_id = list_nth args 0 in
       let arg1_id = list_nth args 1 in
       -- Evaluate argument sub-graphs via graph_set_root + graph_eval
@@ -139,29 +173,98 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
         else if op == 6 then
           if a < 0 then 0 - a else a
         else graph_eval program inputs
-      -- Comparison 0x20-0x25 (32-37, native)
-      else if op > 31 then
-        if op < 38 then
-          if op == 32 then
-            if a == b then 1 else 0
-          else if op == 33 then
-            if a == b then 0 else 1
-          else if op == 34 then
-            if a < b then 1 else 0
-          else if op == 35 then
-            if a > b then 1 else 0
-          else if op == 36 then
-            if a < b then 1
-            else if a == b then 1
-            else 0
-          else if op == 37 then
-            if a > b then 1
-            else if a == b then 1
-            else 0
+      -- Bitwise 0x10-0x15 (16-21, native)
+      else if op > 15 then
+        if op < 22 then
+          -- bitand 0x10 (16)
+          if op == 16 then bitand a b
+          -- bitor 0x11 (17)
+          else if op == 17 then bitor a b
+          -- bitxor 0x12 (18)
+          else if op == 18 then bitxor a b
+          -- bitnot 0x13 (19) with 2 args: second arg unused
+          else if op == 19 then bitnot a
+          -- shl 0x14 (20)
+          else if op == 20 then shl a b
+          -- shr 0x15 (21)
+          else if op == 21 then shr a b
+          else graph_eval program inputs
+        -- Comparison 0x20-0x25 (32-37, native)
+        else if op > 31 then
+          if op < 38 then
+            if op == 32 then
+              if a == b then 1 else 0
+            else if op == 33 then
+              if a == b then 0 else 1
+            else if op == 34 then
+              if a < b then 1 else 0
+            else if op == 35 then
+              if a > b then 1 else 0
+            else if op == 36 then
+              if a < b then 1
+              else if a == b then 1
+              else 0
+            else if op == 37 then
+              if a > b then 1
+              else if a == b then 1
+              else 0
+            else graph_eval program inputs
+          -- zip 0x32 (50)
+          else if op == 50 then zip a b
+          -- list_concat 0x35 (53)
+          else if op == 53 then list_concat a b
+          else graph_eval program inputs
+        -- String binary ops 0xB1-0xB8 (177-184)
+        else if op > 176 then
+          if op < 186 then
+            -- str_concat 0xB1 (177)
+            if op == 177 then str_concat a b
+            -- str_contains 0xB3 (179)
+            else if op == 179 then str_contains a b
+            -- str_split 0xB4 (180)
+            else if op == 180 then str_split a b
+            -- str_join 0xB5 (181)
+            else if op == 181 then str_join a b
+            -- str_eq 0xB8 (184)
+            else if op == 184 then str_eq a b
+            -- str_starts_with 0xB9 (185)
+            else if op == 185 then str_starts_with a b
+            else graph_eval program inputs
+          -- str_ends_with 0xBA (186)
+          else if op == 186 then str_ends_with a b
+          -- char_at 0xC0 (192)
+          else if op == 192 then char_at a b
+          -- Collection binary ops 0xC1-0xCE (193-206)
+          else if op > 192 then
+            if op < 207 then
+              -- list_append 0xC1 (193)
+              if op == 193 then list_append a b
+              -- list_nth 0xC2 (194)
+              else if op == 194 then list_nth a b
+              -- list_take 0xC3 (195)
+              else if op == 195 then list_take a b
+              -- list_drop 0xC4 (196)
+              else if op == 196 then list_drop a b
+              -- list_range 0xC7 (199)
+              else if op == 199 then list_range a b
+              -- map_get 0xC9 (201)
+              else if op == 201 then map_get a b
+              -- map_remove 0xCA (202)
+              else if op == 202 then map_remove a b
+              -- list_concat 0xCE (206)
+              else if op == 206 then list_concat a b
+              else graph_eval program inputs
+            -- tuple_get 0xD2 (210)
+            else if op == 210 then tuple_get a b
+            -- random_int 0xE2 (226)
+            else if op == 226 then random_int a b
+            -- bytes_concat 0xE7 (231)
+            else if op == 231 then bytes_concat a b
+            else graph_eval program inputs
           else graph_eval program inputs
         else graph_eval program inputs
       else graph_eval program inputs
-    -- Unary operations (1 arg): neg, abs, type conversion
+    -- Unary operations (1 arg): neg, abs, type conversion, string, collection, math
     else if nargs == 1 then
       let arg0_id = list_nth args 0 in
       let sub0 = graph_set_root program arg0_id in
@@ -170,6 +273,8 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
       if op == 5 then 0 - a
       else if op == 6 then
         if a < 0 then 0 - a else a
+      -- bitnot 0x13 (19)
+      else if op == 19 then bitnot a
       -- Type conversion 0x40-0x44 (64-68): identity for Int
       else if op > 63 then
         if op < 69 then
@@ -177,8 +282,63 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
             if a == 0 then 0 else 1
           else a
         else graph_eval program inputs
+      -- str_len 0xB0 (176)
+      else if op == 176 then str_len a
+      -- str_to_int 0xB6 (182)
+      else if op == 182 then str_to_int a
+      -- int_to_string 0xB7 (183)
+      else if op == 183 then int_to_string a
+      -- str_trim 0xBC (188)
+      else if op == 188 then str_trim a
+      -- str_upper 0xBD (189)
+      else if op == 189 then str_upper a
+      -- str_lower 0xBE (190)
+      else if op == 190 then str_lower a
+      -- str_chars 0xBF (191)
+      else if op == 191 then str_chars a
+      -- list_sort 0xC5 (197)
+      else if op == 197 then list_sort a
+      -- list_dedup 0xC6 (198)
+      else if op == 198 then list_dedup a
+      -- map_keys 0xCB (203)
+      else if op == 203 then map_keys a
+      -- map_values 0xCC (204)
+      else if op == 204 then map_values a
+      -- map_size 0xCD (205)
+      else if op == 205 then map_size a
+      -- tuple_len 0xD6 (214)
+      else if op == 214 then tuple_len a
+      -- math_sqrt 0xD8 (216)
+      else if op == 216 then math_sqrt a
+      -- math_log 0xD9 (217)
+      else if op == 217 then math_log a
+      -- math_exp 0xDA (218)
+      else if op == 218 then math_exp a
+      -- math_sin 0xDB (219)
+      else if op == 219 then math_sin a
+      -- math_cos 0xDC (220)
+      else if op == 220 then math_cos a
+      -- math_floor 0xDD (221)
+      else if op == 221 then math_floor a
+      -- math_ceil 0xDE (222)
+      else if op == 222 then math_ceil a
+      -- math_round 0xDF (223)
+      else if op == 223 then math_round a
+      -- bytes_len 0xE8 (232)
+      else if op == 232 then bytes_len a
+      -- list_len 0xF0 (240)
+      else if op == 240 then list_len a
       else graph_eval program inputs
-    -- Zero args or complex: delegate to Rust
+    -- Zero args: constants, random
+    else if nargs == 0 then
+      -- math_pi 0xE0 (224)
+      if op == 224 then math_pi
+      -- math_e 0xE1 (225)
+      else if op == 225 then math_e
+      -- random_float 0xE3 (227)
+      else if op == 227 then random_float
+      else graph_eval program inputs
+    -- Fallback for unknown arities
     else graph_eval program inputs
   -- Lit (kind=5): extract literal values natively
   else if kind == 5 then
