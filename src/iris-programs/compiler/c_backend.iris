@@ -1,137 +1,65 @@
--- c_backend.iris: IRIS self-compiling C code generator
--- Takes a SemanticGraph, emits C source code
---
--- Usage: iris-stage0-c direct c_backend.json <target_graph.json>
--- The target graph is passed as the first (and only) input.
--- Output: C source code string for the compiled interpreter.
+-- c_backend.iris: Generate C from a SemanticGraph (one node at a time).
+-- Takes 3 args: (target_graph, node_id, ctx)
+-- Recurses via graph_eval self_graph (target, child_id, ctx)
 
-let opcode_to_name op =
-  if op == 0 then "iris_add"
-  else if op == 1 then "iris_sub"
-  else if op == 2 then "iris_mul"
-  else if op == 3 then "iris_div"
-  else if op == 4 then "iris_mod"
-  else if op == 5 then "iris_neg"
-  else if op == 6 then "iris_abs_val"
-  else if op == 7 then "iris_min"
-  else if op == 8 then "iris_max"
-  else if op == 9 then "iris_pow"
-  else if op == 32 then "iris_eq"
-  else if op == 33 then "iris_ne"
-  else if op == 34 then "iris_lt"
-  else if op == 35 then "iris_gt"
-  else if op == 36 then "iris_le"
-  else if op == 37 then "iris_ge"
-  else if op == 38 then "iris_and"
-  else if op == 39 then "iris_or"
-  else if op == 40 then "iris_not"
-  else if op == 130 then "iris_graph_get_kind"
-  else if op == 131 then "iris_graph_get_prim_op"
-  else if op == 137 then "iris_graph_eval"
-  else if op == 138 then "iris_graph_get_root"
-  else if op == 143 then "iris_graph_outgoing"
-  else if op == 151 then "iris_graph_edge_target"
-  else if op == 152 then "iris_graph_get_binder"
-  else if op == 153 then "iris_graph_eval_env"
-  else if op == 154 then "iris_graph_get_tag"
-  else if op == 155 then "iris_graph_get_field_index"
-  else if op == 156 then "iris_value_get_tag"
-  else if op == 157 then "iris_value_get_payload"
-  else if op == 158 then "iris_value_make_tagged"
-  else if op == 159 then "iris_graph_get_effect_tag"
-  else if op == 161 then "iris_perform_effect"
-  else if op == 162 then "iris_graph_eval_ref"
-  else if op == 176 then "iris_str_concat"
-  else if op == 183 then "iris_int_to_string"
-  else if op == 194 then "iris_list_nth"
-  else if op == 197 then "iris_list_append"
-  else if op == 210 then "iris_tuple_get"
-  else if op == 214 then "iris_tuple_len_val"
-  else if op == 238 then "iris_graph_set_root"
-  else if op == 240 then "iris_list_len"
-  else if op == 244 then "iris_print"
-  else str_concat "iris_eval_prim_" (int_to_string op)
-
--- Recursive emit: walks graph, returns C code string
--- graph: the target SemanticGraph (as a Program value)
--- node_id: the node to emit
--- ctx: 0 = expression context, 1 = statement context
-let rec emit_node graph node_id ctx =
-  let kind = graph_get_kind graph node_id in
+let emit target node_id ctx =
+  let self = self_graph in
+  let kind = graph_get_kind target node_id in
   if kind == 5 then
-    -- Lit node
-    let tt = graph_get_lit_type_tag graph node_id in
+    let tt = graph_get_lit_type_tag target node_id in
     if tt == 255 then
-      -- InputRef: index 0 = program, index 1 = inputs
-      let idx = graph_get_lit_value graph node_id in
+      let idx = graph_get_lit_value target node_id in
       if idx == 0 then "program" else "inputs"
     else
-      -- Integer literal
-      str_concat "iris_int(" (str_concat (int_to_string (graph_get_lit_value graph node_id)) ")")
+      str_concat "iris_int(" (str_concat (int_to_string (graph_get_lit_value target node_id)) ")")
   else if kind == 0 then
-    -- Prim node
-    let op = graph_get_prim_op graph node_id in
-    let fname = opcode_to_name op in
-    let children = graph_outgoing graph node_id in
-    let nargs = list_len children in
-    if nargs == 0 then
-      str_concat fname "()"
-    else if nargs == 1 then
-      let a0 = emit_node graph (list_nth children 0) 0 in
+    let op = graph_get_prim_op target node_id in
+    let fname = if op == 0 then "iris_add"
+      else if op == 1 then "iris_sub"
+      else if op == 2 then "iris_mul"
+      else if op == 3 then "iris_div"
+      else if op == 5 then "iris_neg"
+      else if op == 32 then "iris_eq"
+      else if op == 34 then "iris_lt"
+      else if op == 35 then "iris_gt"
+      else if op == 130 then "iris_graph_get_kind"
+      else if op == 131 then "iris_graph_get_prim_op"
+      else if op == 137 then "iris_graph_eval"
+      else if op == 138 then "iris_graph_get_root"
+      else if op == 143 then "iris_graph_outgoing"
+      else if op == 194 then "iris_list_nth"
+      else if op == 238 then "iris_graph_set_root"
+      else if op == 240 then "iris_list_len"
+      else str_concat "iris_prim_" (int_to_string op) in
+    let children = graph_outgoing target node_id in
+    let nc = list_len children in
+    if nc == 0 then str_concat fname "()"
+    else if nc == 1 then
+      let a0 = graph_eval self (target, list_nth children 0, 0) in
       str_concat fname (str_concat "(" (str_concat a0 ")"))
-    else if nargs == 2 then
-      let a0 = emit_node graph (list_nth children 0) 0 in
-      let a1 = emit_node graph (list_nth children 1) 0 in
+    else if nc == 2 then
+      let a0 = graph_eval self (target, list_nth children 0, 0) in
+      let a1 = graph_eval self (target, list_nth children 1, 0) in
       str_concat fname (str_concat "(" (str_concat a0 (str_concat ", " (str_concat a1 ")"))))
-    else if nargs == 3 then
-      let a0 = emit_node graph (list_nth children 0) 0 in
-      let a1 = emit_node graph (list_nth children 1) 0 in
-      let a2 = emit_node graph (list_nth children 2) 0 in
-      str_concat fname (str_concat "(" (str_concat a0 (str_concat ", " (str_concat a1 (str_concat ", " (str_concat a2 ")"))))))
-    else if nargs == 4 then
-      let a0 = emit_node graph (list_nth children 0) 0 in
-      let a1 = emit_node graph (list_nth children 1) 0 in
-      let a2 = emit_node graph (list_nth children 2) 0 in
-      let a3 = emit_node graph (list_nth children 3) 0 in
-      str_concat fname (str_concat "(" (str_concat a0 (str_concat ", " (str_concat a1 (str_concat ", " (str_concat a2 (str_concat ", " (str_concat a3 ")"))))))))
     else
-      str_concat "/* " (str_concat (int_to_string nargs) "-arg prim */iris_unit()")
+      str_concat "/* " (str_concat (int_to_string nc) "-arg prim */iris_unit()")
   else if kind == 17 then
-    -- Guard node: predicate at port 0, body at port 1, fallback at port 2
-    let children = graph_outgoing graph node_id in
+    let children = graph_outgoing target node_id in
     let pred_id = list_nth children 0 in
     let body_id = list_nth children 1 in
     let fall_id = list_nth children 2 in
-    let pred = emit_node graph pred_id 0 in
+    let pred = graph_eval self (target, pred_id, 0) in
     if ctx == 1 then
-      -- Statement context: if/else with return
-      let body_kind = graph_get_kind graph body_id in
-      let fall_kind = graph_get_kind graph fall_id in
-      -- If child is Guard, emit in statement context; otherwise return expression
-      let body_code = if body_kind == 17 then
-          emit_node graph body_id 1
-        else
-          str_concat "return " (str_concat (emit_node graph body_id 0) ";") in
-      let fall_code = if fall_kind == 17 then
-          emit_node graph fall_id 1
-        else
-          str_concat "return " (str_concat (emit_node graph fall_id 0) ";") in
-      str_concat "if (iris_is_truthy(" (str_concat pred (str_concat ")) {\n" (str_concat body_code (str_concat "\n} else {\n" (str_concat fall_code "\n}")))))
+      let bk = graph_get_kind target body_id in
+      let fk = graph_get_kind target fall_id in
+      let body = graph_eval self (target, body_id, if bk == 17 then 1 else 0) in
+      let fall = graph_eval self (target, fall_id, if fk == 17 then 1 else 0) in
+      let body_line = if bk == 17 then body else str_concat "return " (str_concat body ";") in
+      let fall_line = if fk == 17 then fall else str_concat "return " (str_concat fall ";") in
+      str_concat "if (iris_is_truthy(" (str_concat pred (str_concat ")) {\n" (str_concat body_line (str_concat "\n} else {\n" (str_concat fall_line "\n}")))))
     else
-      -- Expression context: ternary
-      let body = emit_node graph body_id 0 in
-      let fall = emit_node graph fall_id 0 in
+      let body = graph_eval self (target, body_id, 0) in
+      let fall = graph_eval self (target, fall_id, 0) in
       str_concat "(iris_is_truthy(" (str_concat pred (str_concat ") ? " (str_concat body (str_concat " : " (str_concat fall ")")))))
   else
-    str_concat "/* unknown kind " (str_concat (int_to_string kind) " */iris_unit()")
-
--- Main: emit the complete C function
--- The input is the target graph (passed as the first CLI arg, loaded as a Program value)
-let target = tuple_get inputs 0
-let root = graph_get_root target
-let header = "/* Generated by c_backend.iris -- IRIS compiles itself */\n#include \"iris_rt.h\"\n\niris_value_t *iris_interpret(iris_value_t *program, iris_value_t *inputs) {\n"
-let body = emit_node target root 1
-let footer = "\n}\n"
-let result = str_concat header (str_concat body footer)
-
-result
+    str_concat "/* kind " (str_concat (int_to_string kind) " */iris_unit()")
