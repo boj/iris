@@ -13,3 +13,6 @@ __pycache__/
 weights/
 result
 *.bak
+# C runtime build artifacts
+bootstrap/c-runtime/*.o
+bootstrap/c-runtime/iris-stage0-c
