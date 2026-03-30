@@ -72,8 +72,10 @@
 --                      dispatch via perform_effect with tuple packing for 2+ args
 -- - LetRec (kind=16): get binder via graph_get_binder, bind value, evaluate body
 --
+-- Natively handled via graph_eval_ref:
+-- - Ref (kind=6): cross-fragment call resolved via graph_eval_ref primitive
+--
 -- Delegated to graph_eval (require Rust-side infrastructure):
--- - Ref (kind=6): requires fragment registry for cross-fragment resolution
 -- - Rewrite (kind=18): verified term rewriting (rare in compiled programs)
 -- - Neural (kind=7): neural network layer (returns -1, unsupported)
 -- - Extern (kind=19): external function (returns -1, unsupported)
@@ -462,11 +464,11 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
           let arm_sub = graph_set_root program arm_id in
           graph_eval arm_sub inputs
   -- Ref (kind=6): cross-fragment call
-  -- Ref nodes resolve via the fragment registry, which is a Rust-side structure.
-  -- The IRIS interpreter cannot access the registry directly, so we evaluate
-  -- Ref args natively where possible, then delegate resolution to graph_eval.
-  -- graph_eval has access to the registry passed to evaluate_with_fragments.
-  else if kind == 6 then graph_eval program inputs
+  -- Uses graph_eval_ref to resolve the Ref node via the fragment registry,
+  -- evaluate arguments in the caller's context, and invoke the resolved
+  -- fragment. This replaces the previous graph_eval delegation, allowing
+  -- the IRIS interpreter to control pre/post processing of Ref calls.
+  else if kind == 6 then graph_eval_ref program root inputs
   -- Neural (kind=7): unsupported
   else if kind == 7 then 0 - 1
   -- Fold (kind=8): catamorphism
