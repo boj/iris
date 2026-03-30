@@ -47,6 +47,8 @@
 -- - Apply+Lambda (kind=1): bind argument via graph_eval_env
 -- - Let (kind=3): bind value and evaluate continuation via graph_eval_env
 -- - Tuple (kind=11): evaluate all children, return as tuple
+-- - Match (kind=4): evaluate scrutinee, dispatch on tag to correct arm
+-- - Fold (kind=8): evaluate base/collection, iterate with Prim step (up to 8 elements)
 --
 -- This is the first step toward Phase Transition 1 (Tool -> Organism):
 -- the interpreter progressively handles more opcodes natively, reducing
@@ -239,13 +241,172 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
         let cont_sub = graph_set_root program cont_id in
         graph_eval cont_sub inputs
   -- Match (kind=4): pattern matching
-  else if kind == 4 then graph_eval program inputs
+  else if kind == 4 then
+    -- Get scrutinee via Scrutinee edge (label=1, port=0)
+    let scrut_id = graph_edge_target program root 0 1 in
+    if scrut_id == 0 - 1 then graph_eval program inputs
+    else
+      -- Evaluate the scrutinee
+      let scrut_sub = graph_set_root program scrut_id in
+      let scrut_val = graph_eval scrut_sub inputs in
+      -- Get arm nodes via graph_outgoing (Argument edges at ports 1,2,3...)
+      let arms = graph_outgoing program root in
+      let narms = list_len arms in
+      if narms == 0 then graph_eval program inputs
+      else
+        -- Extract tag index from the scrutinee value
+        let tag = value_get_tag scrut_val in
+        -- For 2-arm match on Int: 0 -> arm 0 (false), nonzero -> arm 1 (true)
+        let idx = if narms == 2 then
+            if tag == 0 then 0 else 1
+          else
+            -- General case: use tag as arm index, clamped to valid range
+            if tag < 0 then 0
+            else if tag < narms then tag
+            else narms - 1
+        in
+        let arm_id = list_nth arms idx in
+        -- Check if the arm is a Lambda (kind=2) for payload binding
+        let arm_kind = graph_get_kind program arm_id in
+        if arm_kind == 2 then
+          let arm_binder = graph_get_binder program arm_id in
+          if arm_binder > 0 - 1 then
+            -- Get the lambda body via Continuation or Argument edge
+            let arm_body = graph_edge_target program arm_id 0 3 in
+            let arm_body2 = if arm_body == 0 - 1 then graph_edge_target program arm_id 0 0 else arm_body in
+            if arm_body2 == 0 - 1 then graph_eval program inputs
+            else
+              -- Extract payload from Tagged value and bind it
+              let payload = value_get_payload scrut_val in
+              let body_prog = graph_set_root program arm_body2 in
+              graph_eval_env body_prog arm_binder payload
+          else
+            -- No binder: just evaluate the arm
+            let arm_sub = graph_set_root program arm_id in
+            graph_eval arm_sub inputs
+        else
+          -- Arm is not a Lambda: evaluate it directly
+          let arm_sub = graph_set_root program arm_id in
+          graph_eval arm_sub inputs
   -- Ref (kind=6): cross-fragment call
   else if kind == 6 then graph_eval program inputs
   -- Neural (kind=7): unsupported
   else if kind == 7 then 0 - 1
   -- Fold (kind=8): catamorphism
-  else if kind == 8 then graph_eval program inputs
+  -- Handles: fold base step collection
+  -- Children via graph_outgoing: [base(port 0), step(port 1), collection(port 2)]
+  -- The step function is either a Prim node (opcode for binop) or a Lambda.
+  -- We evaluate base and collection, then iterate: for each element, apply step(acc, elem).
+  -- For collections larger than 8 elements, we fall back to graph_eval.
+  else if kind == 8 then
+    let fold_children = graph_outgoing program root in
+    let fold_nch = list_len fold_children in
+    if fold_nch < 2 then graph_eval program inputs
+    else
+      -- Evaluate base accumulator
+      let base_id = list_nth fold_children 0 in
+      let base_sub = graph_set_root program base_id in
+      let acc0 = graph_eval base_sub inputs in
+      -- Get step function node
+      let step_id = list_nth fold_children 1 in
+      let step_kind = graph_get_kind program step_id in
+      -- Evaluate collection (port 2) if present
+      if fold_nch < 3 then acc0
+      else
+        let coll_id = list_nth fold_children 2 in
+        let coll_sub = graph_set_root program coll_id in
+        let coll_val = graph_eval coll_sub inputs in
+        let coll_len = tuple_len coll_val in
+        -- For empty collection, return base
+        if coll_len == 0 then acc0
+        -- For Prim step function: apply the binop natively for up to 8 elements
+        else if step_kind == 0 then
+          let step_op = graph_get_prim_op program step_id in
+          -- Helper: apply a single step of fold with a prim binop
+          -- We unroll up to 8 iterations. For larger, fall back to graph_eval.
+          if coll_len > 8 then graph_eval program inputs
+          else
+            let e0 = tuple_get coll_val 0 in
+            let a1 = if step_op == 0 then acc0 + e0
+              else if step_op == 1 then acc0 - e0
+              else if step_op == 2 then acc0 * e0
+              else if step_op == 7 then (if acc0 < e0 then acc0 else e0)
+              else if step_op == 8 then (if acc0 > e0 then acc0 else e0)
+              else graph_eval program inputs
+            in
+            if coll_len == 1 then a1
+            else
+              let e1 = tuple_get coll_val 1 in
+              let a2 = if step_op == 0 then a1 + e1
+                else if step_op == 1 then a1 - e1
+                else if step_op == 2 then a1 * e1
+                else if step_op == 7 then (if a1 < e1 then a1 else e1)
+                else if step_op == 8 then (if a1 > e1 then a1 else e1)
+                else graph_eval program inputs
+              in
+              if coll_len == 2 then a2
+              else
+                let e2 = tuple_get coll_val 2 in
+                let a3 = if step_op == 0 then a2 + e2
+                  else if step_op == 1 then a2 - e2
+                  else if step_op == 2 then a2 * e2
+                  else if step_op == 7 then (if a2 < e2 then a2 else e2)
+                  else if step_op == 8 then (if a2 > e2 then a2 else e2)
+                  else graph_eval program inputs
+                in
+                if coll_len == 3 then a3
+                else
+                  let e3 = tuple_get coll_val 3 in
+                  let a4 = if step_op == 0 then a3 + e3
+                    else if step_op == 1 then a3 - e3
+                    else if step_op == 2 then a3 * e3
+                    else if step_op == 7 then (if a3 < e3 then a3 else e3)
+                    else if step_op == 8 then (if a3 > e3 then a3 else e3)
+                    else graph_eval program inputs
+                  in
+                  if coll_len == 4 then a4
+                  else
+                    let e4 = tuple_get coll_val 4 in
+                    let a5 = if step_op == 0 then a4 + e4
+                      else if step_op == 1 then a4 - e4
+                      else if step_op == 2 then a4 * e4
+                      else if step_op == 7 then (if a4 < e4 then a4 else e4)
+                      else if step_op == 8 then (if a4 > e4 then a4 else e4)
+                      else graph_eval program inputs
+                    in
+                    if coll_len == 5 then a5
+                    else
+                      let e5 = tuple_get coll_val 5 in
+                      let a6 = if step_op == 0 then a5 + e5
+                        else if step_op == 1 then a5 - e5
+                        else if step_op == 2 then a5 * e5
+                        else if step_op == 7 then (if a5 < e5 then a5 else e5)
+                        else if step_op == 8 then (if a5 > e5 then a5 else e5)
+                        else graph_eval program inputs
+                      in
+                      if coll_len == 6 then a6
+                      else
+                        let e6 = tuple_get coll_val 6 in
+                        let a7 = if step_op == 0 then a6 + e6
+                          else if step_op == 1 then a6 - e6
+                          else if step_op == 2 then a6 * e6
+                          else if step_op == 7 then (if a6 < e6 then a6 else e6)
+                          else if step_op == 8 then (if a6 > e6 then a6 else e6)
+                          else graph_eval program inputs
+                        in
+                        if coll_len == 7 then a7
+                        else
+                          let e7 = tuple_get coll_val 7 in
+                          let a8 = if step_op == 0 then a7 + e7
+                            else if step_op == 1 then a7 - e7
+                            else if step_op == 2 then a7 * e7
+                            else if step_op == 7 then (if a7 < e7 then a7 else e7)
+                            else if step_op == 8 then (if a7 > e7 then a7 else e7)
+                            else graph_eval program inputs
+                          in
+                          a8
+        -- Lambda step or other: fall back to graph_eval for now
+        else graph_eval program inputs
   -- Unfold (kind=9): anamorphism
   else if kind == 9 then graph_eval program inputs
   -- Effect (kind=10): side effect

@@ -442,3 +442,207 @@ let test pg =
     let result = eval_direct(test_src, "test", &[program_val]);
     assert_eq!(result, Value::Int(42));
 }
+
+// ---------------------------------------------------------------------------
+// Match tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_match_tagged_some() {
+    // Match on a Tagged value (ADT constructor)
+    let src = r#"
+type Option = Some(Int) | None
+let f x =
+    match x with
+    | Some(v) -> v + 1
+    | None -> 0
+"#;
+    let direct = eval_direct(src, "f", &[Value::Tagged(0, Box::new(Value::Int(41)))]);
+    assert_eq!(direct, Value::Int(42), "direct eval mismatch");
+    let interp = eval_via_interpreter(src, "f", &[Value::Tagged(0, Box::new(Value::Int(41)))]);
+    assert_eq!(interp, Value::Int(42), "interpreter eval mismatch");
+}
+
+#[test]
+fn native_match_tagged_none() {
+    let src = r#"
+type Option = Some(Int) | None
+let f x =
+    match x with
+    | Some(v) -> v + 1
+    | None -> 0
+"#;
+    let direct = eval_direct(src, "f", &[Value::Tagged(1, Box::new(Value::Unit))]);
+    assert_eq!(direct, Value::Int(0), "direct eval mismatch");
+    let interp = eval_via_interpreter(src, "f", &[Value::Tagged(1, Box::new(Value::Unit))]);
+    assert_eq!(interp, Value::Int(0), "interpreter eval mismatch");
+}
+
+#[test]
+fn native_match_bool_like() {
+    // Match on a 2-variant type acts as Bool match
+    let src = r#"
+type MyBool = MyFalse | MyTrue
+let f x =
+    match x with
+    | MyFalse -> 10
+    | MyTrue -> 20
+"#;
+    // Tag 1 = MyTrue -> arm 1 -> 20
+    let direct = eval_direct(src, "f", &[Value::Tagged(1, Box::new(Value::Unit))]);
+    assert_eq!(direct, Value::Int(20), "direct eval mismatch");
+    let interp = eval_via_interpreter(src, "f", &[Value::Tagged(1, Box::new(Value::Unit))]);
+    assert_eq!(interp, Value::Int(20), "interpreter eval mismatch");
+}
+
+#[test]
+fn native_match_three_arms() {
+    // Match with 3 constructors
+    let src = r#"
+type Color = Red | Green | Blue
+let f x =
+    match x with
+    | Red -> 1
+    | Green -> 2
+    | Blue -> 3
+"#;
+    // Test all three arms
+    for (tag, expected) in [(0, 1), (1, 2), (2, 3)] {
+        let val = Value::Tagged(tag, Box::new(Value::Unit));
+        let direct = eval_direct(src, "f", &[val.clone()]);
+        assert_eq!(direct, Value::Int(expected), "direct mismatch for tag {}", tag);
+        let interp = eval_via_interpreter(src, "f", &[val]);
+        assert_eq!(interp, Value::Int(expected), "interpreter mismatch for tag {}", tag);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fold tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native_fold_add_tuple() {
+    // fold 0 add (1, 2, 3) = 6
+    let src = "let f lst = fold 0 add lst";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(6));
+}
+
+#[test]
+fn native_fold_mul_tuple() {
+    // fold 1 mul (2, 3, 4) = 24
+    let src = "let f lst = fold 1 mul lst";
+    let tuple = Value::tuple(vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(24));
+}
+
+#[test]
+fn native_fold_add_single() {
+    // fold 10 add (5,) = 15
+    let src = "let f lst = fold 10 add lst";
+    let tuple = Value::tuple(vec![Value::Int(5)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(15));
+}
+
+#[test]
+fn native_fold_add_empty() {
+    // fold 42 add () = 42 (empty collection returns base)
+    let src = "let f lst = fold 42 add lst";
+    let tuple = Value::tuple(vec![]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(42));
+}
+
+#[test]
+fn native_fold_min_tuple() {
+    // fold 100 min (5, 3, 8, 1) = 1
+    let src = "let f lst = fold 100 min lst";
+    let tuple = Value::tuple(vec![
+        Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(1),
+    ]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(1));
+}
+
+#[test]
+fn native_fold_max_tuple() {
+    // fold 0 max (5, 3, 8, 1) = 8
+    let src = "let f lst = fold 0 max lst";
+    let tuple = Value::tuple(vec![
+        Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(1),
+    ]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(8));
+}
+
+#[test]
+fn native_fold_sub_tuple() {
+    // fold 20 sub (3, 5, 2) = 20 - 3 - 5 - 2 = 10
+    let src = "let f lst = fold 20 sub lst";
+    let tuple = Value::tuple(vec![Value::Int(3), Value::Int(5), Value::Int(2)]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(10));
+}
+
+#[test]
+fn native_fold_add_8_elements() {
+    // fold 0 add (1,2,3,4,5,6,7,8) = 36
+    let src = "let f lst = fold 0 add lst";
+    let tuple = Value::tuple(vec![
+        Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4),
+        Value::Int(5), Value::Int(6), Value::Int(7), Value::Int(8),
+    ]);
+    assert_both_equal(src, "f", &[tuple], Value::Int(36));
+}
+
+#[test]
+fn native_fold_add_int_range() {
+    // fold 0 add 5 = 0+0+1+2+3+4 = 10 (Int(5) is treated as range [0..5))
+    let src = "let f n = fold 0 add n";
+    assert_both_equal(src, "f", &[Value::Int(5)], Value::Int(10));
+}
+
+// ---------------------------------------------------------------------------
+// New primitive tests (value_get_tag, value_get_payload, tuple_len)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prim_value_get_tag_tagged() {
+    let src = "let f x = value_get_tag x";
+    let result = eval_direct(src, "f", &[Value::Tagged(3, Box::new(Value::Int(42)))]);
+    assert_eq!(result, Value::Int(3));
+}
+
+#[test]
+fn prim_value_get_tag_int() {
+    let src = "let f x = value_get_tag x";
+    let result = eval_direct(src, "f", &[Value::Int(7)]);
+    assert_eq!(result, Value::Int(7));
+}
+
+#[test]
+fn prim_value_get_payload_tagged() {
+    let src = "let f x = value_get_payload x";
+    let result = eval_direct(src, "f", &[Value::Tagged(1, Box::new(Value::Int(42)))]);
+    assert_eq!(result, Value::Int(42));
+}
+
+#[test]
+fn prim_tuple_len_basic() {
+    let src = "let f x = tuple_len x";
+    let tuple = Value::tuple(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    let result = eval_direct(src, "f", &[tuple]);
+    assert_eq!(result, Value::Int(3));
+}
+
+#[test]
+fn prim_tuple_len_empty() {
+    let src = "let f x = tuple_len x";
+    let tuple = Value::tuple(vec![]);
+    let result = eval_direct(src, "f", &[tuple]);
+    assert_eq!(result, Value::Int(0));
+}
+
+#[test]
+fn prim_tuple_len_int() {
+    // Int(n) for n >= 0 is treated as a range of size n
+    let src = "let f x = tuple_len x";
+    let result = eval_direct(src, "f", &[Value::Int(5)]);
+    assert_eq!(result, Value::Int(5));
+}

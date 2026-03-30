@@ -3689,7 +3689,7 @@ impl<'a> BootstrapCtx<'a> {
             0xD3 => self.prim_buf_new()?,
             0xD4 => self.prim_buf_push(args)?,
             0xD5 => self.prim_buf_finish(args)?,
-            0xD6 => Value::Unit, // reserved
+            0xD6 => self.prim_tuple_len(args)?,
             0xD8 => self.prim_math_sqrt(args)?,
             0xD9 => self.prim_math_log(args)?,
             0xDA => self.prim_math_exp(args)?,
@@ -3724,6 +3724,8 @@ impl<'a> BootstrapCtx<'a> {
             0x99 => return Ok(RtValue::Val(self.prim_graph_eval_env(args)?)),
             0x9A => self.prim_graph_get_tag(args)?,
             0x9B => self.prim_graph_get_field_index(args)?,
+            0x9C => self.prim_value_get_tag(args)?,
+            0x9D => self.prim_value_get_payload(args)?,
             0x90 => self.prim_par_eval(args)?,
             0x93 => self.prim_spawn(args)?,
             0x94 => match args.first() {
@@ -4577,6 +4579,48 @@ impl<'a> BootstrapCtx<'a> {
         match &node.payload {
             NodePayload::Project { field_index } => Ok(Value::Int(*field_index as i64)),
             _ => Ok(Value::Int(-1)),
+        }
+    }
+
+    /// 0x9C value_get_tag: extract tag index from a Tagged value, or -1 if not Tagged.
+    fn prim_value_get_tag(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 1 {
+            return Err(BootstrapError::TypeError(
+                "value_get_tag: expected 1 arg".into(),
+            ));
+        }
+        match &args[0] {
+            Value::Tagged(tag, _) => Ok(Value::Int(*tag as i64)),
+            Value::Int(n) => Ok(Value::Int(*n)), // Int used as tag directly
+            _ => Ok(Value::Int(-1)),
+        }
+    }
+
+    /// 0x9D value_get_payload: extract payload from a Tagged value, or Unit if not Tagged.
+    fn prim_value_get_payload(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 1 {
+            return Err(BootstrapError::TypeError(
+                "value_get_payload: expected 1 arg".into(),
+            ));
+        }
+        match &args[0] {
+            Value::Tagged(_, inner) => Ok(*inner.clone()),
+            _ => Ok(Value::Unit),
+        }
+    }
+
+    /// 0xD6 tuple_len: return the number of elements in a tuple.
+    fn prim_tuple_len(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 1 {
+            return Err(BootstrapError::TypeError(
+                "tuple_len: expected 1 arg".into(),
+            ));
+        }
+        match &args[0] {
+            Value::Tuple(elems) => Ok(Value::Int(elems.len() as i64)),
+            Value::Range(s, e) => Ok(Value::Int(if *e > *s { *e - *s } else { 0 })),
+            Value::Int(n) if *n >= 0 => Ok(Value::Int(*n)), // Int(n) treated as [0..n)
+            _ => Ok(Value::Int(0)),
         }
     }
 
@@ -6265,6 +6309,14 @@ impl<'a> BootstrapCtx<'a> {
                 let len = if *e > *s { (*e - *s) as usize } else { 0 };
                 if (*idx as usize) < len {
                     Ok(Value::Int(*s + *idx))
+                } else {
+                    Ok(Value::Int(0))
+                }
+            }
+            // Int(n) as range [0..n) + int index
+            (Value::Int(n), Value::Int(idx)) if *n > 0 => {
+                if *idx >= 0 && *idx < *n {
+                    Ok(Value::Int(*idx))
                 } else {
                     Ok(Value::Int(0))
                 }

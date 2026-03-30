@@ -63,6 +63,8 @@ pub fn resolve_primitive(name: &str) -> Option<(u8, u8)> {
         "graph_eval_env" => Some((0x99, 3)),
         "graph_get_tag" => Some((0x9A, 2)),
         "graph_get_field_index" => Some((0x9B, 2)),
+        "value_get_tag" => Some((0x9C, 1)),
+        "value_get_payload" => Some((0x9D, 1)),
         "state_empty" => Some((0x55, 0)),
         "state_get" => Some((0x50, 2)),
         "state_set" => Some((0x51, 3)),
@@ -83,8 +85,9 @@ pub fn resolve_primitive(name: &str) -> Option<(u8, u8)> {
         "map_insert" => Some((0xC8, 3)), "map_get" => Some((0xC9, 2)),
         "map_remove" => Some((0xCA, 2)), "map_keys" => Some((0xCB, 1)),
         "map_values" => Some((0xCC, 1)), "map_size" => Some((0xCD, 1)),
-        // Data access (0xD2)
+        // Data access (0xD2, 0xD6)
         "tuple_get" => Some((0xD2, 2)),
+        "tuple_len" => Some((0xD6, 1)),
         // String builder (0xD3-0xD5) — O(1) amortized append, avoids O(n²) str_concat in loops
         "buf_new" => Some((0xD3, 0)),
         "buf_push" => Some((0xD4, 2)),
@@ -147,6 +150,7 @@ pub fn primitive_names() -> &'static [&'static str] {
         "graph_edge_count", "graph_get_opcode",
         "graph_edge_target", "graph_get_binder", "graph_eval_env",
         "graph_get_tag", "graph_get_field_index",
+        "value_get_tag", "value_get_payload",
         "state_empty", "state_get", "state_set",
         "evolve_subprogram",
         "str_len", "str_concat", "str_slice", "str_contains", "str_split", "str_join",
@@ -155,7 +159,7 @@ pub fn primitive_names() -> &'static [&'static str] {
         "list_append", "list_nth", "list_take", "list_drop", "list_sort", "sort_by",
         "list_dedup", "list_range", "list_concat",
         "map_insert", "map_get", "map_remove", "map_keys", "map_values", "map_size",
-        "tuple_get",
+        "tuple_get", "tuple_len",
         "math_sqrt", "math_log", "math_exp", "math_sin", "math_cos",
         "math_floor", "math_ceil", "math_round", "math_pi", "math_e",
         "random_int", "random_float",
