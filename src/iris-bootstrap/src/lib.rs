@@ -2740,7 +2740,7 @@ mod native_flat {
         program: &FlatProgram,
         input_count: usize,
     ) -> Option<NativeCode> {
-        if !program.all_int { return None; }
+        // Accept both all_int and mixed programs — non-int ops dispatch to JIT runtime
         let n = program.ops.len();
         if n == 0 || n > 500 { return None; }
 
@@ -3064,7 +3064,47 @@ mod native_flat {
                             let r = ra.alloc(i as u16, &prot[..np], i, &mut code);
                             gp_mov_rr(&mut code, r, GP_SCRATCH1);
                         }
-                        _ => return None,
+                        // All other opcodes: call rt_prim_dispatch(opcode, pack(a), pack(b), 0)
+                        _ => {
+                            let a0_loc = ra.loc(a0);
+                            let a1_loc = ra.loc(a1);
+                            // Spill all live registers to stack before the call
+                            // (call clobbers rdi, rsi, rdx, rcx, r8, r9, r10, r11, rax)
+                            for j in 0..n.min(program.ops.len()) {
+                                if let Some(reg) = ra.slot_reg[j] {
+                                    gp_store(&mut code, reg, gp_slot_off(j));
+                                }
+                            }
+                            // Load arg0 and arg1 to scratch, pack as tagged ints
+                            gp_load_loc(&mut code, GP_SCRATCH1, a0_loc);
+                            gp_store(&mut code, GP_SCRATCH1, gp_slot_off(n));
+                            gp_load_loc(&mut code, GP_SCRATCH2, a1_loc);
+                            gp_store(&mut code, GP_SCRATCH2, gp_slot_off(n + 1));
+                            // Setup call args: rdi=opcode, rsi=pack(a0), rdx=pack(a1), rcx=0
+                            gp_mov_imm64(&mut code, 7, op.opcode as i64); // rdi = opcode
+                            gp_load(&mut code, 6, gp_slot_off(n));         // rsi = a0
+                            code.extend_from_slice(&[0x48, 0xd1, 0xe6]);   // shl rsi, 1 (tag)
+                            gp_load(&mut code, 2, gp_slot_off(n + 1));     // rdx = a1
+                            code.extend_from_slice(&[0x48, 0xd1, 0xe2]);   // shl rdx, 1 (tag)
+                            code.extend_from_slice(&[0x48, 0x31, 0xc9]);   // xor rcx, rcx
+                            // call rt_prim_dispatch
+                            let addr = crate::jit::rt_prim_dispatch as usize as i64;
+                            gp_mov_imm64(&mut code, 0, addr); // mov rax, addr
+                            code.extend_from_slice(&[0xff, 0xd0]); // call rax
+                            // Unpack result: sar rax, 1
+                            code.extend_from_slice(&[0x48, 0xd1, 0xf8]); // sar rax, 1
+                            // Store result to slot
+                            gp_store(&mut code, 0, gp_slot_off(i));
+                            // Reload all live registers from stack
+                            for j in 0..n.min(program.ops.len()) {
+                                if let Some(reg) = ra.slot_reg[j] {
+                                    gp_load(&mut code, reg, gp_slot_off(j));
+                                }
+                            }
+                            // Allocate result register
+                            let r = ra.alloc(i as u16, &[], i, &mut code);
+                            gp_load(&mut code, r, gp_slot_off(i));
+                        }
                     }
                 }
                 1 => {} // Lit: pre-filled in stack

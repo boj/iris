@@ -115,3 +115,12 @@
 
 **Assistant:** Yes. `iris-stage0-next` — a JIT-based stage0 that compiles IRIS to native x86-64 at runtime. No tree-walking in the hot path. It replaces the current `iris-stage0-native` (which tree-walks everything).
 
+
+---
+
+**2026-03-30 15:26**
+
+**Human:** Investigate it
+
+**Assistant:** Here's where we are:
+
