@@ -24,7 +24,7 @@ use iris_types::types::TypeId;
 // IPC rule IDs (must match lean/IrisKernelServer.lean dispatchRule)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "lean-ffi")]
+
 mod rule_ids {
     pub const RULE_COST_LEQ: u8 = 0;
     pub const RULE_ASSUME: u8 = 1;
@@ -56,14 +56,14 @@ mod rule_ids {
     pub const RULE_SHUTDOWN: u8 = 255;
 }
 
-#[cfg(feature = "lean-ffi")]
+
 use rule_ids::*;
 
 // ---------------------------------------------------------------------------
 // Lean kernel server process management (lean-ffi only)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "lean-ffi")]
+
 mod ipc {
     use std::io::{Read, Write, BufReader, BufWriter};
     use std::process::{Child, Command, Stdio};
@@ -488,7 +488,7 @@ pub fn decode_lean_result(data: &[u8]) -> Option<Judgment> {
 
 /// Call a Lean kernel rule via IPC. Serializes input, sends to the server,
 /// deserializes the result Judgment.
-#[cfg(feature = "lean-ffi")]
+
 fn call_lean_rule(rule_id: u8, buf: &[u8]) -> Option<Judgment> {
     let result = ipc::call_rule(rule_id, buf)?;
     decode_lean_result(&result)
@@ -503,7 +503,7 @@ fn call_lean_rule(rule_id: u8, buf: &[u8]) -> Option<Judgment> {
 /// When the Lean kernel server is available (`lean-ffi` feature), this calls
 /// the formally proven `checkCostLeq` function via IPC. Otherwise falls back
 /// to the Rust implementation.
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_check_cost_leq(a: &CostBound, b: &CostBound) -> bool {
     let mut buf = Vec::with_capacity(64);
     encode_cost_bound(a, &mut buf);
@@ -518,18 +518,12 @@ pub fn lean_check_cost_leq(a: &CostBound, b: &CostBound) -> bool {
     }
 }
 
-#[cfg(not(feature = "lean-ffi"))]
-pub fn lean_check_cost_leq(a: &CostBound, b: &CostBound) -> bool {
-    // Fallback to Rust implementation
-    cost_checker::cost_leq(a, b)
-}
-
 // ---------------------------------------------------------------------------
-// Public Lean kernel rule functions (lean-ffi feature)
+// Public Lean kernel rule functions
 // ---------------------------------------------------------------------------
 
 /// Lean kernel rule 1: assume
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_assume(ctx: &Context, name: BinderId, node_id: NodeId) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(64);
     encode_context(ctx, &mut buf);
@@ -539,7 +533,7 @@ pub fn lean_assume(ctx: &Context, name: BinderId, node_id: NodeId) -> Option<Jud
 }
 
 /// Lean kernel rule 2: intro
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_intro(
     ctx: &Context, lam_node: NodeId, binder_name: BinderId, binder_type: TypeId,
     body_judgment: &Judgment, arrow_id: TypeId,
@@ -557,7 +551,7 @@ pub fn lean_intro(
 }
 
 /// Lean kernel rule 3: elim
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_elim(
     fn_judgment: &Judgment, arg_judgment: &Judgment, app_node: NodeId,
     type_env_bytes: &[u8],
@@ -571,7 +565,7 @@ pub fn lean_elim(
 }
 
 /// Lean kernel rule 4: refl
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_refl(ctx: &Context, node_id: NodeId, type_id: TypeId) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(64);
     encode_context(ctx, &mut buf);
@@ -581,7 +575,7 @@ pub fn lean_refl(ctx: &Context, node_id: NodeId, type_id: TypeId) -> Option<Judg
 }
 
 /// Lean kernel rule 5: symm
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_symm(thm: &Judgment, other_node: NodeId, eq_witness: &Judgment) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(128);
     encode_judgment(thm, &mut buf);
@@ -591,7 +585,7 @@ pub fn lean_symm(thm: &Judgment, other_node: NodeId, eq_witness: &Judgment) -> O
 }
 
 /// Lean kernel rule 6: trans
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_trans(thm1: &Judgment, thm2: &Judgment) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(128);
     encode_judgment(thm1, &mut buf);
@@ -600,7 +594,7 @@ pub fn lean_trans(thm1: &Judgment, thm2: &Judgment) -> Option<Judgment> {
 }
 
 /// Lean kernel rule 7: congr
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_congr(fn_j: &Judgment, arg_j: &Judgment, app_node: NodeId) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(128);
     encode_judgment(fn_j, &mut buf);
@@ -610,7 +604,7 @@ pub fn lean_congr(fn_j: &Judgment, arg_j: &Judgment, app_node: NodeId) -> Option
 }
 
 /// Lean kernel rule 9: cost_subsume
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_cost_subsume(j: &Judgment, new_cost: &CostBound) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(128);
     encode_judgment(j, &mut buf);
@@ -619,7 +613,7 @@ pub fn lean_cost_subsume(j: &Judgment, new_cost: &CostBound) -> Option<Judgment>
 }
 
 /// Lean kernel rule 10: cost_leq_rule
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_cost_leq_rule(k1: &CostBound, k2: &CostBound) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(64);
     encode_cost_bound(k1, &mut buf);
@@ -628,7 +622,7 @@ pub fn lean_cost_leq_rule(k1: &CostBound, k2: &CostBound) -> Option<Judgment> {
 }
 
 /// Lean kernel rule 13: nat_ind
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_nat_ind(base_j: &Judgment, step_j: &Judgment, result_node: NodeId) -> Option<Judgment> {
     let mut buf = Vec::with_capacity(128);
     encode_judgment(base_j, &mut buf);
@@ -638,7 +632,7 @@ pub fn lean_nat_ind(base_j: &Judgment, step_j: &Judgment, result_node: NodeId) -
 }
 
 /// Lean kernel rule 15: let_bind
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_let_bind(
     ctx: &Context, let_node: NodeId, binder_name: BinderId,
     bound_j: &Judgment, body_j: &Judgment,
@@ -653,7 +647,7 @@ pub fn lean_let_bind(
 }
 
 /// Lean kernel rule 16: match_elim
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_match_elim(
     scrutinee_j: &Judgment, arm_js: &[Judgment], match_node: NodeId,
 ) -> Option<Judgment> {
@@ -668,7 +662,7 @@ pub fn lean_match_elim(
 }
 
 /// Lean kernel rule 17: fold_rule
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_fold_rule(
     base_j: &Judgment, step_j: &Judgment, input_j: &Judgment, fold_node: NodeId,
 ) -> Option<Judgment> {
@@ -681,7 +675,7 @@ pub fn lean_fold_rule(
 }
 
 /// Lean kernel rule 20: guard_rule
-#[cfg(feature = "lean-ffi")]
+
 pub fn lean_guard_rule(
     pred_j: &Judgment, then_j: &Judgment, else_j: &Judgment, guard_node: NodeId,
 ) -> Option<Judgment> {
@@ -772,13 +766,4 @@ mod tests {
         ));
     }
 
-    /// Test Rust-specific cost_leq behavior for Unknown.
-    /// Only runs without lean-ffi since the Lean kernel has different
-    /// semantics for Unknown (it accepts Zero <= Unknown).
-    #[cfg(not(feature = "lean-ffi"))]
-    #[test]
-    fn test_rust_unknown_not_upper_bound() {
-        // Unknown is no longer a valid upper bound in Rust (soundness fix).
-        assert!(!lean_check_cost_leq(&CostBound::Zero, &CostBound::Unknown));
-    }
 }
