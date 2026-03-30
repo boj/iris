@@ -706,6 +706,31 @@ iris_graph_t *iris_graph_load_json(const char *path) {
 
     free(data);
 
+    /* Synthesize edges for Guard nodes (payload stores children, not edges) */
+    for (uint32_t i = 0; i < g->node_count; i++) {
+        if (g->nodes[i].kind == NK_GUARD) {
+            iris_edge_t e;
+            memset(&e, 0, sizeof(e));
+            e.source = g->nodes[i].id;
+            e.label  = EL_ARGUMENT;
+
+            /* port 0 = predicate */
+            e.port   = 0;
+            e.target = g->nodes[i].payload.guard.predicate_node;
+            iris_graph_raw_add_edge(g, e);
+
+            /* port 1 = body */
+            e.port   = 1;
+            e.target = g->nodes[i].payload.guard.body_node;
+            iris_graph_raw_add_edge(g, e);
+
+            /* port 2 = fallback */
+            e.port   = 2;
+            e.target = g->nodes[i].payload.guard.fallback_node;
+            iris_graph_raw_add_edge(g, e);
+        }
+    }
+
     fprintf(stderr, "loaded graph: %u nodes, %u edges, root=%lu\n",
             g->node_count, g->edge_count, (unsigned long)g->root);
 
