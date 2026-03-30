@@ -3719,6 +3719,11 @@ impl<'a> BootstrapCtx<'a> {
             0x65 => self.prim_graph_get_depth(args)?,
             0x66 => self.prim_graph_get_lit_type_tag(args)?,
             0x96 => self.prim_graph_edge_count(args)?,
+            0x97 => self.prim_graph_edge_target(args)?,
+            0x98 => self.prim_graph_get_binder(args)?,
+            0x99 => return Ok(RtValue::Val(self.prim_graph_eval_env(args)?)),
+            0x9A => self.prim_graph_get_tag(args)?,
+            0x9B => self.prim_graph_get_field_index(args)?,
             0x90 => self.prim_par_eval(args)?,
             0x93 => self.prim_spawn(args)?,
             0x94 => match args.first() {
@@ -4406,6 +4411,173 @@ impl<'a> BootstrapCtx<'a> {
             _ => return Err(BootstrapError::TypeError("graph_edge_count: expected Program".into())),
         };
         Ok(Value::Int(graph.edges.len() as i64))
+    }
+
+    /// 0x97 graph_edge_target: Takes (program, source_node_id, port, label),
+    /// returns the target node ID for that edge, or -1 if not found.
+    /// EdgeLabel mapping: 0=Argument, 1=Scrutinee, 2=Binding, 3=Continuation.
+    fn prim_graph_edge_target(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 4 {
+            return Err(BootstrapError::TypeError(
+                "graph_edge_target: expected 4 args (program, source, port, label)".into(),
+            ));
+        }
+        let graph = Self::borrow_program_ref(&args[0], "graph_edge_target")?;
+        let source = match &args[1] {
+            Value::Int(n) => NodeId(*n as u64),
+            _ => return Err(BootstrapError::TypeError("graph_edge_target: expected Int source".into())),
+        };
+        let port = match &args[2] {
+            Value::Int(n) => *n as u8,
+            _ => return Err(BootstrapError::TypeError("graph_edge_target: expected Int port".into())),
+        };
+        let label_val = match &args[3] {
+            Value::Int(n) => *n as u8,
+            _ => return Err(BootstrapError::TypeError("graph_edge_target: expected Int label".into())),
+        };
+        let label = match label_val {
+            0 => EdgeLabel::Argument,
+            1 => EdgeLabel::Scrutinee,
+            2 => EdgeLabel::Binding,
+            3 => EdgeLabel::Continuation,
+            _ => return Ok(Value::Int(-1)),
+        };
+        // For Guard nodes, children are in payload, not edges
+        if let Some(node) = graph.nodes.get(&source) {
+            if let NodePayload::Guard { predicate_node, body_node, fallback_node } = &node.payload {
+                if label == EdgeLabel::Argument {
+                    return Ok(match port {
+                        0 => Value::Int(predicate_node.0 as i64),
+                        1 => Value::Int(body_node.0 as i64),
+                        2 => Value::Int(fallback_node.0 as i64),
+                        _ => Value::Int(-1),
+                    });
+                }
+            }
+        }
+        for edge in &graph.edges {
+            if edge.source == source && edge.port == port && edge.label == label {
+                return Ok(Value::Int(edge.target.0 as i64));
+            }
+        }
+        Ok(Value::Int(-1))
+    }
+
+    /// 0x98 graph_get_binder: Takes (program, node_id), returns BinderId for
+    /// Lambda/LetRec nodes, -1 otherwise.
+    fn prim_graph_get_binder(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "graph_get_binder: expected 2 args (program, node_id)".into(),
+            ));
+        }
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_binder")?;
+        let node_id = match &args[1] {
+            Value::Int(n) => NodeId(*n as u64),
+            _ => return Err(BootstrapError::TypeError("graph_get_binder: expected Int".into())),
+        };
+        let node = match graph.nodes.get(&node_id) {
+            Some(n) => n,
+            None => return Ok(Value::Int(-1)),
+        };
+        match &node.payload {
+            NodePayload::Lambda { binder, .. } => Ok(Value::Int(binder.0 as i64)),
+            NodePayload::LetRec { binder, .. } => Ok(Value::Int(binder.0 as i64)),
+            _ => Ok(Value::Int(-1)),
+        }
+    }
+
+    /// 0x99 graph_eval_env: Takes (program, binder_id, value [, inputs]),
+    /// evaluates the program with binder bound to value. This is the key
+    /// primitive for Lambda/Apply — lets the IRIS interpreter bind a parameter
+    /// and evaluate the body.
+    fn prim_graph_eval_env(&mut self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() < 3 {
+            return Err(BootstrapError::TypeError(
+                "graph_eval_env: expected at least 3 args (program, binder_id, value)".into(),
+            ));
+        }
+        let graph_rc = match &args[0] {
+            Value::Program(g) => Rc::clone(g),
+            _ => return Err(BootstrapError::TypeError("graph_eval_env: expected Program".into())),
+        };
+        let binder_id = match &args[1] {
+            Value::Int(n) => BinderId(*n as u32),
+            _ => return Err(BootstrapError::TypeError("graph_eval_env: expected Int binder_id".into())),
+        };
+        let bound_value = args[2].clone();
+
+        let eval_inputs: Vec<Value> = if args.len() > 3 {
+            match &args[3] {
+                Value::Tuple(elems) => elems.as_ref().clone(),
+                other => vec![other.clone()],
+            }
+        } else {
+            vec![]
+        };
+
+        if self.self_eval_depth >= MAX_SELF_EVAL_DEPTH {
+            return Err(BootstrapError::RecursionLimit {
+                depth: self.self_eval_depth,
+                limit: MAX_SELF_EVAL_DEPTH,
+            });
+        }
+
+        let remaining_steps = self.max_steps.saturating_sub(self.step_count);
+        let graph = graph_rc.as_ref();
+        let registry = BTreeMap::new();
+        let mut sub_ctx = BootstrapCtx::new(graph, &eval_inputs, remaining_steps, &registry);
+        sub_ctx.self_eval_depth = self.self_eval_depth + 1;
+        sub_ctx.env.insert(binder_id, bound_value);
+
+        let result = sub_ctx.eval_node(graph.root, 0)?;
+        let val = result.into_value()?;
+        self.step_count += sub_ctx.step_count;
+        Ok(val)
+    }
+
+    /// 0x9A graph_get_tag: Returns tag_index for Inject nodes, -1 otherwise.
+    fn prim_graph_get_tag(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "graph_get_tag: expected 2 args (program, node_id)".into(),
+            ));
+        }
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_tag")?;
+        let node_id = match &args[1] {
+            Value::Int(n) => NodeId(*n as u64),
+            _ => return Err(BootstrapError::TypeError("graph_get_tag: expected Int".into())),
+        };
+        let node = match graph.nodes.get(&node_id) {
+            Some(n) => n,
+            None => return Ok(Value::Int(-1)),
+        };
+        match &node.payload {
+            NodePayload::Inject { tag_index } => Ok(Value::Int(*tag_index as i64)),
+            _ => Ok(Value::Int(-1)),
+        }
+    }
+
+    /// 0x9B graph_get_field_index: Returns field_index for Project nodes, -1 otherwise.
+    fn prim_graph_get_field_index(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "graph_get_field_index: expected 2 args (program, node_id)".into(),
+            ));
+        }
+        let graph = Self::borrow_program_ref(&args[0], "graph_get_field_index")?;
+        let node_id = match &args[1] {
+            Value::Int(n) => NodeId(*n as u64),
+            _ => return Err(BootstrapError::TypeError("graph_get_field_index: expected Int".into())),
+        };
+        let node = match graph.nodes.get(&node_id) {
+            Some(n) => n,
+            None => return Ok(Value::Int(-1)),
+        };
+        match &node.payload {
+            NodePayload::Project { field_index } => Ok(Value::Int(*field_index as i64)),
+            _ => Ok(Value::Int(-1)),
+        }
     }
 
     fn prim_graph_disconnect(&self, args: &[Value]) -> Result<Value, BootstrapError> {
