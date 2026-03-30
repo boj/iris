@@ -3726,6 +3726,8 @@ impl<'a> BootstrapCtx<'a> {
             0x9B => self.prim_graph_get_field_index(args)?,
             0x9C => self.prim_value_get_tag(args)?,
             0x9D => self.prim_value_get_payload(args)?,
+            0x9E => self.prim_value_make_tagged(args)?,
+            0x9F => self.prim_graph_get_effect_tag(args)?,
             0x90 => self.prim_par_eval(args)?,
             0x93 => self.prim_spawn(args)?,
             0x94 => match args.first() {
@@ -4607,6 +4609,49 @@ impl<'a> BootstrapCtx<'a> {
             Value::Tagged(_, inner) => Ok(*inner.clone()),
             _ => Ok(Value::Unit),
         }
+    }
+
+    /// 0x9E value_make_tagged: create a Tagged value from (tag_index, payload).
+    fn prim_value_make_tagged(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "value_make_tagged: expected 2 args (tag_index, payload)".into(),
+            ));
+        }
+        let tag = match &args[0] {
+            Value::Int(n) => *n as u16,
+            _ => return Err(BootstrapError::TypeError(
+                "value_make_tagged: first arg must be Int (tag index)".into(),
+            )),
+        };
+        Ok(Value::Tagged(tag, Box::new(args[1].clone())))
+    }
+
+    /// 0x9F graph_get_effect_tag: return effect_tag for Effect nodes, -1 otherwise.
+    fn prim_graph_get_effect_tag(&self, args: &[Value]) -> Result<Value, BootstrapError> {
+        if args.len() != 2 {
+            return Err(BootstrapError::TypeError(
+                "graph_get_effect_tag: expected 2 args (graph, node_id)".into(),
+            ));
+        }
+        let graph = match &args[0] {
+            Value::Program(g) => g,
+            _ => return Err(BootstrapError::TypeError(
+                "graph_get_effect_tag: first arg must be Program".into(),
+            )),
+        };
+        let node_id = NodeId(match &args[1] {
+            Value::Int(n) => *n as u64,
+            _ => return Err(BootstrapError::TypeError(
+                "graph_get_effect_tag: second arg must be Int (node_id)".into(),
+            )),
+        });
+        if let Some(node) = graph.nodes.get(&node_id) {
+            if let NodePayload::Effect { effect_tag } = &node.payload {
+                return Ok(Value::Int(*effect_tag as i64));
+            }
+        }
+        Ok(Value::Int(-1))
     }
 
     /// 0xD6 tuple_len: return the number of elements in a tuple.
