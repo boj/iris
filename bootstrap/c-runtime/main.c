@@ -86,8 +86,51 @@ int main(int argc, char **argv) {
     }
 
     const char *cmd = argv[1];
-    if (strcmp(cmd, "direct") != 0) {
-        fprintf(stderr, "error: unknown command '%s' (only 'direct' is supported)\n", cmd);
+
+    /* compile: .iris source → JSON graph (stdout) */
+    if (strcmp(cmd, "compile") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s compile <source.iris>\n", argv[0]);
+            return 1;
+        }
+        /* Read source file */
+        FILE *fp = fopen(argv[2], "r");
+        if (!fp) { fprintf(stderr, "error: cannot open '%s'\n", argv[2]); return 1; }
+        fseek(fp, 0, SEEK_END);
+        long fsize = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        char *source = malloc((size_t)fsize + 1);
+        fread(source, 1, (size_t)fsize, fp);
+        source[fsize] = '\0';
+        fclose(fp);
+        iris_value_t *src_val = iris_string(source, (uint32_t)fsize);
+        free(source);
+
+        /* Load and run tokenizer */
+        iris_graph_t *tok = iris_graph_load_json("bootstrap/tokenizer.json");
+        if (!tok) { fprintf(stderr, "error: cannot load tokenizer.json\n"); return 1; }
+        iris_value_t *tokens = iris_eval_graph(tok, src_val);
+
+        /* Load and run parser */
+        iris_graph_t *par = iris_graph_load_json("bootstrap/parser.json");
+        if (!par) { fprintf(stderr, "error: cannot load parser.json\n"); return 1; }
+        iris_value_t *ast = iris_eval_graph(par, tokens);
+
+        /* Load and run lowerer */
+        iris_graph_t *low = iris_graph_load_json("bootstrap/lowerer.json");
+        if (!low) { fprintf(stderr, "error: cannot load lowerer.json\n"); return 1; }
+        iris_value_t *graph_val = iris_eval_graph(low, ast);
+
+        /* Print the resulting graph as JSON */
+        /* For now, just print the value representation */
+        print_value(graph_val, 0);
+        printf("\n");
+        return 0;
+    }
+
+    if (strcmp(cmd, "direct") != 0 && strcmp(cmd, "info") != 0) {
+        fprintf(stderr, "error: unknown command '%s'\n", cmd);
+        fprintf(stderr, "Commands: direct, compile\n");
         return 1;
     }
 

@@ -628,3 +628,12 @@
 
 **Assistant:** **72 KB.** Down from 2.1 MB (Rust). Let me commit and push this milestone.
 
+
+---
+
+**2026-03-29 19:53**
+
+**Human:** Prove it works, ditch the Rust, then write the next bootstrapper in IRIS. We'll then continue to do IRIS in IRIS from that point forward.
+
+**Assistant:** Actually, let me think about what stage1 really is. The C binary is the seed evaluator — it loads a JSON graph and evaluates it. Stage1 is the IRIS program that becomes the "operating system" — it handles CLI arguments, file loading, compilation, and evaluation. All logic in IRIS, running on the C seed.
+
