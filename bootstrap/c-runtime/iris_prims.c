@@ -686,6 +686,7 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
         case 0xA1: /* perform_effect */
             return (nargs >= 2) ? iris_perform_effect(args[0], args[1]) : iris_unit();
         case 0xEE: /* graph_set_root */
+            return (nargs >= 2) ? iris_graph_set_root(args[0], args[1]) : iris_unit();
 
         /* List / tuple operations */
         case 0x22 + 0x10: /* 0x32 = zip - simplified */
@@ -746,8 +747,8 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
             return (nargs >= 1) ? iris_list_len(args[0]) : iris_int(0);
 
         /* Graph construction & mutation */
+        case 0xED: { /* graph_new */
             iris_graph_t *g = iris_graph_raw_alloc();
-
             return iris_program(g);
         }
 

@@ -29,7 +29,7 @@
  * ----------------------------------------------------------------------- */
 
 #define MAX_EVAL_DEPTH 256
-#define MAX_EVAL_STEPS 500000
+#define MAX_EVAL_STEPS 5000000
 
 /* -----------------------------------------------------------------------
  * Evaluation context (threaded through recursive calls)
@@ -147,10 +147,19 @@ static iris_value_t *eval_node(eval_ctx_t *ctx, uint64_t node_id) {
     ctx->steps++;
 
     /* Memoize: return cached result for shared DAG nodes.
-     * Skip Guard nodes (short-circuit) and Prim nodes (may have side effects
-     * like graph_add_node_rt that must execute each time). */
+     * Skip Guard nodes (short-circuit) and impure Prim nodes (graph mutations). */
     iris_node_t *peek = iris_graph_raw_find_node(ctx->graph, node_id);
-    int can_memo = peek && peek->kind != NK_GUARD && peek->kind != NK_PRIM;
+    int can_memo = peek && peek->kind != NK_GUARD;
+    if (can_memo && peek->kind == NK_PRIM) {
+        /* Only skip memo for impure graph mutation prims */
+        uint8_t op = peek->payload.prim_opcode;
+        if (op == 0x84 || op == 0x85 || op == 0x86 || op == 0x87 ||
+            op == 0x88 || op == 0x8B || op == 0x8C || op == 0x8D ||
+            op == 0x61 || op == 0xEE || op == 0xEF || op == 0xF1 ||
+            op == 0xA1 || op == 0xF4) {
+            can_memo = 0;
+        }
+    }
     if (can_memo) {
         iris_value_t *cached = memo_get(ctx, node_id);
         if (cached) return cached;
