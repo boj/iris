@@ -222,13 +222,21 @@ fn cmd_build(_runtime: &IrisRuntime, args: &[String]) {
     }
 
     // Step 5: AOT compile the target
+    // Try IRIS code generator first; fall back to Rust native compiler for complex programs
     eprintln!("Compiling {} to x86-64...", source_path);
-    let code = iris_bootstrap::evaluate_with_registry(
-        &aot_fn,
-        &[Value::Program(Rc::new(target))],
-        50_000_000,
-        &aot_reg,
-    ).unwrap_or_else(|e| { eprintln!("aot_compile error: {}", e); process::exit(1); });
+    let code = if iris_bootstrap::native_compile::is_natively_compilable(&target) {
+        iris_bootstrap::evaluate_with_registry(
+            &aot_fn,
+            &[Value::Program(Rc::new(target.clone()))],
+            50_000_000,
+            &aot_reg,
+        ).unwrap_or_else(|e| { eprintln!("aot_compile error: {}", e); process::exit(1); })
+    } else {
+        eprintln!("  (using Rust native compiler for complex opcodes)");
+        let bytes = iris_bootstrap::native_compile::compile_graph(&target)
+            .unwrap_or_else(|e| { eprintln!("native_compile error: {}", e); process::exit(1); });
+        Value::Bytes(bytes)
+    };
 
     if let Value::Bytes(ref b) = code {
         eprintln!("Generated {} bytes of x86-64", b.len());

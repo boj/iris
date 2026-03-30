@@ -31,6 +31,7 @@ pub mod syntax;
 
 pub mod fragment_cache;
 pub mod mini_eval;
+pub mod native_compile;
 
 use std::collections::BTreeMap;
 use std::fmt;
