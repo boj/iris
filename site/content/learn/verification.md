@@ -20,13 +20,20 @@ The verification system serves three purposes:
 
 ## The Proof Kernel {#kernel}
 
-The kernel is the trusted computing base. It's an LCF-style proof system: the only code that can construct `Theorem` values lives inside the kernel. No external code can forge a proof.
+The kernel is the trusted computing base, written in **Lean 4** and running as a separate IPC subprocess (`iris-kernel-server`). All 20 inference rules execute in Lean — the running code is the formal proof. Lean's type system guarantees that every judgment was derived by a valid sequence of rule applications.
+
+The Rust side wraps Lean's results in opaque `Theorem` values (with BLAKE3 proof hashes for audit trails) but never evaluates inference rules itself. The only code that can construct `Theorem` values lives in the kernel bridge. No external code can forge a proof.
+
+### Why Lean? {#why-lean}
+
+In a self-improving system, the kernel is the one component that must never be wrong — everything else (mutations, evolutions, deployments) is gated through it. Rust gives memory safety but not logical correctness. Lean 4 is both a proof assistant and a compiled language: the inference rules are executable functions with machine-checked correspondence proofs linking them to their formal specification. If it compiles, the proofs hold.
 
 ### Properties {#kernel-properties}
 
-- Small, auditable Rust with zero `unsafe` blocks
-- 20 inference rules, each producing a `Theorem` with a BLAKE3 proof hash
-- Every theorem records: context, node, type, cost bound, and a cryptographic hash of the derivation chain
+- 20 inference rules implemented in Lean 4 with correspondence proofs
+- Runs as a native subprocess via stdin/stdout IPC (~microsecond latency per rule)
+- Every theorem records: context, node, type, cost bound, and a cryptographic hash (BLAKE3) of the derivation chain
+- No `unsafe` Rust in the kernel path — communication is via `std::process` and `std::io`
 
 ### The 20 Rules {#rules}
 
@@ -58,7 +65,7 @@ The rules form a sound fragment of System F with refinements, cost annotations, 
 |------|------|----------------|
 | 13 | `nat_ind` | Natural number induction: P(0) and P(n)->P(n+1) implies P for all n |
 | 14 | `structural_ind` | Structural induction: one case per constructor proves the property for all values |
-| 17 | `fold_rule` | Catamorphism: cost is input + base + (step cost * input size) |
+| 17 | `fold_rule` | Catamorphism: cost is input + base + (step cost * input expression cost) |
 
 **Polymorphism (rules 18--19):**
 
@@ -107,9 +114,9 @@ When the solver can't decide a predicate, it falls back to property-based testin
 
 ## Example Programs {#examples}
 
-IRIS ships with annotated programs in `examples/`. The `requires`/`ensures` annotations are parsed but **discarded by the lowerer** -- they don't affect compilation or execution. They serve as documentation of intended invariants.
+IRIS ships with annotated programs in `examples/`. The `requires`/`ensures` annotations are lowered to LIA formulas and verified at compile time by the LIA solver. They do not affect runtime execution (no runtime contract checking), but the compiler reports violations as errors.
 
-What `iris check` actually verifies is the **graph structure**: node types agree across edges, match arms are consistent, guards have compatible branches, and fold costs are well-formed. It does not check the `requires`/`ensures` predicates.
+What `iris check` actually verifies is the **graph structure**: node types agree across edges, match arms are consistent, guards have compatible branches, cost annotations are consistent with the kernel's proven costs, and `requires`/`ensures` contracts are verified via property-based testing (LIA solver + random sampling).
 
 ### Absolute value {#example-abs}
 
@@ -120,7 +127,7 @@ let abs x : Int -> Int
   = if x >= 0 then x else 0 - x
 ```
 
-The checker verifies that both guard branches produce values of the same type and that the graph is well-formed. The `requires`/`ensures` clauses are documentation.
+The checker verifies that both guard branches produce values of the same type, that the graph is well-formed, and tests the `requires`/`ensures` contracts via the LIA solver.
 
 ### Safe division {#example-div}
 
@@ -130,7 +137,7 @@ let safe_div x y : Int -> Int -> Int
   = x / y
 ```
 
-The `requires y != 0` documents the precondition but is not enforced -- division by zero will still error at runtime.
+The `requires y != 0` is verified by the LIA solver at compile time. At runtime, division by zero will still error if unchecked code calls `safe_div` with `y = 0`.
 
 ### Bounded addition {#example-add}
 
@@ -216,35 +223,38 @@ let sum xs : List Int -> Int [cost: Linear(xs)] = fold 0 (+) xs
 The cost lattice forms a partial order:
 
 ```
-Zero < Constant(k) < Linear(n) < NLogN(n) < Polynomial(n, d)
+Zero < Const(k) < Linear(n) < NLogN(n) < Polynomial(n, d)
 ```
 
 Composite forms handle sequential (`Sum`), parallel (`Par`), repeated (`Mul`), and branching (`Sup` for max, `Inf` for min) costs.
 
-The kernel's `cost_subsume` rule can weaken cost bounds (e.g., accept a `Linear` implementation where `Polynomial` was declared), but today cost subsumption is not wired into the main proof construction pipeline. Cost annotations function as evolution fitness objectives -- lower cost is better -- and as documentation of intended complexity.
+The kernel's `cost_subsume` rule (rule 9) weakens cost bounds: if the proven cost is `Linear(n)`, the checker accepts a declared bound of `Polynomial(n, 2)` because `Linear(n) <= Polynomial(n, 2)` in the cost lattice. Overestimating is always safe; underestimating triggers a warning (Tier 0/1) or a hard error (Tier 2+).
 
-The kernel has cost rules but they are not wired into the checker. Cost annotations guide evolution, not verification.
+The checker verifies cost annotations at two levels: **per-node** (each node's annotated cost is compared against the cost derived by its kernel rule) and **graph-level** (the function's declared `[cost: ...]` is compared against the root theorem's proven cost). At Tier 0 and Tier 1, a mismatch produces a `CostWarning`. At Tier 2+, it becomes a `CheckError` that fails compilation.
+
+Note that the kernel's cost model tracks **expression evaluation cost**, not runtime data-dependent complexity. The `fold_rule` computes `Mul(k_step, k_input)` where `k_input` is the cost of *evaluating* the input expression, not the number of elements at runtime. A fold over a bare variable `n` has near-Zero proven cost because `n` costs Zero to evaluate. Declaring `[cost: Linear(n)]` on such a fold is accepted because the annotation overestimates the proven cost. True O(n) tracking would require a separate size analysis pass.
 
 ## Lean Formalization {#lean}
 
-A separate Lean 4 codebase (`lean/IrisKernel/`) formalizes the proof kernel's type theory.
+The kernel implementation (`lean/IrisKernel/Kernel.lean`) has executable functions for all 20 rules. These are proven to correspond to an inductive `Derivation` type (`Rules.lean`) that serves as the formal specification. The Lean code is both the running kernel and the formal proof.
 
-### What's formalized {#lean-done}
+### What's proven {#lean-done}
 
-- All 20 inference rules as constructors of an inductive `Derivation` type
+- All 20 inference rules as constructors of an inductive `Derivation` type (specification)
+- Executable kernel functions with correspondence proofs (implementation = specification)
 - The cost lattice partial order (`CostLeq`) with reflexivity, transitivity, and zero/unknown axioms
 - Type well-formedness: a type is well-formed if it and all its references exist
 - Key metatheorems: reflexivity produces valid judgments, cost weakening is transitive, Zero is bottom, Unknown is top
 
-### What's not formalized yet {#lean-todo}
+### What's not proven yet {#lean-todo}
 
 - Full weakening lemma (context extension preserves derivations) -- partially proven, needs structural induction over all derivation forms
 - Some cost algebra embedding rules (e.g., `a <= Sum(a, b)`)
-- Full soundness proof of the combined rule set
+- Correspondence proofs for 14 of 20 rules (6 complete: assume, refl, cost_subsume, cost_leq_rule, trans, guard_rule)
 
-### What "formalized" means {#lean-scope}
+### What "proven" means {#lean-scope}
 
-The Lean code proves properties about the *type-theoretic design*, not about the Rust implementation. The Rust kernel could have bugs that the Lean proofs don't catch. The Lean formalization is a design validation tool, not a code extraction pipeline.
+The Lean code IS the running kernel, not a separate model. When a correspondence proof says "if the executable function returns `some j`, then there exists a `Derivation` matching `j`", that's a statement about the actual code that processes your program's types. There is no gap between the proof and the implementation.
 
 ## Soundness Argument {#soundness}
 
@@ -266,8 +276,8 @@ To be clear about the boundaries:
 
 - **Verification is gradual.** Unannotated code still compiles and runs; the checker trusts annotations when structural rules can't fire. Adding annotations strictly increases guarantees.
 - **Contract verification is probabilistic.** The LIA solver uses 1000 random inputs to check `requires ⟹ ensures`. This provides high confidence, not mathematical certainty.
-- **The Rust kernel is not verified.** It's small, auditable, and has zero unsafe, but no code extraction or formal linkage to the Lean formalization.
-- **Cost analysis is approximate.** The kernel tracks costs through every rule, but some cost annotations are trusted rather than fully derived.
+- **Correspondence proofs are incomplete.** 6 of 20 rules have formal correspondence proofs linking the executable function to the `Derivation` spec. The remaining 14 are tested (86 cross-validation tests) but not yet formally proven in Lean.
+- **Cost analysis tracks expression structure, not runtime behavior.** The kernel propagates costs through every rule, but cost bounds reflect the cost of evaluating the expression tree, not data-dependent runtime complexity. A fold over a variable has near-Zero proven cost because the variable itself is free to evaluate.
 
 ### What IS enforced
 
