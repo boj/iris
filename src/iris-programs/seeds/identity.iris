@@ -13,6 +13,8 @@
 -- The identity program is the minimal seed for evolution to build
 -- upon. Evolution can grow it by adding Prim nodes and edges.
 let generate_identity : Int [cost: Const(2)] =
+  -- self_graph() returns the SemanticGraph for this file at runtime,
+  -- capturing the \x -> x lambda defined above as the seed program
   let id_fn = \x -> x in
   let me = self_graph () in
   me

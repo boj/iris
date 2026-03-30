@@ -1,3 +1,13 @@
+-- Mutation operator: clone a node (shallow copy).
+--
+-- Creates a new node of the same kind as node_id. The clone starts
+-- with no edges — callers must wire it explicitly using connect.
+-- This is a shallow duplicate: outgoing edges are NOT copied.
+-- For a deep copy of a subtree, apply duplicate_node recursively
+-- over graph_outgoing.
+--
+-- Returns (updated_graph, clone_node_id).
+
 -- Duplicate a node and its immediate outgoing edges
 -- Creates a clone of the node, copies edges from original to clone's targets
 let duplicate_node program node_id =

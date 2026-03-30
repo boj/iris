@@ -76,6 +76,7 @@ let resolve program level : Int -> Int -> (Int, Int) [cost: Linear(program)] =
   let max_depth = resolution_depth level in
   let nodes = graph_nodes program in
   -- First pass: count and classify nodes
+  -- fold receives (acc, elem) as a single pair; destructure with .0 and .1
   let counts = fold (0, 0) (\pair ->
     let acc = pair.0 in
     let nid = pair.1 in

@@ -1,8 +1,10 @@
--- Fast exponentiation by squaring
--- Computes base^exp in O(log exp) multiplications
+-- Fast Exponentiation (Exponentiation by Squaring)
+-- Computes base^exp in O(log exp) multiplications by exploiting:
+--   base^(2k)   = (base^k)^2          -- halve exponent, square result
+--   base^(2k+1) = base * base^(2k)    -- reduce to even case
 let rec fast_pow base exp : Int -> Int -> Int [cost: Unknown] =
   if exp == 0 then 1
   else if exp % 2 == 0 then
     let half = fast_pow base (exp / 2) in
-    half * half
+    half * half           -- square the half-power result
   else base * fast_pow base (exp - 1)

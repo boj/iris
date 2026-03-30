@@ -1,3 +1,12 @@
+-- Mutation operator: add a new Prim node to the graph.
+--
+-- Creates a Prim node (kind 0) with the given opcode and returns
+-- (updated_graph, new_node_id). The caller is responsible for wiring
+-- the new node into the data-flow graph using connect.
+--
+-- This is the most basic structural mutation: "add an operation."
+-- Pairs naturally with connect to wire the new node in place.
+
 -- Insert a new Prim node into a program
 let insert_node program opcode =
   let step = graph_add_node_rt program 0 in

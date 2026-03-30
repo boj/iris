@@ -1,3 +1,19 @@
+-- Mutation operator: wrap a node in a Guard(condition, body, Lit(0)).
+--
+-- Inserts a comparison-based condition gate around an existing body node.
+-- The resulting structure is:
+--   Guard(cmp_opcode(input_id, threshold), body_id, Lit(0))
+--
+-- Parameters:
+--   program    : the SemanticGraph to mutate
+--   body_id    : node to use as the true-branch body
+--   input_id   : node whose value is compared against the threshold
+--   cmp_opcode : comparison opcode (e.g. 0x22 = lt, 0x23 = gt, 0x20 = eq)
+--   threshold  : constant integer value to compare against
+--
+-- Returns the updated graph with the new Guard node.
+-- Steps: Lit(threshold) -> Prim(cmp) -> Lit(0) -> graph_add_guard_rt
+
 -- Add a guard condition around a node: Guard(cmp(input, const), body, Lit(0))
 let add_guard_condition program body_id input_id cmp_opcode threshold =
   -- Create threshold constant

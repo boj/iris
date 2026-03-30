@@ -1,12 +1,11 @@
 -- 0/1 Knapsack Problem
 -- Given items with weights and values, and a capacity W,
 -- find the maximum total value that fits in the knapsack.
--- Each item can be included at most once.
-
+-- Each item can be included at most once (hence "0/1").
+--
 -- Items encoded as parallel tuples: weights = (w0, w1, ...), values = (v0, v1, ...).
-
 -- DP approach: dp[i][w] = max value using items 0..i with capacity w.
--- We use a 1D row updated per item to save space.
+-- We use a 1D row updated per item to save space (standard space optimization).
 
 let knapsack weights values capacity : Tuple -> Tuple -> Int -> Int [cost: Unknown] =
   let n = list_len weights in
@@ -15,12 +14,13 @@ let knapsack weights values capacity : Tuple -> Tuple -> Int -> Int [cost: Unkno
   let final_row = fold init_row (\row i ->
     let wi = list_nth weights i in
     let vi = list_nth values i in
-    -- Process capacities from high to low to avoid using same item twice.
-    -- Since we can't iterate backwards with fold easily, we build the new row
-    -- by checking if including item i improves on excluding it.
+    -- For each capacity w, decide: exclude item i (keep row[w]) or include it
+    -- (row[w - wi] + vi). We can't iterate backwards easily in fold, but reading
+    -- from `row` (the previous item's row) instead of the current row prevents
+    -- double-counting the same item.
     map (\w ->
       let exclude = list_nth row w in
-      if wi > w then exclude
+      if wi > w then exclude  -- item doesn't fit at this capacity
       else
         let include = list_nth row (w - wi) + vi in
         if include > exclude then include else exclude

@@ -90,8 +90,10 @@ let software_instruction_count program : Int -> Int [cost: Linear(program)] =
   fold 0 (\acc n -> acc + 1) nodes
 
 -- Estimate cycle count from instruction count.
--- Assumes average CPI (cycles per instruction) of 1.5 for tree-walker,
--- 0.8 for VM bytecode, 0.3 for JIT-compiled code.
+-- Assumes average CPI (cycles per instruction) per execution tier:
+--   tier 0 = tree-walker: CPI ~1.5 (pointer chasing overhead)
+--   tier 1 = VM bytecode: CPI ~0.8 (tight dispatch loop)
+--   tier 2 = JIT native:  CPI ~0.3 (hardware pipelining)
 let estimate_cycles instruction_count tier : Int -> Int -> Int [cost: Const(2)] =
   if tier == 0 then instruction_count * 15 / 10      -- tree-walker: CPI ~1.5
   else if tier == 1 then instruction_count * 8 / 10   -- VM: CPI ~0.8

@@ -105,9 +105,10 @@ let parse tokens src =
   let starts = boundaries.0 in
   let nd = list_len starts in
 
-  -- Parse each item (let, type, import, allow, deny)
+  -- Pass 3: Parse each top-level item into an AST node.
   -- State: (items, counter, cap_entries)
-  -- cap_entries accumulates (is_allow, name_hash, name_len, arg_start, arg_end)
+  -- cap_entries accumulates allow/deny entries: (is_allow, name_hash, name_len, arg_start, arg_end)
+  -- The fold processes items sequentially from the boundaries list.
   let items = fold (mt, 0, mt)
     (\it _i ->
       if it.1 >= nd then it

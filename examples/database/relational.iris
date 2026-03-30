@@ -72,8 +72,10 @@ let agg_min col group : Int -> Tuple -> Int [cost: Linear(group)] =
   ) group
 
 -- Order by: sort table by a column.
--- FIXME: list_sort sorts by first element of tuples. To sort by an arbitrary
--- column, we'd need to prepend the sort key, sort, then strip it.
+-- Uses the Schwartzian transform: prepend the sort key to each row, sort
+-- (list_sort compares by first element), then strip the prepended key.
+-- FIXME: list_sort sorts by first element only, so compound sorts are not
+-- directly supported without repeating the transform with tie-breaking keys.
 let rel_order_by table sort_col : Tuple -> Int -> Tuple [cost: Unknown] =
   let keyed = map (\row -> list_concat (list_nth row sort_col,) row) table in
   let sorted = list_sort keyed in

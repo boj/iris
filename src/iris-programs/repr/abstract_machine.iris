@@ -37,6 +37,7 @@ let estimate_stack_depth program : Int -> Int [cost: Linear(program)] =
   let nodes = graph_nodes program in
   let node_count = fold 0 (\acc x -> acc + 1) nodes in
   let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  -- kind 8 = Fold; each Fold node adds ~3 stack frames to the estimated depth
   let fold_count = fold 0 (\a k -> if k == 8 then a + 1 else a) kinds in
   max (node_count / 2) (fold_count * 3)
 
@@ -69,6 +70,7 @@ let machine_check program has_jit has_avx512 : Int -> Int -> Int -> (Int, Int, I
   let consts = estimate_constants program in
   let fits = fits_machine node_count stack consts in
   let kinds = map (\nid -> graph_get_kind program nid) nodes in
+  -- kind 7 = Neural; programs with Neural nodes prefer CLCU (AVX-512) backend
   let neural_count = fold 0 (\a k -> if k == 7 then a + 1 else a) kinds in
   let backend = select_backend node_count neural_count has_jit has_avx512 in
   (fits, stack, consts, backend)

@@ -8,7 +8,7 @@
 --   2. Shared library: .so/.dylib with C ABI entry point
 --   3. Native ELF: direct x86-64 machine code in ELF container
 
--- External stubs (defined in sibling files)
+-- External stubs (defined in sibling files; replaced at link time with real implementations)
 let serialize_bytecode_to_bytes x : Int -> Int [cost: Const(1)] = x
 let aot_compile x : Int -> Int [cost: Const(1)] = x
 let vm_run a b c : Int -> Int -> Int -> (Int, Int) [cost: Const(1)] = (a, b)

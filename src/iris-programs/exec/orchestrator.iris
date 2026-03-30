@@ -44,6 +44,10 @@ let should_continue current_cycle max_cycles : Int -> Int -> Int [cost: Const(1)
 --      b. Collect outputs
 --   2. Record cycle timing via clock_ns
 --   3. Track evaluation counts
+--
+-- NOTE: in the full implementation, each inner fold would call graph_eval
+-- on the i-th registered program. Here the fold counts evaluations as a
+-- placeholder for host-side program dispatch.
 let orchestrate num_programs max_cycles : Int -> Int -> (Int, Int, Int) [cost: Linear(max_cycles)] =
   fold (0, 0, 0) (\state _cycle ->
     let evals = state.0 in

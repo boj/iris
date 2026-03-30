@@ -1,9 +1,15 @@
--- Minimal HTTP GET built from TCP primitives
--- Connects to host:port, sends a GET request, returns the response
+-- http_get: Minimal HTTP/1.0 GET over raw TCP
+-- Connects to host:port, sends a hand-crafted GET request, reads the full response.
+-- Uses HTTP/1.0 (not 1.1) so the server closes the connection after the response,
+-- making a single tcp_read sufficient to capture everything.
+-- Returns the raw HTTP response (headers + body) as a string.
+
+-- Fetch `path` from `host`:`port` via HTTP/1.0 GET.
 let http_get host port path : Int -> Int -> Int -> Int [cost: Unknown] =
   let conn = tcp_connect host port in
+  -- HTTP/1.0 request: no persistent connection, no Host header required
   let req = str_concat "GET " (str_concat path " HTTP/1.0\r\n\r\n") in
   let _ = tcp_write conn req in
-  let response = tcp_read conn 65536 in
+  let response = tcp_read conn 65536 in  -- 64KB max response
   let _ = tcp_close conn in
   response

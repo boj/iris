@@ -83,13 +83,10 @@ let classify_keyword hash len : Int -> Int -> Int [cost: Const(10)] =
 let source_length src : Int -> Int [cost: Const(1)] =
   str_len src
 
--- Tokenize: main entry point
--- Takes a source string length and returns the token count
--- (simplified: counts distinct tokens by scanning for transitions)
---
--- In full implementation, each token would be emitted as a
--- (kind, start, end) tuple. This version counts tokens as a
--- proof-of-concept for the self-hosting bootstrap.
+-- tokenize_count: simplified token counter (proof-of-concept).
+-- Counts token boundaries by detecting transitions between in-token and
+-- whitespace states.  Does NOT produce token tuples — use tokenizer.iris
+-- for the full production tokenizer that emits (kind, payload, start, end).
 let tokenize_count src_len : Int -> Int [cost: Linear(src_len)] =
   fold (0, 0, 0)
     (\state pos ->

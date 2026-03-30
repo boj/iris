@@ -1,3 +1,10 @@
+-- Mutation operator: attach a cost annotation to a node.
+--
+-- Cost annotations are used by the fitness function and compiler to
+-- estimate execution complexity. Setting a cost allows evolved programs
+-- to self-report their complexity class (Const, Linear, Unknown, etc.).
+-- The cost is an integer encoding of the CostClass variant.
+
 -- Annotate a node with a cost value
 let annotate_cost program node_id cost =
   graph_set_cost program node_id cost

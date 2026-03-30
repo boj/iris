@@ -1,5 +1,13 @@
--- Spawn a computation in a new thread and join for the result.
--- The spawned thread runs a program that adds 3 and 5.
+-- Spawn and Join
+-- Demonstrates the IRIS thread lifecycle: spawn a sub-program on a new thread,
+-- then block the current thread until it finishes and collect its result.
+--
+-- self_graph captures the current program's SemanticGraph so it can be
+-- passed as the runnable to thread_spawn. thread_join returns the value
+-- produced by the spawned thread.
+
+-- Spawn a copy of this program's graph as a new thread, then wait for it.
+-- In practice `self_graph` would be replaced with a purpose-built sub-program.
 let compute x : Int -> Int [cost: Const(1)] =
   let prog = self_graph () in
   let handle = thread_spawn prog in

@@ -80,7 +80,14 @@ let is_compilable kind : Int -> Int [cost: Const(15)] =
   else if kind == 17 then 1  -- Let
   else 0
 
--- Emit a LoadConst instruction
+-- =========================================================================
+-- Instruction emit helpers
+-- =========================================================================
+-- Each helper packs (opcode, operand) into a single integer using the
+-- encoding: opcode * 65536 + operand. The VM decodes by dividing/modding
+-- on 65536. Operand is 0 for instructions that don't use one.
+
+-- Emit a LoadConst instruction (opcode 1, operand = constant pool index)
 let emit_load_const const_idx : Int -> Int [cost: Const(1)] =
   1 * 65536 + const_idx
 

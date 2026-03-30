@@ -77,6 +77,11 @@ let accumulate_probe running_hash probe_input probe_output : Int -> Int -> Int -
 -- Returns the final semantic hash (represented as Int for .iris).
 -- In the Rust implementation, this is a 256-bit BLAKE3 hash; here we
 -- use a 64-bit hash that is sufficient for collision avoidance in practice.
+-- Evaluates 128 probes to build the semantic fingerprint.
+-- The outer fold iterates 8 groups (0-7), the inner fold iterates
+-- 16 positions per group. This avoids needing a range() primitive:
+-- `fold f (0,1,...,15)` iterates over a literal 16-element tuple.
+-- probe_count is accepted but the implementation always uses 128.
 let compute_semantic_hash program input_type output_type probe_count : Int -> Int -> Int -> Int -> Int [cost: Linear(probe_count)] =
   let boundary_hash = hash_boundary input_type output_type in
   -- Full 128-probe evaluation using nested folds: 8 groups of 16 probes.

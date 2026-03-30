@@ -1,7 +1,11 @@
--- Print file contents (like Unix cat)
--- Opens a file, reads up to 1MB, prints to stdout
+-- cat: Print file contents to stdout
+-- Minimal implementation of Unix `cat`: reads the entire file into memory and prints it.
+-- Demonstrates file I/O primitives: file_open, file_read_bytes, file_close, print.
+-- Mode 0 = read-only.
+
+-- Read the file at `path` and print its contents. Returns 0 on success.
 let main path : Int -> Int [cost: Linear(path)] =
   let h = file_open path 0 in
-  let contents = file_read_bytes h 1048576 in
+  let contents = file_read_bytes h 1048576 in  -- 1MB max read
   let _ = file_close h in
   print contents

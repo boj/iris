@@ -24,7 +24,9 @@ let add_filter_pred program cmp_opcode : Int -> Int -> Int [cost: Const(4)] =
   let nid = _spo0.1 in
   (p2, nid)
 
--- Build the filter node and wire it to the predicate
+-- Build a filter node (opcode 49) and wire it to the predicate on port 1.
+-- Returns the updated program (filter_id accessible from the caller as the
+-- most recently added node before the connect).
 let add_filter program pred_id : Int -> Int -> Int [cost: Const(6)] =
   let r = graph_add_node_rt program 0 in
   let p = r.0 in

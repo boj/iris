@@ -98,9 +98,11 @@ let compress_individual program : Int -> Int [cost: Linear(program)] =
   let root = graph_get_root program in
   let nodes = graph_nodes program in
   let edges = graph_edges program in
-  -- BFS from root: collect all reachable node IDs
-  -- For each edge, if source is reachable, target becomes reachable
-  -- We simulate BFS with multiple passes (each pass extends the frontier)
+  -- BFS from root: collect all reachable node IDs.
+  -- LIMITATION: the fold-based BFS only tracks 8 nodes (root + 7 slots).
+  -- For graphs with more than 8 reachable nodes this under-counts reachable
+  -- nodes, causing the returned `total - reachable_count` to over-estimate
+  -- dead code. The result is used only for statistics, not actual removal.
   let pass1 = fold (root, 0, 0, 0, 0, 0, 0, 0)
     (\acc edge ->
       let src = edge.0 in

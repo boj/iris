@@ -1,3 +1,11 @@
+-- Quine: a program that evaluates itself on its own input.
+--
+-- Captures its own SemanticGraph via self_graph, then re-evaluates
+-- it with the given argument x. This demonstrates self-reference and
+-- is the minimal seed for self-modifying programs.
+--
+-- Key property: quine(x) == quine(quine(x)) for all x (fixed-point).
+
 -- A quine: a program that returns its own graph representation
 -- Uses self_graph to capture the executing program's structure
 let quine x : Int -> Int [cost: Const(1)] =

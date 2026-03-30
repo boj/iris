@@ -157,6 +157,10 @@ let pow2 i : Int -> Int [cost: Const(1)] =
 --   n_entries: number of entries in the list
 --
 -- Returns: capability 10-tuple
+-- NOTE: the folds below use n_entries as the collection to iterate over,
+-- not entries itself, because IRIS fold requires a countable collection.
+-- Each iteration checks _i < n_entries and calls list_nth entries _i.
+-- This is a common pattern when the list length is known separately.
 let cap_from_declarations entries n_entries : Tuple -> Int -> (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(128)] =
   -- Phase 1: check if any allow entries exist
   let has_allow = fold 0

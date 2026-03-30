@@ -1,3 +1,15 @@
+-- Self-modification: a program that rewrites its own SemanticGraph.
+--
+-- Demonstrates the minimal self-modification loop:
+--   1. Capture own graph with self_graph
+--   2. Evaluate current version for a baseline score
+--   3. Apply a mutation (set root prim opcode to 0)
+--   4. Evaluate the modified version
+--   5. Return whichever score is higher
+--
+-- This is the seed for Phase Transition 3 (Slow -> Recursive):
+-- the program becomes the first target of its own optimizer.
+
 -- A program that modifies its own graph
 -- Captures itself via self_graph, then changes a prim opcode
 -- and evaluates the modified version to see if it scores better.

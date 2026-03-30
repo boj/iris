@@ -117,8 +117,11 @@ let crossover parent_a parent_b pivot_b splice_point : Int -> Int -> Int -> Int 
 -- Returns a list of collected node IDs
 let collect_subgraph_bfs program start target_size : Int -> Int -> Int -> Int [cost: Linear(program)] =
   let edges = graph_edges program in
-  -- BFS: expand from start, collecting up to target_size nodes
-  -- We simulate BFS with a fold over edges, expanding the frontier
+  -- BFS: expand from start, collecting up to target_size nodes.
+  -- The accumulator is an 8-tuple of node IDs; slot 0 is always the start
+  -- node. Slots 1..7 fill left-to-right as edges are traversed.
+  -- `count` is derived from how many slots are filled (non-zero),
+  -- treating node ID 0 as "empty" (slot not yet used).
   let initial = (start, 0, 0, 0, 0, 0, 0, 0) in
   let result = fold initial
     (\acc edge ->

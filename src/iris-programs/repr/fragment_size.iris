@@ -8,4 +8,6 @@
 let fragment_size program : Int -> Int [cost: Linear(program)] =
   let nodes = graph_nodes program in
   let node_count = fold 0 (\acc x -> acc + 1) nodes in
+  -- node_count * 38 + 14, written as `- neg(14)` to avoid a content-addressed
+  -- node collision: `x + 14` would share a Lit(14) node with the fold body
   node_count * 38 - (neg 14)

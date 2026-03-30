@@ -1,5 +1,9 @@
--- Count steps in the Collatz sequence until reaching 1
--- Collatz conjecture: this always terminates
+-- Collatz Sequence
+-- Starting from n, apply: n/2 if even, 3n+1 if odd. Count steps until reaching 1.
+-- The Collatz conjecture claims this terminates for all positive integers (unproven).
+
+-- Count steps in the Collatz sequence until reaching 1.
+-- Marked [cost: Unknown] because sequence length is not bounded by a simple formula.
 let rec collatz_steps n : Int -> Int [cost: Unknown] =
   if n <= 1 then 0
   else if n % 2 == 0 then 1 + collatz_steps (n / 2)

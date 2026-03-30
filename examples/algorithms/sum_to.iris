@@ -1,8 +1,13 @@
--- Sum integers from 1 to n using fold
+-- Sum-To: sum all integers from 1 to n
+-- Simple benchmark for fold and basic arithmetic.
+-- Equivalent to n*(n+1)/2 but implemented via iteration.
+
+-- Iterative: fold over range [0, n), accumulating sum.
+-- Note: `fold acc f n` iterates over [0, n) when n is an Int.
 let sum_to n : Int -> Int [cost: Linear(n)] =
   fold 0 (+) n
 
--- Recursive version for comparison
+-- Recursive version for comparison (same result, different evaluation strategy).
 let rec sum_to_rec n : Int -> Int [cost: Linear(n)] =
   if n <= 0 then 0
   else n + sum_to_rec (n - 1)

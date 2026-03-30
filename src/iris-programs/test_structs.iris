@@ -1,4 +1,6 @@
--- Test struct (record) types
+-- Test struct (record) types and field access.
+-- Verifies named-field struct construction, field access by name (.x, .y),
+-- positional access (.0, .1), and structs as function arguments/return values.
 type Point = { x: Int, y: Int }
 type Color = { r: Int, g: Int, b: Int }
 

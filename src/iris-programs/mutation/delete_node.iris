@@ -1,3 +1,14 @@
+-- Mutation operator: remove a node by short-circuiting around it.
+--
+-- Deletes the victim node by:
+--   1. Disconnecting the edge source -> victim
+--   2. Disconnecting the edge victim -> target
+--   3. Connecting source -> target directly at the given port
+--
+-- This effectively bypasses the victim, collapsing one step in the
+-- data-flow chain. The victim node remains in the graph but becomes
+-- unreachable. Use this to simplify over-engineered subgraphs.
+
 -- Delete a node by disconnecting and reconnecting around it
 let delete_node program source victim target port =
   let p1 = graph_disconnect program source victim in

@@ -12,11 +12,13 @@ let is_safe queens row col : Tuple -> Int -> Int -> Bool [cost: Linear(queens)] 
     if safe == false then false
     else
       let qcol = list_nth queens i in
-      let row_diff = row - i in
-      -- Same column or same diagonal?
+      let row_diff = row - i in  -- always positive (row > i since we go top-down)
+      -- Same column: trivially conflicts.
+      -- Same diagonal: |col - qcol| == |row - i| (== row_diff since row > i).
+      -- Two cases cover both diagonals (NW-SE and NE-SW).
       if qcol == col then false
-      else if qcol - col == row_diff then false
-      else if col - qcol == row_diff then false
+      else if qcol - col == row_diff then false   -- NE-SW diagonal
+      else if col - qcol == row_diff then false   -- NW-SE diagonal
       else true
   ) (list_range 0 row)
 

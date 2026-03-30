@@ -1,8 +1,13 @@
--- Copy a file from src path to dst path
--- Mode 0 = read, mode 1 = write
+-- file_copy: Copy a file from src to dst
+-- Reads the entire source file into memory then writes it to the destination.
+-- Demonstrates chained file I/O effects.
+-- Mode 0 = read-only, mode 1 = write (create/truncate).
+-- Returns 0 on success.
+
+-- Read src entirely (up to 1MB) and write to dst.
 let copy src dst : Int -> Int -> Int [cost: Linear(src)] =
   let h_in = file_open src 0 in
-  let contents = file_read_bytes h_in 1048576 in
+  let contents = file_read_bytes h_in 1048576 in  -- 1MB max
   let _ = file_close h_in in
   let h_out = file_open dst 1 in
   let _ = file_write_bytes h_out contents in

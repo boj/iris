@@ -2,7 +2,7 @@
 -- Built entirely on TCP primitives: tcp_listen, tcp_accept, tcp_read, tcp_write, tcp_close.
 -- No new opcodes required.
 
--- External stub
+-- Alias for the bootstrap-provided int_to_string builtin
 let int_to_str x : Int -> String [cost: Const(1)] = int_to_string x
 
 -- Build an HTTP response string.

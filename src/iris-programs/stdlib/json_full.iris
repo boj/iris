@@ -97,6 +97,8 @@ let json_stringify_d0 jv =
   else "null"
 
 -- === Stringify (depth 1: arrays/objects of atoms) ===
+-- Each depth-N function delegates inner values to depth-(N-1), so
+-- nesting unrolls without recursion (avoids LetRec in the graph).
 
 let json_stringify_d1 jv =
   let tag = jv.0 in

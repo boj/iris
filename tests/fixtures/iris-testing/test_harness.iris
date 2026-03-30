@@ -1,6 +1,11 @@
 -- IRIS Test Harness
 -- Provides assertion primitives and test result aggregation.
--- Returns 1 for pass, -1 for failure.
+--
+-- Convention: test_ bindings return 1 for pass, -1 (or any negative) for failure.
+-- The universal Rust runner discovers all test_ bindings in a module and calls
+-- module_eval_test for each; positive return = pass, non-positive = fail.
+-- The lbl parameter is an integer label for distinguishing assertion failures
+-- within a single test (not currently surfaced in output but aids debugging).
 
 -- Assert two values are equal.
 -- Returns 1 if actual == expected, -1 otherwise.

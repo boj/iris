@@ -27,7 +27,9 @@ let range start end = list_range start end
 -- Length of a list via fold
 let length xs = fold 0 (\acc x -> acc + 1) xs
 
--- Reverse a list
+-- Reverse a list.
+-- O(n^2): each iteration recomputes element positions via drop/take.
+-- Sufficient for small lists; evolution may discover a faster variant.
 let reverse xs =
   let n = fold 0 (\acc x -> acc + 1) xs in
   fold () (\acc x -> list_append (list_take (list_drop xs (n - fold 0 (\a y -> a + 1) acc - 1)) 1) acc) xs

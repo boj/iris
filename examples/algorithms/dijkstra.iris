@@ -1,20 +1,22 @@
+-- Dijkstra's Shortest Path Algorithm
+-- Find shortest paths from a source vertex to all others in a weighted graph.
+-- Requires non-negative edge weights. O(V^2) with a linear min-scan.
+--
+-- Graph representation: adjacency list where graph[i] is a tuple of
+-- (neighbor, weight) pairs for vertex i.
+-- Uses a linear min-scan instead of a priority queue (simpler, acceptable for small graphs).
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
+-- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
 let fold_while init step_fn xs =
   let result = fold (true, init) (\state elem ->
     if state.0 then step_fn state.1 elem else state
   ) xs in
   result.1
-
--- Dijkstra's Shortest Path Algorithm
--- Find shortest paths from a source vertex to all other vertices
--- in a weighted graph with non-negative edge weights.
---
--- Graph representation: adjacency list where graph[i] is a tuple of
--- (neighbor, weight) pairs for vertex i.
 
 -- Infinity sentinel.
 let inf x : Int -> Int = 999999

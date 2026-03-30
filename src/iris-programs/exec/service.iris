@@ -99,6 +99,10 @@ let evaluate_custom program node_count sandbox : Int -> Int -> (Int, Int, Int) -
 --
 -- Mirrors Rust evaluate_batch: iterates over each program, calls eval_one,
 -- and collects results. Failures are counted, not assumed zero.
+--
+-- NOTE: `graph_eval i ()` is a placeholder; `i` here is the loop counter
+-- acting as a surrogate program handle. The host-side runner replaces
+-- this with the actual registered program for index i.
 let batch_evaluate program_count avg_node_count : Int -> Int -> (Int, Int, Int) [cost: Linear(program_count)] =
   let step_limit = scale_step_limit default_step_limit avg_node_count in
   fold (0, 0, 0)

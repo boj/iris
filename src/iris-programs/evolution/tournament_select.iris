@@ -1,7 +1,12 @@
--- Tournament selection: pick best from k candidates
+-- Tournament selection: pick best from k candidates.
+--
+-- Provides binary, 4-way, and NSGA-II rank-based tournament variants.
+-- Used by the evolution loop to choose parents for reproduction.
+-- All variants return the index (0-based) of the winner.
+--
 -- Returns index of winner (0-based among candidates)
 
--- Compare two fitness values, return index of better (0 or 1)
+-- Compare two fitness values; returns 0 if a wins, 1 if b wins
 let compare_two a b =
   if a >= b then 0 else 1
 
@@ -9,12 +14,11 @@ let compare_two a b =
 let binary_tournament idx_a fit_a idx_b fit_b =
   if fit_a >= fit_b then idx_a else idx_b
 
--- Tournament of size 2: pick best of two candidates
+-- Tournament of size 2: returns 0 if fit_a wins, 1 if fit_b wins
 let tournament_2 fit_a fit_b =
   if fit_a >= fit_b then 0 else 1
 
--- Tournament of size 4: pick best of four candidates
--- Returns index 0-3 of the winner
+-- Tournament of size 4: two-round bracket (01 vs 23), returns index 0-3
 let tournament_4 f0 f1 f2 f3 =
   let w01 = if f0 >= f1 then 0 else 1 in
   let fw01 = if f0 >= f1 then f0 else f1 in
@@ -22,16 +26,16 @@ let tournament_4 f0 f1 f2 f3 =
   let fw23 = if f2 >= f3 then f2 else f3 in
   if fw01 >= fw23 then w01 else w23
 
--- Rank-based tournament: compare by rank first, crowding distance second
--- Returns 0 if a wins, 1 if b wins
+-- Rank-based tournament: lower rank wins; crowding distance breaks ties.
+-- Returns 0 if a wins, 1 if b wins.
 let rank_tournament rank_a crowd_a rank_b crowd_b =
   if rank_a < rank_b then 0
   else if rank_b < rank_a then 1
   else if crowd_a >= crowd_b then 0
   else 1
 
--- Fitness-proportionate selection weight
--- Returns a relative weight for selection probability
+-- Fitness-proportionate selection weight for roulette wheel sampling.
+-- Returns a relative weight for selection probability.
 let selection_weight fitness total_fitness =
   if total_fitness == 0 then 1
   else fitness

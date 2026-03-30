@@ -14,7 +14,10 @@
 --   9 = Vec(TypeId, SizeTerm)  — sized vectors
 --  10 = HWParam(TypeId, HardwareProfile)
 
--- PrimType constants
+-- =========================================================================
+-- PrimType constants (prim_tag values for Primitive typedef)
+-- =========================================================================
+
 let prim_int : Int [cost: Const(1)] = 0
 let prim_nat : Int [cost: Const(1)] = 1
 let prim_float64 : Int [cost: Const(1)] = 2
@@ -23,7 +26,10 @@ let prim_bool : Int [cost: Const(1)] = 4
 let prim_bytes : Int [cost: Const(1)] = 5
 let prim_unit : Int [cost: Const(1)] = 6
 
--- TypeDef kind constants
+-- =========================================================================
+-- TypeDef kind constants (kind field in TypeDef)
+-- =========================================================================
+
 let typedef_primitive : Int [cost: Const(1)] = 0
 let typedef_product : Int [cost: Const(1)] = 1
 let typedef_sum : Int [cost: Const(1)] = 2
@@ -99,8 +105,10 @@ let sum_variant_count kind variant_count : Int -> Int -> Int [cost: Const(1)] =
 let is_structural_decrease witness_kind : Int -> Int [cost: Const(1)] =
   if witness_kind == 0 then 1 else 0
 
--- LIA formula constants for refinement types
+-- =========================================================================
+-- LIA (Linear Integer Arithmetic) formula constants for refinement types
 -- formula_kind: 0=True, 1=False, 2=And, 3=Or, 4=Not, 5=Implies, 6=Atom
+-- =========================================================================
 let lia_true : Int [cost: Const(1)] = 0
 let lia_false : Int [cost: Const(1)] = 1
 let lia_and : Int [cost: Const(1)] = 2

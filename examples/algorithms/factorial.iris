@@ -1,4 +1,6 @@
--- Factorial: n! = n * (n-1) * ... * 1
+-- Factorial
+-- Classic recursive definition: n! = n * (n-1) * ... * 1
+-- Base case covers both n=0 (0!=1) and n=1 (1!=1).
 let rec factorial n : Int -> Int [cost: Linear(n)] =
   if n <= 1 then 1
   else n * factorial (n - 1)

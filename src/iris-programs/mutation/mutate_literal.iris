@@ -1,3 +1,15 @@
+-- Mutation operator: perturb a Lit node's value in-place.
+--
+-- Two variants:
+--   mutate_int  : adds delta to an integer literal (type tag 0)
+--   flip_bool   : toggles a boolean literal between 0 and 1 (type tag 4)
+--
+-- The type tag argument to graph_set_lit_value encodes the value kind:
+--   0 = Int, 1 = Float, 2 = String, 3 = Unit, 4 = Bool
+--
+-- These are the lightest-weight mutations: they change program behavior
+-- without altering graph structure or node count.
+
 -- Mutate a literal node's value
 -- For Int: add a small delta. For Bool: flip.
 let mutate_int program node_id delta =

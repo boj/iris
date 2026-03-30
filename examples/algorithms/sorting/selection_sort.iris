@@ -1,12 +1,12 @@
+-- Selection Sort
+-- On each pass i, find the minimum element in xs[i..n-1] and swap it into position i.
+-- O(n^2) comparisons, O(n) swaps. Not stable.
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
--- Selection Sort
--- Find the minimum element, move it to front, repeat for remaining.
--- O(n^2) time, not stable.
-
--- Find the index of the minimum element starting from index `start`.
+-- Find the index of the minimum element in xs[start..n-1], starting from `start`.
 let rec find_min_idx xs start current_min_idx : Tuple -> Int -> Int -> Int [cost: Linear(xs)] =
   let n = list_len xs in
   if start >= n then current_min_idx
@@ -18,7 +18,8 @@ let rec find_min_idx xs start current_min_idx : Tuple -> Int -> Int -> Int [cost
     else
       find_min_idx xs (start + 1) current_min_idx
 
--- Swap elements at indices i and j in a list using list_set.
+-- Swap elements at indices i and j using two list_set calls.
+-- First set xs[i]=vj, then set xs[j]=vi on the already-updated list.
 let swap xs i j : Tuple -> Int -> Int -> Tuple [cost: Const(2)] =
   let vi = list_nth xs i in
   let vj = list_nth xs j in

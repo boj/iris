@@ -17,6 +17,9 @@
 let generation_step prog0 prog1 test_cases evaluator mutator : Int -> Int -> Int -> Int -> Int -> Int [cost: Unknown] =
   let score0 = graph_eval evaluator (prog0, test_cases) in
   let score1 = graph_eval evaluator (prog1, test_cases) in
+  -- Tournament selection: pick the higher-scoring individual as parent
   let best = if score0 >= score1 then prog0 else prog1 in
+  -- Mutate winner to produce offspring: reset root Prim opcode to 0 (add)
+  -- Note: the mutator argument is unused; mutation is hardcoded here
   let child = graph_set_prim_op best () 0 in
   (best, child)

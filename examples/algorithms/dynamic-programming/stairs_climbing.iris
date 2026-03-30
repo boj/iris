@@ -18,14 +18,18 @@ let stairs n : Int -> Int [cost: Linear(n)] =
     result.1
 
 -- Generalized: allow steps of size 1..k.
+-- dp[i] = sum of dp[i-1] + dp[i-2] + ... + dp[i-k] (ways to reach step i).
 let stairs_k n k : Int -> Int -> Int [cost: Unknown] =
   if n <= 0 then 1
   else
+    -- dp[0] = 1 (one way to stand at the bottom), all others = 0 initially
     let init = map (\i -> if i == 0 then 1 else 0) (list_range 0 (n + 1)) in
     let dp = fold init (\dp i ->
+      -- Sum contributions from each possible last step size s in [1..k]
       let val = fold 0 (\acc s ->
         if i - s >= 0 then acc + list_nth dp (i - s) else acc
       ) (list_range 1 (k + 1)) in
+      -- Update dp[i] in the tuple (replace in place via prefix/suffix concat)
       let prefix = list_take dp i in
       let suffix = list_drop dp (i + 1) in
       list_concat (list_append prefix val) suffix

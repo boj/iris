@@ -17,6 +17,8 @@
 
 -- Using a simpler encoding: BST as a sorted tuple (degenerate but functional).
 -- Insert maintains sorted order, search uses binary search.
+-- Trade-off: O(n) insert (must scan to find insertion point) but O(log n) search.
+-- A proper pointer-based BST would need dynamic node IDs (see FIXME above).
 
 -- Insert a value into a sorted tuple (maintaining sorted order).
 let rec bst_insert xs val : Tuple -> Int -> Tuple [cost: Linear(xs)] =

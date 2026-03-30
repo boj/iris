@@ -1,3 +1,10 @@
+-- Feature extraction: compute (node_count, edge_count, max_depth) from a graph.
+--
+-- Uses graph_nodes + graph_outgoing to count real edges (no estimates).
+-- max_depth is estimated by following the first-child chain from the root.
+-- These three features serve as a lightweight, dependency-free embedding for
+-- use in codec pipelines that don't need the full 64-dim feature_codec vector.
+
 -- Extract feature vector from a program graph
 -- Returns (node_count, edge_count, max_depth) using real graph intrinsics
 -- edge_count: sum of outgoing edges across all nodes via graph_outgoing

@@ -1,7 +1,8 @@
 -- Edit Distance (Levenshtein Distance)
--- Minimum number of single-character edits (insert, delete, replace)
--- to transform one string into another.
+-- Minimum single-character edits (insert, delete, replace) to transform one
+-- sequence into another. Classic O(n*m) DP, space-optimized to one row.
 -- Uses a flat DP table: dp[i*(m+1)+j] = edit_distance(s[0..i], t[0..j]).
+-- Works on integer sequences; see FIXME below re: string support.
 
 -- FIXME: IRIS lacks character-level random access on strings via indexing.
 -- This version works on integer sequences instead of strings.

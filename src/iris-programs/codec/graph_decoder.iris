@@ -1,10 +1,16 @@
 -- Autoregressive graph decoder: latent vector -> SemanticGraph
+--
+-- Decodes a latent embedding vector produced by the GIN VAE encoder back into a
+-- concrete SemanticGraph using an autoregressive generation loop. Each step
+-- predicts node kind, payload (opcode or literal), and whether to add an edge
+-- to the previous node, building up to max_nodes nodes total.
 
 let sigmoid_approx x : Int -> Int [cost: Const(5)] =
   if x > 6000 then 1000
   else if x < (0 - 6000) then 0
   else 500 + x * 1000 / 12000
 
+-- Find index of the maximum value in a list
 let argmax_list values : Int -> Int [cost: Linear(values)] =
   let result = fold (0, 0, 0 - 999999999)
     (\state v ->

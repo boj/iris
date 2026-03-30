@@ -1,10 +1,11 @@
+-- Coin Change Problem
+-- Given coin denominations, find the minimum number of coins to make an amount.
+-- Classic bottom-up DP: dp[i] = minimum coins needed to make amount i.
+-- Also includes coin_ways: count distinct ways to make change (order-independent).
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
-
--- Coin Change Problem
--- Given coin denominations, find the minimum number of coins to make an amount.
--- Classic DP: dp[i] = min coins needed for amount i.
 
 -- A large sentinel value for "impossible".
 let inf x : Int -> Int [cost: Const(1)] = 999999

@@ -1,3 +1,11 @@
+-- Evaluate a Lit node: extract and return a literal value from a SemanticGraph.
+--
+-- A Lit node (kind 5) holds a constant value (Int, Bool, or String)
+-- directly in its payload. The Rust interpreter extracts this without
+-- evaluating any sub-expressions.
+--
+-- Returns the literal value, or -1 if the root is not a Lit node.
+
 -- Evaluate a Lit node (return its value)
 -- Kind 5 indicates a literal node
 let eval_lit program =

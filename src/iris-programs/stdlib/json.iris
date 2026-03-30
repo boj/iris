@@ -1,6 +1,10 @@
--- JSON standard library
--- Implements JSON operations using string primitives.
+-- JSON standard library (simple/streaming variant)
+--
+-- Implements JSON parsing and serialization using string primitives.
 -- All JSON handling is done in pure IRIS — no substrate JSON opcodes.
+-- Handles flat objects with integer values and integer arrays.
+-- For structured tagged-tuple JSON (null/bool/int/string/array/object),
+-- see json_full.iris instead.
 
 -- === Parsing helpers ===
 
@@ -39,9 +43,10 @@ let parse s : String -> Value [cost: Unknown] =
   if len == 0 then ()
   else
     let c = char_at trimmed 0 in
+    -- 123 = '{', 91 = '[', 34 = '"'
     if c == 123 then parse_flat_object trimmed
     else if c == 91 then parse_int_array trimmed
-    else if c == 34 then str_slice trimmed 1 (len - 1)
+    else if c == 34 then str_slice trimmed 1 (len - 1)  -- strip quotes from string
     else str_to_int trimmed
 
 -- Serialize a value to a string.

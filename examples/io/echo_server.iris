@@ -1,5 +1,10 @@
--- Simple TCP echo server
--- Reads data from a connection and writes it back until the client disconnects.
+-- echo_server: Persistent TCP echo server
+-- Continuously reads from a client connection and writes back each chunk
+-- until the client disconnects (tcp_read returns 0).
+-- Demonstrates recursive I/O loops with TCP primitives.
+
+-- Serve one connection: echo data in a loop until EOF.
+-- tcp_read returns 0 when the remote side closes the connection.
 let rec serve conn : Int -> Int [cost: Unknown] =
   let data = tcp_read conn 1024 in
   if data == 0 then tcp_close conn
@@ -7,6 +12,7 @@ let rec serve conn : Int -> Int [cost: Unknown] =
     let _ = tcp_write conn data in
     serve conn
 
+-- Accept a single connection on `port` and echo it until done.
 let main port : Int -> Int [cost: Unknown] =
   let listener = tcp_listen port in
   let conn = tcp_accept listener in

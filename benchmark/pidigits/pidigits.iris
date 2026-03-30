@@ -14,19 +14,22 @@
 -- Uses: fold, int_to_string, str_concat, str_slice
 
 -- Compute arctan(1/x) * scale using the Taylor series.
+-- arctan(1/x) = 1/x - 1/(3x^3) + 1/(5x^5) - ...
+-- State: (sum, term, sign) where term tracks scale/x^(2i+1) to avoid float division.
+-- Early exit when term rounds to 0 (precision exhausted).
 -- Returns an integer representing arctan(1/x) * scale.
--- Uses enough terms for the requested precision.
 let arctan_recip x scale =
   let num_terms = 50 in
   fold (0, scale / x, 1) (\state i ->
     let sum = state.0 in
     let term = state.1 in
     let sign = state.2 in
-    if term == 0 then state
+    if term == 0 then state  -- remaining terms are negligible, stop early
     else
       let denom = 2 * i + 1 in
       let contribution = term / denom in
       let new_sum = sum + sign * contribution in
+      -- Advance term by dividing by -x^2 (flips sign and moves to next odd power)
       let new_term = term / (neg (x * x)) in
       (new_sum, new_term, sign)
   ) (list_range 0 num_terms)

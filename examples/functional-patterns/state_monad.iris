@@ -15,8 +15,10 @@ let state_return val state : Int -> State -> Tuple [cost: Const(1)] =
   (val, state)
 
 -- Bind: chain two stateful computations.
--- comp1: state -> (val1, state2)
--- f: val1 -> (state -> (val2, state3))
+-- comp1: state -> (val1, state2)    -- first computation
+-- f: val1 -> (state -> (val2, state3))  -- continuation that receives comp1's result
+-- The returned function takes the initial state and produces (val2, state3).
+-- State is threaded automatically: comp1 transforms s to s2, then f uses s2.
 let state_bind comp1 f state : (State -> Tuple) -> (Int -> State -> Tuple) -> State -> Tuple [cost: Unknown] =
   let result1 = comp1 state in
   let val1 = result1.0 in

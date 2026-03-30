@@ -20,6 +20,10 @@ let encode_pos r c cols : Int -> Int -> Int -> Int [cost: Const(2)] =
   r * cols + c
 
 -- DFS maze solver. Returns the path as a tuple of encoded positions, or () if no path.
+-- The body is split into two branches because IRIS lacks early-return or exceptions:
+-- when r == end_r we may still need to explore directions (we only exit when BOTH
+-- r == end_r AND c == end_c). The two branches are structurally identical; a shared
+-- helper function would deduplicate them but would add another recursive parameter.
 let rec maze_dfs maze rows cols r c end_r end_c visited path : Tuple -> Int -> Int -> Int -> Int -> Int -> Int -> Tuple -> Tuple -> Tuple [cost: Unknown] =
   let pos = encode_pos r c cols in
   if r == end_r then

@@ -1,10 +1,9 @@
 -- Longest Common Subsequence (LCS)
 -- Find the length of the longest subsequence common to two sequences.
 -- Classic DP: dp[i][j] = LCS length of xs[0..i] and ys[0..j].
-
 -- Works on integer sequences (see edit_distance.iris FIXME re: strings).
 
--- LCS length using row-by-row DP.
+-- LCS length using row-by-row DP (space-optimized to one row).
 let lcs_length xs ys : Tuple -> Tuple -> Int [cost: Unknown] =
   let n = list_len xs in
   let m = list_len ys in
@@ -16,10 +15,12 @@ let lcs_length xs ys : Tuple -> Tuple -> Int [cost: Unknown] =
       map (\j ->
         if j == 0 then 0
         else if list_nth xs i == list_nth ys (j - 1) then
-          list_nth prev_row (j - 1) + 1
+          list_nth prev_row (j - 1) + 1  -- diagonal: extend LCS by one
         else
+          -- max(up, left); "left" here reads prev_row[j-1], which is an
+          -- approximation since in a true 2D table we'd use current_row[j-1].
           let up = list_nth prev_row j in
-          let left = list_nth prev_row (j - 1) in  -- approximation: uses prev_row
+          let left = list_nth prev_row (j - 1) in
           if up > left then up else left
       ) (list_range 0 (m + 1))
     ) (list_range 0 n) in

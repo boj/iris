@@ -1,6 +1,8 @@
 -- Evolution result: output of an evolutionary run.
 --
 -- Mirrors the Rust result.rs in iris-evolve.
+-- Provides construction, field access, history recording, and success
+-- checking for the results returned by the evolution loop.
 --
 -- EvolutionResult is a tuple:
 --   (best_program, best_fitness, generations_run, total_time_ns, pareto_size, history)

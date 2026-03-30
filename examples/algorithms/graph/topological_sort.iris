@@ -1,11 +1,11 @@
+-- Topological Sort (Kahn's Algorithm)
+-- Given a DAG, produce a linear ordering of nodes such that for every edge u->v,
+-- u appears before v. If the graph has a cycle, returns a partial result.
+-- Algorithm: repeatedly remove zero-in-degree nodes and decrement their neighbors.
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
-
--- Topological Sort (Kahn's Algorithm)
--- Given a DAG, produce a linear ordering of nodes such that
--- for every edge u -> v, u appears before v.
--- Uses in-degree counting and iterative removal of zero-in-degree nodes.
 
 -- Check if a value exists in a tuple.
 let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =

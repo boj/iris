@@ -17,7 +17,9 @@ let mat_a i j =
   1.0 / int_to_float (ij * (ij + 1) / 2 + i + 1)
 
 -- Compute one row of A*u: v[row] = sum_j A[row][j] * u[j]
--- Works with 2 parameters (both at safe InputRef indices 0-1)
+-- Hard-coded to n=3 because nested higher-order operations are not supported
+-- in IRIS Gen1 (inner lambdas can't capture outer lambda parameters).
+-- Works with 2 parameters (both at safe InputRef indices 0-1).
 let av_row row u =
   fold 0.0 (\acc j ->
     let ij = row + j in
@@ -25,6 +27,7 @@ let av_row row u =
   ) (list_range 0 3)
 
 -- Compute one row of A^T*v: w[col] = sum_j A[j][col] * v[j]
+-- A^T[i][j] = A[j][i], so the matrix element uses j as row and col as column.
 let atv_row col v =
   fold 0.0 (\acc j ->
     let ji = j + col in

@@ -1,5 +1,10 @@
 -- AOT compiler v3: SemanticGraph -> x86-64 machine code bytes.
 --
+-- Performs register-based x86-64 code generation directly from a SemanticGraph.
+-- Each node returns (bytes, result_reg, next_free_reg) so parents know which
+-- register holds the child's result without push/pop overhead.
+-- Spills to stack slots when all 7 allocatable GP registers are exhausted.
+--
 -- Register-based codegen: eliminates push/pop overhead by keeping
 -- intermediate values in GP registers. Each node returns (bytes, result_reg,
 -- next_free_reg) so parents know where children left their results.

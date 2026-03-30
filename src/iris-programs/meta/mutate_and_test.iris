@@ -1,3 +1,13 @@
+-- Mutate-and-test: hill-climbing search over program mutations.
+--
+-- Runs N random single-opcode mutations on the root node. At each step
+-- the new variant is scored against test_cases; if it beats the current
+-- best, it becomes the new incumbent. Returns the best (program, score)
+-- tuple found across all attempts.
+--
+-- This is the inner loop of the self-improvement cycle. For multi-node
+-- or structural mutations see the mutation/ directory operators.
+
 -- Mutate a program N times and return the best-scoring variant
 -- Uses fold to iterate through N mutation attempts
 let mutate_and_test program test_cases n : Int -> Int -> Int -> Int [cost: Linear(n)] =

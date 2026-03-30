@@ -1,4 +1,5 @@
--- Inline helper: replace element at index.
+-- Inline helper: return a new tuple with index i replaced by val.
+-- list_take gives elements before i, list_append appends val, list_drop skips the old element.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
@@ -10,7 +11,11 @@ let list_set xs i val =
 -- In a real concurrent system, this would use par_eval and synchronization.
 --
 -- States: 0 = thinking, 1 = hungry, 2 = eating
--- Forks: tuple of 5 booleans (1 = available, 0 = taken)
+-- Forks: tuple of n booleans (1 = available, 0 = taken)
+--
+-- Log encoding: each event is encoded as i * 10 + new_state, so event 23 means
+-- philosopher 2 transitioned to state 3 (eating). This packs (who, what) into
+-- a single integer without needing a heterogeneous tuple.
 
 -- Check if philosopher i can eat (both adjacent forks available).
 let can_eat forks i n : Tuple -> Int -> Int -> Bool [cost: Const(2)] =
@@ -35,6 +40,8 @@ let set_state states i new_state : Tuple -> Int -> Int -> Tuple [cost: Const(1)]
   list_set states i new_state
 
 -- Simulate one round: each philosopher tries to transition.
+-- Accumulator is (states, forks, log). Philosophers are processed sequentially,
+-- so earlier philosophers in a round have priority over later ones for fork access.
 let sim_round states forks n : Tuple -> Tuple -> Int -> Tuple [cost: Unknown] =
   fold (states, forks, ()) (\acc i ->
     let st = acc.0 in

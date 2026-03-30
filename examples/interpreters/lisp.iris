@@ -11,6 +11,8 @@
 -- Environment: State map from symbol-id (as string) to value
 
 -- Symbol constants
+-- Negative integers are used as symbol IDs. Positive integers are literal values.
+-- This avoids needing a separate tag: if expr < 0, it's a symbol; otherwise a literal.
 let sym_plus x : Int -> Int = -1
 let sym_minus x : Int -> Int = -2
 let sym_mul x : Int -> Int = -3
@@ -30,7 +32,10 @@ let sym_null x : Int -> Int = -15
 -- to distinguish Tuple from Int. There's no is_tuple primitive.
 -- We'll use a convention: atoms are ints, lists are tuples.
 
--- Evaluate an expression in an environment.
+-- Evaluate an atom expression in an environment.
+-- Handles the two atom forms: symbols (negative ints → env lookup) and
+-- literals (non-negative ints → self-evaluating). List forms are handled
+-- by eval_list below.
 let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
   -- If it's a positive integer, it's a literal
   if is_unit expr then 0
@@ -45,7 +50,9 @@ let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
       -- It's a literal integer
       expr
 
--- Apply a built-in operation to arguments.
+-- Apply a built-in operation to already-evaluated arguments.
+-- op is a symbol ID (negative int); args is a tuple of evaluated values.
+-- Returns the integer result of the operation.
 let apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
   if op == -1 then  -- +
     fold 0 (+) args
@@ -65,6 +72,9 @@ let apply_builtin op args : Int -> Tuple -> Int [cost: Unknown] =
   else 0  -- unknown builtin
 
 -- Evaluate a list expression: (op arg1 arg2 ...)
+-- Handles special forms (if, quote) before falling through to apply_builtin.
+-- NOTE: args are NOT recursively evaluated (no full eval pass), which limits
+-- nesting depth. A production Lisp would call lisp_eval on each argument.
 let eval_list expr env : Tuple -> State -> Int [cost: Unknown] =
   let n = list_len expr in
   if n == 0 then 0

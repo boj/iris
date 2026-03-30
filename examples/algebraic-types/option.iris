@@ -1,9 +1,12 @@
 -- Algebraic Data Types in IRIS
 -- Demonstrates sum type declarations, constructors, and pattern matching.
+-- Covers Option<T>, Result<T,E>, and a simple enum (Color).
 
 -- Option: a value that may or may not be present.
+-- Some(v) wraps a value; None signals absence.
 type Option<T> = Some(T) | None
 
+-- Unwrap the option, returning a default if absent.
 let unwrap_or x default_val : Int -> Int -> Int =
     match x with
       | Some(v) -> v
@@ -15,7 +18,8 @@ let map_option x f : Int -> Int -> Int =
       | Some(v) -> Some (f v)
       | None -> None
 
--- Chain two optional computations.
+-- Chain two optional computations (monadic bind).
+-- If x is Some, apply f to the inner value; otherwise propagate None.
 let and_then x f : Int -> Int -> Int =
     match x with
       | Some(v) -> f v

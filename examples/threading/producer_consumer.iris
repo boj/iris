@@ -1,8 +1,17 @@
--- Producer-consumer pattern: producer writes work to atomic state,
--- consumer reads it. Demonstrates shared state via atomics.
+-- Producer-Consumer Pattern
+-- Demonstrates coordination between two roles via atomic shared state.
+-- The producer writes a value to a named slot; the consumer reads it back.
+--
+-- In a real concurrent program the producer and consumer run on separate
+-- threads. Here, both are ordinary functions that share the same atomic
+-- slot, showing the communication primitive without the concurrency overhead.
+
+-- Write `value` to the named atomic slot `key` and return the value.
+-- Returning the value lets the producer chain further work without an extra read.
 let produce key value : Int -> Int -> Int [cost: Const(2)] =
   let _ = atomic_write key value in
   value
 
+-- Read and return the current value of the named atomic slot `key`.
 let consume key : Int -> Int [cost: Const(1)] =
   atomic_read key

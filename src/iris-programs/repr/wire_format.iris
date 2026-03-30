@@ -334,7 +334,8 @@ let validate_wire_size estimated_size : Int -> Int [cost: Const(3)] =
 -- Byte-buffer cons-list helpers for wire serialization
 -- ============================================================
 
--- Prepend a single byte.
+-- Bytes are encoded as a right-nested cons-list: (b0, (b1, (b2, ... 0)))
+-- where 0 is the nil terminator. wire_cons prepends one byte.
 let wire_cons b tail : Int -> Int -> Int [cost: Const(1)] =
   (b, tail)
 

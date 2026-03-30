@@ -23,9 +23,11 @@ let geometric a r : Int -> Int -> Tuple [cost: Unknown] =
   lazy_unfold a (\n -> (n, n * r))
 
 -- Collatz sequence from a starting number (terminates at 1).
+-- The stream technically continues past 1 (cycling at 1->4->2->1...),
+-- so use stream_take with a sensible limit rather than running to "end".
 let collatz_stream start : Int -> Tuple [cost: Unknown] =
   lazy_unfold start (\n ->
-    if n <= 1 then (n, 1)
+    if n <= 1 then (n, 1)    -- stay at 1 once reached
     else if n % 2 == 0 then (n, n / 2)
     else (n, 3 * n + 1)
   )

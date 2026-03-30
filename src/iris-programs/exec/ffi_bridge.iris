@@ -168,6 +168,10 @@ let unmarshal_zmm_to_int lane_value : Int -> Int [cost: Const(1)] =
 -- This is the top-level entry point that replaces the Rust ClcuRunner.
 -- It marshals inputs into the register file, executes the chain,
 -- and unmarshals the result.
+--
+-- Only the first 6 inputs are marshaled (ZMM0-ZMM5 per ABI convention).
+-- Inputs beyond index 5 are silently ignored.
+-- The result is returned from ZMM0 lane 0 (state.0).
 let clcu_execute chain inputs num_inputs : Int -> Int -> Int -> Int [cost: Linear(num_inputs)] =
   let state = fold (0, 0, 0, 0, 0, 0, 0, 0)
     (\regs i ->

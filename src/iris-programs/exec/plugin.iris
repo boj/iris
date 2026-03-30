@@ -63,13 +63,15 @@ let is_valid_plugin plugin_index plugin_count : Int -> Int -> Int [cost: Const(1
     if plugin_index < plugin_count then 1 else 0
   else 0
 
--- Simulate a plugin sense cycle: each plugin produces messages.
--- Returns total messages produced across all plugins.
+-- Simulate a plugin sense cycle: each plugin produces 1 message per cycle.
+-- The actual per-plugin sense() logic runs host-side; this returns the
+-- upper-bound message count that the host should route to the message bus.
 let sense_cycle plugin_count : Int -> Int [cost: Linear(plugin_count)] =
   plugin_count
 
 -- Initialize all plugins in order (registration order).
 -- Returns 1 if all plugins initialized successfully, 0 if any failed.
+-- The real init calls each plugin's init() method; this is the policy stub.
 let init_all_plugins plugin_count : Int -> Int [cost: Linear(plugin_count)] =
   if plugin_count >= 0 then 1 else 0
 

@@ -17,10 +17,15 @@ import "stdlib/list_ops.iris" as List
 --   Failure: (1, error, log)
 -- ============================================================
 
+-- Lift a pure value into the WriterT monad (success, no log entries).
 let wt_return val = (0, val, ())
+-- Lift an error into the WriterT monad (failure, no log entries).
 let wt_fail err = (1, err, ())
+-- Append a log entry and return unit (0) as the value.
 let wt_tell msg = (0, 0, (msg,))
 
+-- Sequence: if wa failed, propagate failure; otherwise apply f to wa's value
+-- and concatenate the logs from both steps.
 let wt_bind wa f =
   if wa.0 == 1 then wa
   else
@@ -41,9 +46,12 @@ let chain_div a b =
 -- ============================================================
 -- List Monad: nondeterministic computation
 -- (list_return and list_bind imported from stdlib/list_ops.iris)
+-- list_bind xs f = concat-map: apply f to each element and flatten results.
+-- An empty list () is the "failure" / zero for this monad.
 -- ============================================================
 
--- Pythagorean triples via list monad.
+-- Pythagorean triples via list monad: enumerate all (a, b, c) with a<=b<=c<=n
+-- where a^2 + b^2 = c^2. The nested list_binds act like three nested loops.
 let pythagorean_triples n =
   list_bind (list_range 1 (n + 1)) (\a ->
     list_bind (list_range a (n + 1)) (\b ->

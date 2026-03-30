@@ -35,7 +35,10 @@ let church_to_int n : ((Int -> Int) -> Int -> Int) -> Int [cost: Unknown] =
 let church_add m n f x : ((Int -> Int) -> Int -> Int) -> ((Int -> Int) -> Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
   m f (n f x)
 
--- Church multiplication: m * n = apply (f^n) m times.
+-- Church multiplication: m * n = compose m and n.
+-- church_mul m n = \f -> m (n f): apply the n-fold composition of f, m times.
+-- This works because (n f) is the n-fold application of f, and applying it m
+-- times via m gives us m*n total applications.
 let church_mul m n f : ((Int -> Int) -> Int -> Int) -> ((Int -> Int) -> Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
   m (n f)
 

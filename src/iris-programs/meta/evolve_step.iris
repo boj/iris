@@ -1,3 +1,12 @@
+-- One tournament evolution step: select better of two candidates, mutate it.
+--
+-- Used as the per-generation inner loop in genetic programming.
+-- The two candidates compete on test_cases; the winner survives and its
+-- mutant (root opcode set to 0) becomes the new challenger for next round.
+--
+-- Note: graph_set_prim_op currently uses () as node_id — callers should
+-- pass graph_get_root explicitly for correct bootstrap behavior.
+
 -- One evolution step on a pair of candidate programs
 -- Evaluate both, keep the better, mutate it to produce a challenger
 let evolve_step prog_a prog_b test_cases : Int -> Int -> Int -> Int [cost: Unknown] =

@@ -1,6 +1,7 @@
 -- Matrix Multiplication
--- Matrices represented as flat tuples with (rows, cols, data) encoding.
--- Element at (i, j) in an RxC matrix is at index i*C + j.
+-- Matrices represented as flat tuples: (rows, cols, data).
+-- Element at (i, j) in an RxC matrix lives at data[i*C + j].
+-- Supports multiply, transpose, and identity matrix construction.
 
 -- Create a matrix from dimensions and data tuple.
 let mat_new rows cols data : Int -> Int -> Tuple -> Tuple =

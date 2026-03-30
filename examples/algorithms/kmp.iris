@@ -1,43 +1,46 @@
+-- Knuth-Morris-Pratt (KMP) String Matching
+-- Find all occurrences of a pattern in a text in O(n + m) time.
+-- Avoids redundant comparisons using a precomputed failure function.
+-- Works on integer sequences (character codes) since IRIS lacks char indexing.
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
+-- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
 let fold_while init step_fn xs =
   let result = fold (true, init) (\state elem ->
     if state.0 then step_fn state.1 elem else state
   ) xs in
   result.1
 
--- Knuth-Morris-Pratt String Matching
--- Find all occurrences of a pattern in a text.
--- O(n + m) time using a failure function for efficient backtracking.
--- Works on integer sequences (character codes).
-
 -- Build the KMP failure function (also called "prefix function" or "lps array").
--- failure[i] = length of longest proper prefix of pattern[0..i] that is also a suffix.
+-- failure[i] = length of the longest proper prefix of pattern[0..i] that is also a suffix.
+-- This lets us skip re-examining characters on mismatch during search.
 let build_failure pattern : Tuple -> Tuple [cost: Linear(pattern)] =
   let m = list_len pattern in
   if m == 0 then ()
   else
-    -- failure[0] = 0 always
+    -- failure[0] = 0 always (no proper prefix of a 1-char string)
     let init = list_set (map (\i -> 0) (list_range 0 m)) 0 0 in
-    -- Fill failure table
+    -- Fill failure[1..m-1] using the previous failure values (k = current prefix length)
     fold (init, 0) (\state i ->
       let failure = state.0 in
       let k = state.1 in
-      -- Follow failure links until match or k = 0
+      -- Follow failure links until we find a match or exhaust prefix candidates
       let new_k = fold_while k (\pair ->
         let kk = pair.0 in
         let step = pair.1 in
         if kk > 0 && list_nth pattern kk != list_nth pattern i then
-          (true, list_nth failure (kk - 1))
+          (true, list_nth failure (kk - 1))  -- fall back via failure link
         else (false, kk)
       ) (list_range 0 m) in
+      -- If pattern[new_k] matches pattern[i], the prefix length grows by 1
       let final_k = if list_nth pattern new_k == list_nth pattern i then new_k + 1 else new_k in
       (list_set failure i final_k, final_k)
     ) (list_range 1 m)
-    |> (\pair -> pair.0)
+    |> (\pair -> pair.0)  -- discard the trailing k, return just the failure array
 
 -- KMP search: find all occurrences of pattern in text.
 -- Returns a tuple of starting indices where pattern occurs.

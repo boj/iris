@@ -13,7 +13,8 @@
 -- Uses: str_contains, str_replace, str_len, str_slice, fold
 
 -- Count non-overlapping occurrences of a pattern in a string.
--- Scans character by character, checking for pattern at each position.
+-- State: (count, skip). After a match, skip the next pat_len-1 positions
+-- to avoid re-matching overlapping substrings.
 let count_pattern text pattern =
   let text_len = str_len text in
   let pat_len = str_len pattern in
@@ -23,11 +24,11 @@ let count_pattern text pattern =
     fold (0, 0) (\state i ->
       let count = state.0 in
       let skip = state.1 in
-      if skip > 0 then (count, skip - 1)
+      if skip > 0 then (count, skip - 1)  -- inside a previous match, skip ahead
       else
         let sub = str_slice text i (i + pat_len) in
         if str_eq sub pattern == 1 then
-          (count + 1, pat_len - 1)
+          (count + 1, pat_len - 1)  -- matched: skip over remainder of this match
         else
           (count, 0)
     ) (list_range 0 num_positions)

@@ -9,7 +9,7 @@ let rec bubble_pass xs i limit : Tuple -> Int -> Int -> Tuple [cost: Linear(limi
     let a = list_nth xs i in
     let b = list_nth xs (i + 1) in
     if a > b then
-      -- swap: rebuild list with b before a
+      -- Swap xs[i] and xs[i+1]: split at i, insert b then a, append suffix
       let prefix = list_take xs i in
       let suffix = list_drop xs (i + 2) in
       let swapped = list_concat (list_concat (list_append prefix b) (list_append () a)) suffix in

@@ -9,7 +9,12 @@
 -- All higher-order ops (map, zip, drop) are Prim nodes with opcodes.
 -- Opcodes: sub=1, mul=2, min=7, max=8, le=36, lt=34, map=48, zip=50, drop=52
 
--- Helper: add a Prim node with a specific opcode
+-- =========================================================================
+-- Builder helpers
+-- =========================================================================
+
+-- Helper: add a Prim node with a specific opcode.
+-- Returns (updated_program, new_node_id) as a tuple.
 let add_prim program opcode : Int -> Int -> Int [cost: Const(4)] =
   let r = graph_add_node_rt program 0 in
   let p = r.0 in

@@ -28,6 +28,9 @@
 -- The tier-selection logic is preserved so when JIT/VM become available
 -- the routing is ready, but all paths honestly report tier 2.
 
+-- All three branches currently resolve to graph_eval (tree-walker).
+-- The jit_ok / vm_ok flags are wired up so that when the JIT and VM
+-- backends land, only the routing logic here needs to change.
 let evaluate program input jit_ok vm_ok : Int -> Int -> Int -> Int -> (Int, Int) [cost: Const(4)] =
   if jit_ok == 1 then
     -- JIT path: when native backend is available, this would use it

@@ -30,6 +30,7 @@ let generate_stateful_fold program : Int -> Int [cost: Const(6)] =
   let root = graph_get_root prog in
   graph_connect prog root add_id 1
 
--- Set a new initial accumulator value by replacing the base opcode
+-- Set a new initial accumulator value by replacing the root Prim opcode.
+-- Passing () as the node ID uses graph_get_root internally.
 let set_accumulator_op program new_op : Int -> Int -> Int [cost: Const(2)] =
   graph_set_prim_op program () new_op

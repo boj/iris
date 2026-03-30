@@ -9,7 +9,9 @@
 -- The actual syscalls happen in the EffectHandler (permanent substrate).
 -- Everything above this layer is pure IRIS.
 
--- External stubs (effect primitives provided by the runtime)
+-- External stubs: these are resolved at load time by the bootstrap's
+-- effect dispatch. The stub bodies (= 0) are never evaluated; the
+-- evaluator intercepts these names and calls the real EffectHandler.
 let file_write h content : Int -> Int -> Int [cost: Const(1)] = 0
 let perform_effect tag arg : Int -> Int -> Int [cost: Const(1)] = 0
 --

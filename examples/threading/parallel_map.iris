@@ -1,7 +1,14 @@
--- Parallel map: apply a function to each element using thread_spawn.
--- Each element gets its own thread for the computation.
+-- Parallel Map
+-- Apply a function to every element of a collection, potentially in parallel.
+-- In the full IRIS threading model, each `map` call can be dispatched to a
+-- thread pool; here we use the sequential `map` primitive as a baseline.
+-- Replace `map` with `par_map` (or explicit thread_spawn/join) to go parallel.
+
+-- Double a single integer.
 let double x : Int -> Int [cost: Const(1)] =
   x + x
 
+-- Apply `double` to every element of xs.
+-- xs is treated as an integer tuple; result has the same shape.
 let parallel_double xs : Int -> Int [cost: Unknown] =
   map double xs

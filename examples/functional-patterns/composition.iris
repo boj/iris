@@ -5,11 +5,15 @@
 let compose f g x : (Int -> Int) -> (Int -> Int) -> Int -> Int [cost: Unknown] =
   f (g x)
 
--- Compose a list of functions (right to left).
+-- Compose a list of functions (left to right, like a pipeline).
+-- compose_all (f, g, h) x = h(g(f(x))): each function feeds into the next.
+-- NOTE: unlike mathematical composition (right-to-left), this iterates left-to-right
+-- because fold processes the tuple in order.
 let compose_all fs x : Tuple -> Int -> Int [cost: Unknown] =
   fold x (\acc f -> f acc) fs
 
--- Pipe: apply functions left to right (reverse of compose).
+-- Pipe: apply functions left to right (same as compose_all, different argument order).
+-- pipe x (f, g, h) = h(g(f(x))). Useful when the data is the focus, not the pipeline.
 let pipe x fs : Int -> Tuple -> Int [cost: Unknown] =
   fold x (\acc f -> f acc) fs
 

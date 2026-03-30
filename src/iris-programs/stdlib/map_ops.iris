@@ -1,7 +1,9 @@
 -- Map operations built on the map_* primitives.
 --
 -- Maps are Value::State (BTreeMap<String, Value>) under the hood.
+-- Keys are strings; values can be any IRIS value.
 -- These functions provide a higher-level API for key-value storage.
+-- state_empty creates the initial empty map (Value::State with 0 entries).
 
 -- Create an empty map
 let empty_map : Int [cost: Const(1)] = state_empty

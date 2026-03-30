@@ -1,22 +1,23 @@
+-- Union-Find (Disjoint Set Union)
+-- Tracks a partition of n elements into disjoint sets.
+-- Supports: find (with path compression) and union (by rank).
+-- Also includes Kruskal's MST algorithm built on top.
+--
+-- State: (parent_tuple, rank_tuple)
+-- parent[i] = parent of element i; parent[i] == i means i is a root.
+-- rank[i] = approximate tree height under i, used to keep trees shallow.
+
 -- Inline helper: replace element at index.
 let list_set xs i val =
   list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
+-- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
 let fold_while init step_fn xs =
   let result = fold (true, init) (\state elem ->
     if state.0 then step_fn state.1 elem else state
   ) xs in
   result.1
-
--- Union-Find (Disjoint Set)
--- Tracks a partition of elements into disjoint sets.
--- Supports union and find operations with path compression.
---
--- Representation: tuple where parent[i] = parent of element i.
--- If parent[i] == i, then i is a root (representative of its set).
--- Also track rank for union by rank.
--- State: (parent_tuple, rank_tuple)
 
 -- Create a new union-find with n elements (each in its own set).
 let uf_new n : Int -> Tuple [cost: Linear(n)] =

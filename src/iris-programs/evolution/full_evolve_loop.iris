@@ -528,6 +528,8 @@ let evolve prog test_cases generations : Int -> Int -> Int -> Int [cost: Unknown
   let s2 = eval_individual m2 test_cases in
   let s3 = eval_individual m3 test_cases in
   let init_pop = ((prog, initial_score), (m1, s1), (m2, s2), (m3, s3)) in
+  -- State: (population, stag_count, last_best, novelty_archive, map_cell_fitness)
+  -- `()` is the empty novelty archive; novelty_score handles the empty case.
   let init_state = (init_pop, 0, initial_score, (), 0) in
   -- Run evolution using deme_step wrapper for migration support
   let final_state = fold init_state

@@ -1,3 +1,10 @@
+-- Minimal interpreter: thin wrapper around graph_eval.
+--
+-- Delegates all evaluation to the bootstrap evaluator (Rust).
+-- Serves as the simplest possible interpreter -- useful as a baseline
+-- or seed when evolving a more capable self-hosted interpreter.
+-- The full_interpreter.iris handles more node kinds natively.
+
 -- A minimal interpreter: evaluate a program by dispatching on root kind
 let interpret program inputs =
   graph_eval program inputs

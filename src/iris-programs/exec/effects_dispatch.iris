@@ -114,8 +114,10 @@ let real_dispatch effect_tag arg : Int -> Int -> DispatchResult [cost: Const(10)
   -- In a real host, this would call clock_gettime. Here the caller can
   -- pass the current timestamp as arg for simulation.
   else if effect_tag == 9 then DispatchOk(arg)
-  -- Random (0x0A): Fully modelable — xorshift64 PRNG.
-  -- Pass previous random state as arg (0 = use default seed).
+  -- Random (0x0A): Fully modelable — xorshift64 PRNG (Marsaglia 2003).
+  -- The caller passes the current PRNG state as arg; the returned value
+  -- is both the random number and the new state for the next call.
+  -- arg == 0 seeds with a non-zero constant to avoid the degenerate state.
   else if effect_tag == 10 then
     let x = if arg == 0 then 6364136223846793005 else arg in
     let x1 = bitxor x (shl x 13) in

@@ -39,6 +39,10 @@ let reg_rdi : Int [cost: Const(1)] = 7
 -- =========================================================================
 -- Instruction builders (produce byte sequences as nested tuples)
 -- =========================================================================
+-- Instruction encodings are represented as nested 2-tuples terminated by 0,
+-- e.g. (rex_w, (opcode, (modrm, 0))). This lets flatten_code collect bytes
+-- without knowing the instruction length up front. The terminal 0 is
+-- excluded from the final byte stream by flatten_code's zero-stop logic.
 
 -- MOV reg, imm64 (REX.W + B8+rd + imm64)
 let x86_mov_imm64 reg imm : Int -> Int -> Int [cost: Const(10)] =

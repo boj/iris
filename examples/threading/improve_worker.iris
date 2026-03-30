@@ -1,12 +1,20 @@
--- Self-improvement worker pattern:
--- 1. atomic_read the current component
--- 2. evolve/transform it
--- 3. gate on a quality check
--- 4. atomic_swap the improved version in
+-- Self-Improvement Worker Pattern
 --
--- This demonstrates the core self-improvement loop that IRIS needs.
+-- Models the IRIS self-modification lifecycle:
+-- 1. atomic_read  — fetch the current component from shared state
+-- 2. evolve/transform — derive a candidate improvement (not shown here)
+-- 3. quality gate — verify the candidate meets a fitness threshold
+-- 4. atomic_swap  — replace the live component only if improvement passes
+--
+-- atomic_swap returns the old value, allowing callers to detect races or
+-- roll back if the gate check fails after the swap.
+
+-- Read the current component stored at `key`.
+-- Returns the stored integer (e.g., a program ID, version number, or score).
 let read_component key : Int -> Int [cost: Const(1)] =
   atomic_read key
 
+-- Atomically replace the component at `key` with `new_val`.
+-- Returns the previous value so callers can detect concurrent updates.
 let swap_component key new_val : Int -> Int -> Int [cost: Const(1)] =
   atomic_swap key new_val

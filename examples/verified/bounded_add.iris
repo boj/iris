@@ -1,4 +1,10 @@
--- Addition with overflow checking contracts
+-- Verified Bounded Addition
+-- Demonstrates multi-condition requires/ensures contracts in IRIS.
+-- Restricts both inputs to half the Int range so the sum never overflows
+-- the [-1_000_000, 1_000_000] band, provable by simple arithmetic.
+--
+-- requires: x and y each bounded to [-500_000, 500_000]
+-- ensures:  result stays in [-1_000_000, 1_000_000] and equals x + y exactly
 let bounded_add x y : Int -> Int -> Int
   requires x >= -500000 && x <= 500000
   requires y >= -500000 && y <= 500000

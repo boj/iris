@@ -33,6 +33,9 @@ let has_perfect pop target : Tuple -> Int -> Int [cost: Unknown] =
   ) pop
 
 -- Run one generation: evaluate fitness and return best fitness.
+-- NOTE: This module provides the fitness/crossover/selection primitives only.
+-- The actual mutation and full generational loop belong to the caller
+-- (or a driver program). This keeps each component independently testable.
 let generation_best_fitness pop target : Tuple -> Int -> Int [cost: Unknown] =
   let best = find_best pop target in
   fitness best target

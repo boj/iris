@@ -96,8 +96,10 @@ let evaluate_strategy strategy programs test_suites max_gens : Int -> Int -> Int
     (\total pair ->
       let prog = pair.0 in
       let tests = pair.1 in
-      -- Run evolution with this strategy's weights
-      -- For now, use the base evolve loop (strategy weights affect mutation selection)
+      -- Run a mini evolution loop using this strategy's operator weights.
+      -- Weighted roulette selection: roll in [0, sum_weights), scan
+      -- cumulative prefix sums to pick the operator. Applies that op
+      -- to the root node for max_gens steps, keeping the best result.
       let count = fold 0 (\acc tc -> acc + 1) tests in
       let evolved = fold (prog, 0)
         (\state i ->

@@ -1,4 +1,6 @@
--- Swap a fold's step operation and base value in coordination
+-- Swap a fold's step operation and base value in coordination.
+-- The step and base must change together to remain semantically consistent
+-- (e.g., switching from add/0 to mul/1 keeps the identity correct).
 -- opcode_base_pairs: (add,0) (mul,1) (max,-999999) (min,999999) (sub,0)
 let swap_fold_op program fold_id step_id base_id new_opcode new_base =
   let p1_t = graph_set_prim_op program step_id new_opcode in

@@ -16,16 +16,17 @@
 -- Uses: fold, list_range, mod (%)
 
 -- Simulate a thread ring with n_threads workers and initial token value.
--- Returns the ID (1-indexed) of the thread that sees token reach 0.
+-- Returns the ID (1-indexed) of the thread that sees the token reach 0.
 let thread_ring n_threads token =
-  -- Each iteration passes the token to the next thread
-  -- Thread IDs are 1..n_threads (1-indexed as in the benchmark spec)
-  -- state: (current_token, winner_id)
+  -- Each fold step corresponds to one token pass. Step `s` is handled by
+  -- thread (s % n_threads + 1), cycling through threads 1..n_threads.
+  -- State: (current_token, winner_id); winner_id=0 means not yet decided.
   let res = fold (token, 0) (\state step ->
     let cur_token = state.0 in
     let winner = state.1 in
-    if winner > 0 then state
+    if winner > 0 then state  -- already found winner, coast to the end
     else if cur_token == 0 then
+      -- Token reached 0 on this step; record which thread is holding it
       let thread_id = step % n_threads + 1 in
       (0, thread_id)
     else

@@ -66,10 +66,12 @@ let race f g =
 -- Simple channel: bounded buffer using atomic operations.
 -- Returns (send_fn, recv_fn) as a pair of closures.
 -- Buffer size is 1 (synchronous channel).
+-- Send and receive spin-wait with 1ms sleeps, up to 1000 iterations (~1 second).
 let channel_new unit =
   let slot = atomic_new 0 in
   let full = atomic_new 0 in
   let send = \val ->
+    -- Spin until slot is empty, then deposit value and mark full
     fold 0 (\acc i ->
       if atomic_read full == 0 then
         let prev = atomic_swap slot val in
@@ -80,6 +82,7 @@ let channel_new unit =
     ) (list_range 0 1000)
   in
   let recv = \unit ->
+    -- Spin until slot is full, then read value and mark empty
     fold 0 (\acc i ->
       if atomic_read full > 0 then
         let val = atomic_read slot in

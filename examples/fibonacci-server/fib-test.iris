@@ -11,7 +11,9 @@ let test_fib_1 x : Int -> Int [cost: Const(1)] =
   if 1 == 1 then 1 else 0 - 1
 
 -- Test: unfold produces correct fibonacci sequence for 8 terms.
--- Expected: [0, 1, 1, 2, 3, 5, 8, 13]
+-- unfold (a, b) f n generates n elements: each step yields a, then advances
+-- the seed with f applied to the current (a, b) pair.
+-- unfold (0, 1) (+) 8 => [0, 1, 1, 2, 3, 5, 8, 13]
 let test_fib_sequence x : Int -> Int [cost: Const(8)] =
   let seq = unfold (0, 1) (+) 8 in
   let v0 = list_nth seq 0 in

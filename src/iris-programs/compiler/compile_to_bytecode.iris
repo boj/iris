@@ -93,6 +93,8 @@ let emit_fold_prim_instr step_op : Int -> Bytes [cost: Const(4)] = encode_instr 
 -- Compile a single node to bytecode instructions (Bytes).
 -- Self-recursive via self_graph + graph_eval for child nodes.
 -- Children are compiled first (post-order), then the node's own instruction.
+-- Guard nodes emit JumpIfFalse/Jump to implement if-then-else branching.
+-- Fold nodes emit FoldPrim with the step function's opcode as the operand.
 let compile_node program node_id =
   let kind = graph_get_kind program node_id in
 

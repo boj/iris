@@ -1,5 +1,13 @@
 -- GIN (Graph Isomorphism Network) encoder with VAE for IRIS
 --
+-- Encodes a SemanticGraph into a latent embedding suitable for evolution.
+-- Architecture:
+--   1. Per-node feature extraction (kind, opcode, arity)
+--   2. One GIN message-passing round (aggregate neighbor features)
+--   3. Sum + mean + max readout pooling -> 12-dim graph vector
+--   4. VAE: split readout into mu/log_var, sample z via reparameterization
+-- Returns (z_vector, mu, kl_divergence).
+--
 -- Implements the GIN message passing architecture (Xu et al. 2019):
 --   h_i' = MLP((1 + epsilon) * h_i + SUM(h_j for j in N(i)))
 
@@ -7,18 +15,22 @@
 -- Node feature extraction
 -- ===================================================================
 
+-- Return the NodeKind tag (0-19) for a node
 let node_kind_feature program node_id : Int -> Int -> Int [cost: Const(2)] =
   graph_get_kind program node_id
 
+-- Return the Prim opcode (0 for non-Prim nodes)
 let node_opcode_feature program node_id : Int -> Int -> Int [cost: Const(3)] =
   let kind = graph_get_kind program node_id in
   if kind == 0 then graph_get_prim_op program node_id
   else 0
 
+-- Count outgoing edges (child arity) for a node
 let node_arity_feature program node_id : Int -> Int -> Int [cost: Linear(program)] =
   let ch = graph_outgoing program node_id in
   fold 0 (\a c -> a + 1) ch
 
+-- Fanout proxy used as a depth approximation (same as arity in this implementation)
 let node_depth_feature program node_id : Int -> Int -> Int [cost: Linear(program)] =
   -- Depth proxy: outgoing edge count (fanout) for this node
   let ch = graph_outgoing program node_id in
@@ -33,6 +45,7 @@ let node_feature_vec program node_id : Int -> Int -> (Int, Int, Int, Int) [cost:
   let arity = fold 0 (\a c -> a + 1) arity_ch in
   (kind * 50, opcode * 20, arity * 125, arity * 250)
 
+-- Combine all four features into a single scalar hash (for scalar GIN rounds)
 let node_feature_hash program node_id : Int -> Int -> Int [cost: Const(10)] =
   let kind = node_kind_feature program node_id in
   let opcode = node_opcode_feature program node_id in

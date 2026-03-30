@@ -74,18 +74,21 @@ let rec ast_to_string node : Tuple -> String [cost: Unknown] =
     str_concat "(-" (str_concat (ast_to_string (list_nth node 1)) ")")
   else "?"
 
--- Constant folding optimizer: simplify constant expressions.
+-- Constant folding optimizer: simplify constant sub-expressions bottom-up.
+-- Traverses the AST, and whenever a BinOp or Neg has only literal children,
+-- evaluates it at compile time and replaces the node with a literal.
+-- Returns a new AST node (may be structurally different from the input).
 let rec const_fold node : Tuple -> Tuple [cost: Unknown] =
   let tag = list_nth node 0 in
-  if tag == 0 then node  -- already a literal
+  if tag == 0 then node  -- already a literal, nothing to fold
   else if tag == 1 then
     let left = const_fold (list_nth node 2) in
     let right = const_fold (list_nth node 3) in
-    -- If both children are literals, fold
+    -- If both children reduced to literals, evaluate the whole node
     if list_nth left 0 == 0 && list_nth right 0 == 0 then
       let result = eval_ast (1, list_nth node 1, left, right) in
-      (0, result)
-    else (1, list_nth node 1, left, right)
+      (0, result)  -- replace with IntLit node
+    else (1, list_nth node 1, left, right)  -- keep as BinOp with folded children
   else if tag == 2 then
     let child = const_fold (list_nth node 1) in
     if list_nth child 0 == 0 then (0, neg (list_nth child 1))

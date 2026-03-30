@@ -1,3 +1,17 @@
+-- Mutation operator: wrap the current program root in a Fold node.
+--
+-- Creates a new Fold stage that iterates the existing computation:
+--   Fold(Lit(base_value), Prim(step_opcode), old_root)
+--
+-- The old root becomes the collection argument (port 2).
+-- Lit(base_value) is the initial accumulator (port 0).
+-- Prim(step_opcode) is the combining function (port 1).
+--
+-- This is the "add a loop" mutation: promotes a single-pass computation
+-- into a reduction. Useful for evolving sum, product, count, etc.
+--
+-- Returns the updated graph with a new root pointing to the Fold node.
+
 -- Compose a new Fold stage around the current program root
 -- Creates: Fold(base_lit, step_op, old_root)
 let compose_fold program base_value step_opcode =

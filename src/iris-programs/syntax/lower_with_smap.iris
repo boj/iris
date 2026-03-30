@@ -76,7 +76,10 @@ let lower_with_smap ast src =
         let smap = list_append mt (step2.1, 0, str_len src) in
         (g, smap)
     else
-      -- For compound expressions, use the core lowerer and build post-hoc smap
+      -- For compound expressions: run the same stack machine as the core lowerer,
+      -- then build an approximated source map by dividing the source span evenly
+      -- across all graph nodes.  This is a best-effort approximation; exact spans
+      -- require token position tracking during the lowering walk.
       let empty = (0, 0) in
       let init_ws = (body_ast, empty) in
       let result = fold (prog, empty, 0, init_ws, 1, scope)

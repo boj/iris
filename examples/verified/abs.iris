@@ -1,4 +1,10 @@
--- Absolute value with requires/ensures contracts
+-- Verified Absolute Value
+-- Demonstrates IRIS's LCF-style proof contracts (requires/ensures).
+-- The proof kernel checks the precondition at the call site and discharges
+-- the postcondition as a proof obligation at the definition site.
+--
+-- requires: caller must supply x in [-1_000_000, 1_000_000]
+-- ensures:  the proof kernel verifies result >= 0 holds for all valid x
 let abs x : Int -> Int
   requires x >= -1000000 && x <= 1000000
   ensures result >= 0

@@ -55,7 +55,9 @@ let build_huffman_tree freq_table : Tuple -> Tuple [cost: Unknown] =
       let qlen = list_len queue in
       if qlen <= 1 then state
       else
-        -- Find two minimum frequency nodes
+        -- Find two minimum frequency nodes by sorting the priority queue.
+        -- list_sort compares by first element of each sub-tuple, so storing
+        -- (freq, node_idx) ensures we sort by frequency naturally.
         let sorted_q = list_sort queue in  -- sort by freq (first element)
         let min1_entry = list_nth sorted_q 0 in
         let min2_entry = list_nth sorted_q 1 in
@@ -94,10 +96,13 @@ let rec gen_codes tree node_idx prefix codes : Tuple -> Int -> Tuple -> State ->
       gen_codes tree right_idx (list_append prefix 1) codes_l
 
 -- Encode a message using the code table.
+-- Symbols not found in the code table (is_unit returns true for missing keys)
+-- are silently skipped. All known symbols get their variable-length bit string
+-- concatenated into the output bitstream.
 let huffman_encode symbols codes : Tuple -> State -> Tuple [cost: Unknown] =
   fold () (\acc sym ->
     let code = map_get codes sym in
-    if is_unit code then acc
+    if is_unit code then acc  -- skip unknown symbols
     else list_concat acc code
   ) symbols
 

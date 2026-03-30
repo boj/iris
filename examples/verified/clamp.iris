@@ -1,4 +1,9 @@
--- Clamp a value to [lo, hi] range with bounds contracts
+-- Verified Clamp
+-- Clamps x to the closed interval [lo, hi].
+-- The proof kernel verifies the postconditions hold for all valid inputs.
+--
+-- requires: lo <= hi (well-formed interval)
+-- ensures:  result is within [lo, hi] regardless of where x falls
 let clamp x lo hi : Int -> Int -> Int -> Int
   requires lo <= hi
   ensures result >= lo

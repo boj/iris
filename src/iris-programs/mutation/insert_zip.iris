@@ -1,3 +1,22 @@
+-- Mutation operator: insert a Zip+Map preprocessing stage before a Fold.
+--
+-- Rewires the data flow so that instead of folding directly over a
+-- collection, the Fold operates on pairwise-combined elements:
+--   Before: Fold(..., ..., collection_id)
+--   After:  Fold(..., ..., Map(Zip(Lit_a, Lit_b), binary_op))
+--
+-- The two input placeholders (Lit nodes) replace collection_id;
+-- Zip (opcode 0x32=50) pairs them element-wise;
+-- Map (opcode 0x30=48) applies binary_op to each pair.
+--
+-- This mutation introduces a data-parallel preprocessing step and is
+-- useful for evolving programs that combine two streams of values.
+--
+-- Parameters:
+--   fold_id        : the Fold node to rewire
+--   collection_id  : the old collection node to replace
+--   binary_opcode  : opcode for the element-wise combining operation
+
 -- Insert a Zip+Map structure between a Fold and its collection
 -- Creates: map(zip(input_a, input_b), binary_op) → fold.port2
 let insert_zip program fold_id collection_id binary_opcode =

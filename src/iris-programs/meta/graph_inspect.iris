@@ -1,3 +1,9 @@
+-- Graph inspection: extract structural summary from a SemanticGraph.
+--
+-- Used by the self-modification and instrumentation loops to quickly
+-- classify a program without full evaluation. Useful for deciding which
+-- mutation operator to apply or which tier of analysis is needed.
+
 -- Inspect a program's graph structure
 -- Returns a tuple of (root_node_id, root_kind, node_count)
 let inspect program : Int -> (Int, Int, Int) [cost: Const(3)] =

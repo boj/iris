@@ -1,6 +1,7 @@
 -- Chat Protocol
--- Simple chat protocol over TCP. Messages are "USER:message\n" format.
--- Server maintains a list of connected clients and broadcasts messages.
+-- Simple TCP-based chat server. Message format: "USER:message\n".
+-- Server maintains a State map of connected clients and broadcasts to all.
+-- This is a single-connection demo; a real server would accept in a loop.
 
 -- Format a chat message: "USER:message\n"
 let format_message user message : String -> String -> String [cost: Const(3)] =
@@ -44,9 +45,11 @@ let handle_client conn clients username : Int -> State -> String -> Int [cost: U
     broadcast clients msg
 
 -- Start the chat server on a port.
--- Accepts one connection (single-client demo mode).
+-- Demo mode: accepts exactly one connection, handles one message, then exits.
+-- A production server would loop on tcp_accept and spawn handlers per client.
 let main port : Int -> Int [cost: Unknown] =
   let listener = tcp_listen port in
   let conn = tcp_accept listener in
+  -- Pre-register the single client so broadcast can reach them
   let clients = map_insert state_empty "client_0" conn in
   handle_client conn clients "user0"

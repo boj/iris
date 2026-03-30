@@ -5,12 +5,17 @@
 -- This enables working with infinite sequences without materializing
 -- them in memory.
 
+-- =========================================================================
+-- Infinite sequence generators
+-- =========================================================================
+
 -- Generate natural numbers starting from n.
 -- naturals 0 = [0, 1, 2, 3, ...]
 let naturals n = lazy_unfold (\s -> (s, s + 1)) n
 
 -- Generate the Fibonacci sequence.
 -- fibs = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, ...]
+-- State is a (prev, curr) pair; each step emits prev and advances state.
 let fibs = lazy_unfold (\s -> match s with | (a, b) -> (a, (b, a + b))) (0, 1)
 
 -- Take first n elements from a lazy list, materializing them as a tuple.

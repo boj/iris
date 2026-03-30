@@ -15,6 +15,12 @@
 --
 -- Inputs/Outputs vary by operation.
 
+-- =========================================================================
+-- Circular buffer operations
+-- =========================================================================
+-- All operations are pure state-transformers; the caller is responsible
+-- for threading (write_pos, read_pos, count, capacity) through each call.
+
 -- Check if a send operation is possible (channel not full).
 -- Returns 1 if send is OK, 0 if channel is full.
 let bus_can_send count capacity : Int -> Int -> Int [cost: Const(2)] =

@@ -11,6 +11,13 @@
 -- hub Lit node (type_tag=0, value=n_caps) attached to root via port 127.
 -- Each entry is a Lit node (packed int) connected to the hub at port 0..n.
 
+-- lower: main entry point for AST -> (Program, SourceMap)
+-- ast layout: (kind=40 Module, cap_info, items_list)
+-- items_list: list of LetDecl/TypeDecl/ImportDecl/AllowDecl/DenyDecl nodes
+-- The last LetDecl in items_list is treated as the program entry point.
+--
+-- Returns (program, source_map) where program is a SemanticGraph and
+-- source_map is a list of (node_id, start_pos, end_pos) tuples.
 let lower ast src =
   let mt = list_range 0 0 in
   let cap_info = ast.1 in
@@ -128,10 +135,18 @@ let lower ast src =
         (g, sm)
     else
 
-    -- Stack machine for compound expressions
-    -- State: (prog, ns, nsp, ws, wsp, scope)
-    -- ns = cons-cell node stack: (node_id, rest_stack)
-    -- ws = cons-cell work stack: (item, rest_stack)
+    -- Stack machine for compound expressions.
+    -- Evaluates the AST iteratively using two cons-cell stacks:
+    --   ws (work stack): AST nodes yet to be processed
+    --   ns (node stack): SemanticGraph node IDs produced so far
+    --
+    -- Two kinds of work items:
+    --   kind < 50: AST leaf/branch to lower (push args onto ws, then push combine node)
+    --   kind >= 50: Combine operation (pop children from ns, emit graph node, push result)
+    --
+    -- State tuple: (prog, ns, nsp, ws, wsp, scope)
+    --   ns = cons-cell node stack: (node_id, rest_stack)
+    --   ws = cons-cell work stack: (item, rest_stack)
     -- Sentinel for empty stack: nsp==0 (never access ns when nsp==0)
     let empty = (0, 0) in
     let init_ws = (body_ast, empty) in
@@ -401,8 +416,10 @@ let lower ast src =
               else
                 (pg, (lk.2, ns), nsp + 1, rws, nwsp, sc)
             else
-              -- Gap 8: Check if nh matches a known primitive used as a value
-              -- Resolve prim by hash -> create Prim node with opcode
+              -- Variable not in scope: try resolving as a known primitive.
+              -- Primitives are identified by their name's char-sum hash.
+              -- If matched, creates a Prim node with the corresponding opcode.
+              -- If unmatched, falls through to external/unknown handling.
               let prim_result = fold (0, 0)
                 (\pr _j ->
                   if pr.0 == 1 then pr

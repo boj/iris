@@ -1,3 +1,9 @@
+-- Mutation operator: add a directed edge from source to target.
+--
+-- Thin wrapper around graph_connect. Port identifies which argument
+-- slot of source the edge connects to (0 = first arg, 1 = second, etc.).
+-- Use this operator to rewire the data flow between existing nodes.
+
 -- Connect two nodes with an edge
 let connect program source target port =
   graph_connect program source target port

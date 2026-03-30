@@ -56,8 +56,10 @@ let seed_node_count category : Int -> Int [cost: Const(2)] =
   else if category == 3 then 1
   else 7
 
--- Generate seed plan: how many of each category
--- Returns (arithmetic, comparison, fold, identity, composition)
+-- Generate seed plan: how many seeds to create per category.
+-- Returns (arithmetic, comparison, fold, identity, composition).
+-- Used by the population initializer to determine the initial
+-- distribution of program types in a new population.
 let seed_plan : (Int, Int, Int, Int, Int) [cost: Const(1)] =
   (seeds_per_category, seeds_per_category, seeds_per_category,
    seeds_per_category, seeds_per_category)

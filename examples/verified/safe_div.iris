@@ -1,4 +1,9 @@
--- Safe division with divisor != 0 precondition
+-- Verified Safe Division
+-- Wraps integer division with a precondition that rules out division by zero.
+-- The proof kernel enforces y != 0 at every call site, eliminating the need
+-- for a runtime guard inside the function body.
+--
+-- requires: y != 0 (caller must prove the divisor is non-zero)
 let safe_div x y : Int -> Int -> Int
   requires y != 0
   = x / y

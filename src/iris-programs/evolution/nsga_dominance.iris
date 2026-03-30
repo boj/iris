@@ -1,4 +1,8 @@
--- Pareto dominance checking for multi-objective optimization
+-- Pareto dominance checking for multi-objective optimization.
+--
+-- Generic vector-based dominance: works on arbitrary-length fitness
+-- tuples via zip/fold, unlike the fixed-5-objective version in nsga2.iris.
+-- Also provides epsilon-dominance for soft relaxation.
 
 -- Check if fitness vector A dominates B
 -- A dominates B iff: A >= B on all objectives AND A > B on at least one

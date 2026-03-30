@@ -1,5 +1,10 @@
 -- Compile pipeline: chain all 10 compiler passes in sequence
 --
+-- This file is the top-level entry point that wires all 10 compilation passes
+-- together in order. It imports each pass as an external stub so that the
+-- pipeline compiles stand-alone; the real pass implementations live in their
+-- own sibling .iris files and replace these stubs when the full pipeline runs.
+--
 -- External pass stubs (defined in sibling files; these satisfy the parser).
 let monomorphize x : Int -> Int [cost: Const(1)] = x
 let defunctionalize x : Int -> Int [cost: Const(1)] = x

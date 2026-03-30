@@ -17,14 +17,15 @@ let binary_search xs target : Tuple -> Int -> Int [cost: Unknown] =
   if n == 0 then -1
   else binary_search_aux xs target 0 (n - 1)
 
--- Find insertion point (index where target should be inserted to keep sorted order).
+-- Find the leftmost index where target could be inserted to keep xs sorted.
+-- Returns i such that xs[i-1] < target <= xs[i]. O(log n).
 let rec lower_bound_aux xs target lo hi : Tuple -> Int -> Int -> Int -> Int [cost: Unknown] =
   if lo >= hi then lo
   else
     let mid = lo + (hi - lo) / 2 in
     let val = list_nth xs mid in
     if val < target then lower_bound_aux xs target (mid + 1) hi
-    else lower_bound_aux xs target lo mid
+    else lower_bound_aux xs target lo mid  -- mid may still be the answer, don't skip it
 
 let lower_bound xs target : Tuple -> Int -> Int [cost: Unknown] =
   lower_bound_aux xs target 0 (list_len xs)

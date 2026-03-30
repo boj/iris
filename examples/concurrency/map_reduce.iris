@@ -5,6 +5,8 @@
 
 -- Map phase: apply mapper to each input element.
 -- Mapper produces (key, value) pairs encoded as key * 1000 + value.
+-- This single-integer encoding avoids heterogeneous tuples but limits
+-- key and value to non-negative integers < 1000.
 let mr_map mapper data : (Int -> Tuple) -> Tuple -> Tuple [cost: Unknown] =
   fold () (\acc item ->
     list_concat acc (mapper item)

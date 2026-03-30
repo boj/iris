@@ -1,7 +1,10 @@
--- Compare two programs structurally
+-- Structural program comparison
+--
 -- Checks whether two programs have the same node count and the same
--- root node kind. Returns 1 if equivalent, 0 otherwise.
+-- root node kind. Returns 1 if structurally equivalent, 0 otherwise.
 -- Uses multiplication as logical AND for 0/1 values.
+-- Note: this is a weak approximation of structural equality; full
+-- isomorphism would require edge-by-edge comparison.
 let compare_programs prog_a prog_b : Int -> Int -> Int [cost: Linear(prog_a)] =
   let nodes_a = graph_nodes prog_a in
   let nodes_b = graph_nodes prog_b in

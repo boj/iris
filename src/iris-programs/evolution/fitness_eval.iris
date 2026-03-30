@@ -1,4 +1,8 @@
--- Evaluate a program against test cases
+-- Fitness evaluation: score a program against a suite of test cases.
+--
+-- Provides pass/fail counting, fractional fitness (0-1000 scale),
+-- absolute-error metrics, and a complexity-penalized fitness score.
+-- Used by the evolution loop to rank individuals each generation.
 
 -- Evaluate a program on a single test case
 -- Returns 1 if output matches expected, 0 otherwise

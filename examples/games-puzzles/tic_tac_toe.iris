@@ -44,9 +44,11 @@ let ai_move_simple board : Tuple -> Int [cost: Const(9)] =
 
 -- Minimax AI: returns the best score for the current player.
 -- player 1 = maximizing (X), player 2 = minimizing (O).
+-- Depth is used as a tiebreaker: prefer wins achieved in fewer moves
+-- (10 - depth) and losses delayed as long as possible (depth - 10).
 let rec minimax board player depth : Tuple -> Int -> Int -> Int [cost: Unknown] =
-  if has_won board 1 then 10 - depth       -- X wins (good for X)
-  else if has_won board 2 then depth - 10   -- O wins (good for O)
+  if has_won board 1 then 10 - depth       -- X wins: sooner is better
+  else if has_won board 2 then depth - 10   -- O wins: later is better for X
   else if is_full board then 0               -- draw
   else
     let moves = available_moves board in
@@ -66,12 +68,16 @@ let rec minimax board player depth : Tuple -> Int -> Int -> Int [cost: Unknown] 
       ) moves
 
 -- Find the best move for a player using minimax.
+-- Both players maximize their own "adjusted" score: X keeps the raw score,
+-- O negates it (so O's best move is the one that minimizes X's raw score).
 let best_move board player : Tuple -> Int -> Int [cost: Unknown] =
   let moves = available_moves board in
   let result = fold (-1, -100) (\state pos ->
     let new_board = make_move board pos player in
     let other = if player == 1 then 2 else 1 in
     let score = minimax new_board other 0 in
+    -- Normalize: both players pick the highest adjusted score.
+    -- X maximizes raw score; O flips sign to maximize its own advantage.
     let adjusted = if player == 1 then score else 0 - score in
     if adjusted > state.1 then (pos, adjusted)
     else state

@@ -3,17 +3,21 @@
 -- The registry maps FragmentIds (BLAKE3 content hashes) to compiled
 -- representations. Supports caching of compilation results, LRU
 -- eviction, and fragment dependency tracking.
+--
+-- In the full Rust implementation each entry stores the graph, compiled
+-- bytecode, and metadata. Here we provide the policy functions that drive
+-- eviction and statistics; actual storage is host-side.
 
--- Compute a simple hash-based fragment key from program content
--- In the real implementation this is a BLAKE3 hash
+-- Compute a simple hash-based fragment key from program content.
+-- In the real implementation this is a BLAKE3 hash; here we use a
+-- Knuth multiplicative hash as a lightweight stand-in.
 let fragment_key program : Int -> Int [cost: Const(2)] =
   let h = program * 2654435761 in
   if h < 0 then 0 - h else h
 
--- Check if a fragment exists in the registry
--- registry_size: number of fragments stored
--- fragment_id: the fragment to look up
--- Returns 1 if found, 0 if not
+-- Optimistic existence check: assumes any positive ID in a non-empty
+-- registry is present (full lookup requires host-side hash table).
+-- Returns 1 if found, 0 if not.
 let fragment_exists registry_size fragment_id : Int -> Int -> Int [cost: Const(1)] =
   if fragment_id > 0 then
     if registry_size > 0 then 1 else 0
