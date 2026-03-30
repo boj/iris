@@ -355,14 +355,14 @@ fn is_flat_supported_opcode(opcode: u8) -> bool {
         | 0x34        // tuple_get (inline)
         | 0x40..=0x41 // conversion: int_to_float, float_to_int
         | 0xD8        // sqrt
-        // String ops via JIT dispatch (operate on Value, not raw i64)
-        | 0xB0        // str_len
+        // String ops via JIT dispatch
+        | 0xB0..=0xBF // all string ops
         | 0xC0        // char_at
         // Collection ops via JIT dispatch
-        | 0xC1        // list_append
-        | 0xC2        // list_nth
+        | 0xC1..=0xC4 // list_append, list_nth, list_take, list_drop
         | 0xC7        // list_range
-        | 0xD2        // tuple_get (via dispatch)
+        | 0xCE        // list_concat
+        | 0xD2        // tuple_get
         | 0xD6        // tuple_len
         | 0xF0        // list_len
     )
@@ -822,16 +822,8 @@ fn eval_flat(program: &FlatProgram, input: Value) -> Result<Value, BootstrapErro
                         (Value::Bool(x), Value::Bool(y)) => Value::Bool(*x || *y),
                         _ => Value::Unit,
                     },
-                    0x20 => match (&slots[a0], &slots[a1]) {
-                        (Value::Float64(x), Value::Float64(y)) => Value::Bool(x == y),
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x == y),
-                        _ => Value::Bool(false),
-                    },
-                    0x21 => match (&slots[a0], &slots[a1]) {
-                        (Value::Float64(x), Value::Float64(y)) => Value::Bool(x != y),
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x != y),
-                        _ => Value::Bool(true),
-                    },
+                    0x20 => Value::Bool(slots[a0] == slots[op.arg1 as usize]),
+                    0x21 => Value::Bool(slots[a0] != slots[op.arg1 as usize]),
                     0x22 => match (&slots[a0], &slots[a1]) {
                         (Value::Float64(x), Value::Float64(y)) => Value::Bool(x < y),
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
@@ -1084,16 +1076,8 @@ fn eval_flat_reuse(program: &FlatProgram, input: Value, slots: &mut Vec<Value>) 
                         (Value::Bool(x), Value::Bool(y)) => Value::Bool(*x || *y),
                         _ => Value::Unit,
                     },
-                    0x20 => match (&slots[a0], &slots[a1]) {
-                        (Value::Float64(x), Value::Float64(y)) => Value::Bool(x == y),
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x == y),
-                        _ => Value::Bool(false),
-                    },
-                    0x21 => match (&slots[a0], &slots[a1]) {
-                        (Value::Float64(x), Value::Float64(y)) => Value::Bool(x != y),
-                        (Value::Int(x), Value::Int(y)) => Value::Bool(x != y),
-                        _ => Value::Bool(true),
-                    },
+                    0x20 => Value::Bool(slots[a0] == slots[op.arg1 as usize]),
+                    0x21 => Value::Bool(slots[a0] != slots[op.arg1 as usize]),
                     0x22 => match (&slots[a0], &slots[a1]) {
                         (Value::Float64(x), Value::Float64(y)) => Value::Bool(x < y),
                         (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
@@ -8642,6 +8626,77 @@ impl<'a> BootstrapCtx<'a> {
             vec![]
         };
 
+        // Try JIT: if the graph is simple enough (single Prim or Lit at root),
+        // evaluate it directly without creating a full BootstrapCtx.
+        let root_node = graph.nodes.get(&graph.root);
+        if let Some(node) = root_node {
+            match &node.payload {
+                // Lit at root: return the literal directly
+                NodePayload::Lit { type_tag: 0x00, value } if value.len() == 8 => {
+                    return Ok(Value::Int(i64::from_le_bytes(value[..8].try_into().unwrap())));
+                }
+                NodePayload::Lit { type_tag: 0x06, .. } => {
+                    return Ok(Value::Unit);
+                }
+                NodePayload::Lit { type_tag: 0xFF, value } if !value.is_empty() => {
+                    let index = value[0] as u32;
+                    let binder = BinderId(0xFFFF_0000 + index);
+                    return Ok(eval_inputs.get(index as usize).cloned()
+                        .or_else(|| self.env.get(&binder).cloned())
+                        .unwrap_or(Value::Unit));
+                }
+                // Single Prim at root with exactly 2 Lit args (3 nodes total):
+                // inline evaluate without creating a BootstrapCtx
+                NodePayload::Prim { opcode } if graph.nodes.len() == 3 => {
+                    let op = *opcode;
+                    let arg_edges: Vec<_> = graph.edges.iter()
+                        .filter(|e| e.source == graph.root && e.label == EdgeLabel::Argument)
+                        .collect();
+                    if arg_edges.len() == 2
+                        && graph.nodes.get(&arg_edges[0].target).map_or(false, |n| matches!(n.payload, NodePayload::Lit { .. }))
+                        && graph.nodes.get(&arg_edges[1].target).map_or(false, |n| matches!(n.payload, NodePayload::Lit { .. }))
+                    {
+                        let remaining = self.max_steps.saturating_sub(self.step_count);
+                        let mut sub = BootstrapCtx::new(graph, &eval_inputs, remaining, self.registry);
+                        sub.self_eval_depth = self.self_eval_depth + 1;
+                        let a = sub.eval_node(arg_edges[0].target, 0)?.into_value()?;
+                        let b = sub.eval_node(arg_edges[1].target, 0)?.into_value()?;
+                        self.step_count += sub.step_count;
+                        // Fast inline dispatch for common ops
+                        return Ok(match op {
+                            0x00 => match (&a, &b) {
+                                (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+                                _ => { let pa = crate::jit::pack(a); let pb = crate::jit::pack(b);
+                                    let r = crate::jit::rt_prim_dispatch(op as i64, pa, pb, 0);
+                                    crate::jit::unpack(r) }
+                            },
+                            0x01 => match (&a, &b) {
+                                (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
+                                _ => Value::Unit,
+                            },
+                            0x02 => match (&a, &b) {
+                                (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
+                                _ => Value::Unit,
+                            },
+                            0x20 => Value::Bool(a == b),
+                            0x22 => match (&a, &b) { (Value::Int(x), Value::Int(y)) => Value::Bool(x < y), _ => Value::Bool(false) },
+                            0x23 => match (&a, &b) { (Value::Int(x), Value::Int(y)) => Value::Bool(x > y), _ => Value::Bool(false) },
+                            0x24 => match (&a, &b) { (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y), _ => Value::Bool(false) },
+                            0x25 => match (&a, &b) { (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y), _ => Value::Bool(false) },
+                            _ => {
+                                let pa = crate::jit::pack(a);
+                                let pb = crate::jit::pack(b);
+                                let r = crate::jit::rt_prim_dispatch(op as i64, pa, pb, 0);
+                                crate::jit::unpack(r)
+                            }
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Full evaluation path
         let remaining_steps = self.max_steps.saturating_sub(self.step_count);
         let mut sub_ctx = BootstrapCtx::new(graph, &eval_inputs, remaining_steps, self.registry);
         sub_ctx.self_eval_depth = self.self_eval_depth + 1;

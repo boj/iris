@@ -11,8 +11,12 @@
 //! tuples, Programs, etc. Arithmetic on tagged ints is fast (just shift).
 //! Complex operations call into Rust helpers that unbox/rebox.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
+
 use iris_types::eval::Value;
+use iris_types::graph::{EdgeLabel, NodeId, NodePayload, SemanticGraph};
+use iris_types::fragment::FragmentId;
 
 /// Pack a Value into a tagged i64 for JIT code.
 pub fn pack(v: Value) -> i64 {
@@ -114,6 +118,64 @@ pub extern "C" fn rt_prim_dispatch(opcode: i64, a: i64, b: i64, c: i64) -> i64 {
         },
         0xB1 => match (&va, &vb) { // str_concat
             (Value::String(x), Value::String(y)) => Value::String(format!("{}{}", x, y)),
+            _ => Value::Unit,
+        },
+        0xB2 => match (&va, &vb, &_vc) { // str_slice
+            (Value::String(s), Value::Int(start), Value::Int(end)) => {
+                let start = (*start).max(0) as usize;
+                let end = (*end).max(0) as usize;
+                Value::String(s.get(start..end.min(s.len())).unwrap_or("").to_string())
+            }
+            _ => Value::Unit,
+        },
+        0xB3 => match (&va, &vb) { // str_contains
+            (Value::String(s), Value::String(p)) => Value::Bool(s.contains(p.as_str())),
+            _ => Value::Bool(false),
+        },
+        0xB4 => match (&va, &vb) { // str_split
+            (Value::String(s), Value::String(sep)) => {
+                let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::String(p.to_string())).collect();
+                Value::tuple(parts)
+            }
+            _ => Value::Unit,
+        },
+        0xB5 => match (&va, &vb) { // str_join
+            (Value::Tuple(parts), Value::String(sep)) => {
+                let strs: Vec<&str> = parts.iter().filter_map(|v| match v { Value::String(s) => Some(s.as_str()), _ => None }).collect();
+                Value::String(strs.join(sep.as_str()))
+            }
+            _ => Value::Unit,
+        },
+        0xB8 => Value::Bool(va == vb), // str_eq
+        0xBB => match (&va, &vb, &_vc) { // str_replace
+            (Value::String(s), Value::String(from), Value::String(to)) => Value::String(s.replace(from.as_str(), to.as_str())),
+            _ => Value::Unit,
+        },
+        0xBF => match &va { // str_chars
+            Value::String(s) => Value::tuple(s.chars().map(|c| Value::Int(c as i64)).collect()),
+            _ => Value::Unit,
+        },
+        // list_take (0xC3), list_drop (0xC4), list_concat (0xCE)
+        0xC3 => match (&va, &vb) { // list_take
+            (Value::Tuple(t), Value::Int(n)) => {
+                let n = (*n).max(0) as usize;
+                Value::tuple(t.iter().take(n).cloned().collect())
+            }
+            _ => Value::Unit,
+        },
+        0xC4 => match (&va, &vb) { // list_drop
+            (Value::Tuple(t), Value::Int(n)) => {
+                let n = (*n).max(0) as usize;
+                Value::tuple(t.iter().skip(n).cloned().collect())
+            }
+            _ => Value::Unit,
+        },
+        0xCE => match (&va, &vb) { // list_concat
+            (Value::Tuple(a), Value::Tuple(b)) => {
+                let mut elems = a.as_ref().clone();
+                elems.extend(b.iter().cloned());
+                Value::tuple(elems)
+            }
             _ => Value::Unit,
         },
 
