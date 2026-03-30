@@ -39,6 +39,15 @@
 --    evaluate it via graph_eval to get the concrete value
 -- 3. Apply the IRIS-native operation
 --
+-- Native node kinds handled directly (without graph_eval fallback):
+-- - Guard (kind=17): evaluate predicate, branch on truthiness
+-- - Lit (kind=5): extract literal values via graph_get_lit_type_tag/value
+-- - TypeAbst (kind=14): transparent wrapper, evaluate body
+-- - TypeApp (kind=15): transparent wrapper, evaluate body
+-- - Apply+Lambda (kind=1): bind argument via graph_eval_env
+-- - Let (kind=3): bind value and evaluate continuation via graph_eval_env
+-- - Tuple (kind=11): evaluate all children, return as tuple
+--
 -- This is the first step toward Phase Transition 1 (Tool -> Organism):
 -- the interpreter progressively handles more opcodes natively, reducing
 -- its dependence on the Rust runtime.
@@ -158,43 +167,165 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
       else graph_eval program inputs
     -- Zero args or complex: delegate to Rust
     else graph_eval program inputs
-  -- Lit: evaluate literal value
-  else if kind == 5 then graph_eval program inputs
-  -- Apply: function application
-  else if kind == 1 then graph_eval program inputs
-  -- Lambda: closure creation
+  -- Lit (kind=5): extract literal values natively
+  else if kind == 5 then
+    let type_tag = graph_get_lit_type_tag program root in
+    -- Input reference (type_tag=0xFF=255): get from inputs tuple
+    if type_tag == 255 then
+      let lit_val = graph_get_lit_value program root in
+      tuple_get inputs lit_val
+    -- Regular literal: extract directly
+    else graph_get_lit_value program root
+  -- Apply (kind=1): function application
+  else if kind == 1 then
+    let apply_args = graph_outgoing program root in
+    let napply = list_len apply_args in
+    if napply > 0 then
+      let func_id = list_nth apply_args 0 in
+      let func_kind = graph_get_kind program func_id in
+      -- If the function is a Lambda, handle natively
+      if func_kind == 2 then
+        let binder = graph_get_binder program func_id in
+        if binder > 0 - 1 then
+          -- Get the lambda body via Continuation or Argument edge
+          let body_id = graph_edge_target program func_id 0 3 in
+          let body_id2 = if body_id == 0 - 1 then graph_edge_target program func_id 0 0 else body_id in
+          if body_id2 == 0 - 1 then graph_eval program inputs
+          else if napply > 1 then
+            -- Evaluate the argument
+            let arg_id = list_nth apply_args 1 in
+            let arg_sub = graph_set_root program arg_id in
+            let arg_val = graph_eval arg_sub inputs in
+            -- Evaluate body with binder bound to arg value
+            let body_prog = graph_set_root program body_id2 in
+            graph_eval_env body_prog binder arg_val
+          else
+            -- No args: just evaluate the body
+            let body_prog = graph_set_root program body_id2 in
+            graph_eval body_prog inputs
+        else graph_eval program inputs
+      else graph_eval program inputs
+    else graph_eval program inputs
+  -- Lambda (kind=2): closure creation -- delegate (closures need Rust runtime)
   else if kind == 2 then graph_eval program inputs
-  -- Let: local binding
-  else if kind == 3 then graph_eval program inputs
-  -- Match: pattern matching
+  -- Let (kind=3): local binding
+  else if kind == 3 then
+    -- Get binding target (edge label=Binding=2, port=0)
+    let bind_id = graph_edge_target program root 0 2 in
+    -- Get continuation target (edge label=Continuation=3, port=0)
+    let cont_id = graph_edge_target program root 0 3 in
+    if bind_id == 0 - 1 then graph_eval program inputs
+    else if cont_id == 0 - 1 then graph_eval program inputs
+    else
+      -- Evaluate the binding
+      let bind_sub = graph_set_root program bind_id in
+      let bind_val = graph_eval bind_sub inputs in
+      -- Check if continuation is a Lambda (for binding the value)
+      let cont_kind = graph_get_kind program cont_id in
+      if cont_kind == 2 then
+        let cont_binder = graph_get_binder program cont_id in
+        if cont_binder > 0 - 1 then
+          -- Get the lambda body
+          let lam_body = graph_edge_target program cont_id 0 3 in
+          let lam_body2 = if lam_body == 0 - 1 then graph_edge_target program cont_id 0 0 else lam_body in
+          if lam_body2 == 0 - 1 then graph_eval program inputs
+          else
+            -- Evaluate body with binder bound to the binding value
+            let body_prog = graph_set_root program lam_body2 in
+            graph_eval_env body_prog cont_binder bind_val
+        else graph_eval program inputs
+      else
+        -- Continuation is not a Lambda: just evaluate it
+        let cont_sub = graph_set_root program cont_id in
+        graph_eval cont_sub inputs
+  -- Match (kind=4): pattern matching
   else if kind == 4 then graph_eval program inputs
-  -- Ref: cross-fragment call
+  -- Ref (kind=6): cross-fragment call
   else if kind == 6 then graph_eval program inputs
-  -- Neural: unsupported
-  else if kind == 7 then -1
-  -- Fold: catamorphism
+  -- Neural (kind=7): unsupported
+  else if kind == 7 then 0 - 1
+  -- Fold (kind=8): catamorphism
   else if kind == 8 then graph_eval program inputs
-  -- Unfold: anamorphism
+  -- Unfold (kind=9): anamorphism
   else if kind == 9 then graph_eval program inputs
-  -- Effect: side effect
+  -- Effect (kind=10): side effect
   else if kind == 10 then graph_eval program inputs
-  -- Tuple: product construction
-  else if kind == 11 then graph_eval program inputs
-  -- Inject: sum constructor
+  -- Tuple (kind=11): product construction -- evaluate all children
+  else if kind == 11 then
+    let tup_args = graph_outgoing program root in
+    let tup_len = list_len tup_args in
+    if tup_len == 0 then graph_eval program inputs
+    else if tup_len == 1 then
+      let t0_id = list_nth tup_args 0 in
+      let t0_sub = graph_set_root program t0_id in
+      let t0_val = graph_eval t0_sub inputs in
+      (t0_val,)
+    else if tup_len == 2 then
+      let t0_id = list_nth tup_args 0 in
+      let t1_id = list_nth tup_args 1 in
+      let t0_sub = graph_set_root program t0_id in
+      let t1_sub = graph_set_root program t1_id in
+      let t0_val = graph_eval t0_sub inputs in
+      let t1_val = graph_eval t1_sub inputs in
+      (t0_val, t1_val)
+    else if tup_len == 3 then
+      let t0_id = list_nth tup_args 0 in
+      let t1_id = list_nth tup_args 1 in
+      let t2_id = list_nth tup_args 2 in
+      let t0_sub = graph_set_root program t0_id in
+      let t1_sub = graph_set_root program t1_id in
+      let t2_sub = graph_set_root program t2_id in
+      let t0_val = graph_eval t0_sub inputs in
+      let t1_val = graph_eval t1_sub inputs in
+      let t2_val = graph_eval t2_sub inputs in
+      (t0_val, t1_val, t2_val)
+    else graph_eval program inputs
+  -- Inject (kind=12): sum constructor
   else if kind == 12 then graph_eval program inputs
-  -- Project: field access
+  -- Project (kind=13): field access
   else if kind == 13 then graph_eval program inputs
-  -- TypeAbst: evaluate body
-  else if kind == 14 then graph_eval program inputs
-  -- TypeApp: evaluate body
-  else if kind == 15 then graph_eval program inputs
-  -- LetRec: recursive binding
+  -- TypeAbst (kind=14): transparent wrapper -- evaluate body directly
+  else if kind == 14 then
+    let ta_args = graph_outgoing program root in
+    let ta_len = list_len ta_args in
+    if ta_len > 0 then
+      let ta_body_id = list_nth ta_args 0 in
+      let ta_sub = graph_set_root program ta_body_id in
+      graph_eval ta_sub inputs
+    else graph_eval program inputs
+  -- TypeApp (kind=15): transparent wrapper -- evaluate body directly
+  else if kind == 15 then
+    let tp_args = graph_outgoing program root in
+    let tp_len = list_len tp_args in
+    if tp_len > 0 then
+      let tp_body_id = list_nth tp_args 0 in
+      let tp_sub = graph_set_root program tp_body_id in
+      graph_eval tp_sub inputs
+    else graph_eval program inputs
+  -- LetRec (kind=16): recursive binding
   else if kind == 16 then graph_eval program inputs
-  -- Guard: conditional
-  else if kind == 17 then graph_eval program inputs
-  -- Rewrite: verified rewrite (transparent)
+  -- Guard (kind=17): conditional dispatch -- evaluate natively
+  else if kind == 17 then
+    let guard_children = graph_outgoing program root in
+    let guard_len = list_len guard_children in
+    if guard_len > 2 then
+      let pred_id = list_nth guard_children 0 in
+      let body_id = list_nth guard_children 1 in
+      let fall_id = list_nth guard_children 2 in
+      -- Evaluate the predicate
+      let pred_sub = graph_set_root program pred_id in
+      let pred_val = graph_eval pred_sub inputs in
+      -- Branch on truthiness: 0 = false, nonzero = true
+      if pred_val == 0 then
+        let fall_sub = graph_set_root program fall_id in
+        graph_eval fall_sub inputs
+      else
+        let body_sub = graph_set_root program body_id in
+        graph_eval body_sub inputs
+    else graph_eval program inputs
+  -- Rewrite (kind=18): verified rewrite (transparent)
   else if kind == 18 then graph_eval program inputs
-  -- Extern: unsupported
-  else if kind == 19 then -1
+  -- Extern (kind=19): unsupported
+  else if kind == 19 then 0 - 1
   -- Unknown kind
-  else -1
+  else 0 - 1

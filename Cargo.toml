@@ -123,6 +123,11 @@ name = "test_verification_complete"
 path = "tests/test_verification_complete.rs"
 required-features = ["syntax"]
 
+[[test]]
+name = "test_interpreter_native"
+path = "tests/test_interpreter_native.rs"
+required-features = ["syntax"]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
