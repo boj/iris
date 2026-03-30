@@ -664,3 +664,48 @@
 
 **Assistant:** Here's the honest assessment of where the self-compilation loop stands:
 
+
+---
+
+**2026-03-29 21:15**
+
+**Human:** We could just keep using the Rust evaluator until IRIS can bootstrap itself?
+
+**Assistant:** **IRIS compiles itself.**
+
+
+---
+
+**2026-03-29 21:23**
+
+**Human:** Why do we need the C evaluator?
+
+**Assistant:** We don't. The self-compiled binary IS a C evaluator — it has the C runtime linked in. And the Rust evaluator can compile `c_backend.iris` to `c_backend.json`.
+
+
+---
+
+**2026-03-29 21:27**
+
+**Human:** I'm still confused why this has to be C. If Rust can compile IRIS, then why don't we make bootstrap-stage0 Rust? Then we can use that to make the self-hosted IRIS compiler, and that becomes the new boostrap binary.
+
+**Assistant:** You're right. The C was a detour. The path is:
+
+
+---
+
+**2026-03-29 21:30**
+
+**Human:** Walk me through how Rust/Lean compiles IRIS today.
+
+**Assistant:** Here's the pipeline:
+
+
+---
+
+**2026-03-29 21:35**
+
+**Human:** But the end goal is to then have IRIS create its own iris-stage0, right? Then the gcc compiled rust-stage0 is a historical artifact?
+
+**Assistant:** Yes. The endgame:
+

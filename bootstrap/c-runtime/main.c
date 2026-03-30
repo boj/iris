@@ -110,16 +110,32 @@ int main(int argc, char **argv) {
         iris_graph_t *tok = iris_graph_load_json("bootstrap/tokenizer.json");
         if (!tok) { fprintf(stderr, "error: cannot load tokenizer.json\n"); return 1; }
         iris_value_t *tokens = iris_eval_graph(tok, src_val);
+        fprintf(stderr, "tokens: tag=%d", tokens ? tokens->tag : -1);
+        if (tokens && tokens->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", tokens->tuple.len);
+        fprintf(stderr, "\n");
 
         /* Load and run parser */
         iris_graph_t *par = iris_graph_load_json("bootstrap/parser.json");
         if (!par) { fprintf(stderr, "error: cannot load parser.json\n"); return 1; }
         iris_value_t *ast = iris_eval_graph(par, tokens);
+        fprintf(stderr, "ast: tag=%d", ast ? ast->tag : -1);
+        if (ast && ast->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", ast->tuple.len);
+        fprintf(stderr, "\n");
 
         /* Load and run lowerer */
         iris_graph_t *low = iris_graph_load_json("bootstrap/lowerer.json");
         if (!low) { fprintf(stderr, "error: cannot load lowerer.json\n"); return 1; }
         iris_value_t *graph_val = iris_eval_graph(low, ast);
+        fprintf(stderr, "lowerer: tag=%d", graph_val ? graph_val->tag : -1);
+        if (graph_val && graph_val->tag == IRIS_TUPLE) {
+            fprintf(stderr, " len=%u", graph_val->tuple.len);
+            if (graph_val->tuple.len > 0 && graph_val->tuple.elems[0]) {
+                fprintf(stderr, " [0].tag=%d", graph_val->tuple.elems[0]->tag);
+                if (graph_val->tuple.elems[0]->tag == IRIS_PROGRAM)
+                    fprintf(stderr, " nodes=%u", graph_val->tuple.elems[0]->graph ? graph_val->tuple.elems[0]->graph->node_count : 0);
+            }
+        }
+        fprintf(stderr, "\n");
 
         /* The lowerer returns (program, metadata). Extract the program. */
         iris_value_t *compiled = graph_val;

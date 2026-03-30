@@ -681,6 +681,16 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
             return iris_tuple(NULL, 0);
         case 0x35: /* list_concat */
             return prim_list_concat_impl(args, nargs);
+        case 0xC0: { /* char_at(string, index) → int (char code) */
+            if (nargs < 2) return iris_int(0);
+            if (args[0] && args[0]->tag == IRIS_STRING) {
+                int64_t idx = iris_as_int(args[1]);
+                if (idx >= 0 && (uint32_t)idx < args[0]->str.len) {
+                    return iris_int((unsigned char)args[0]->str.data[idx]);
+                }
+            }
+            return iris_int(0);
+        }
         case 0xC1: /* list_append */
             return prim_list_append(args, nargs);
         case 0xC2: /* list_nth */
@@ -732,9 +742,8 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
         }
 
         case 0x84: { /* graph_add_node_rt(program, kind) → node_id */
-
+            if (nargs < 2) return iris_int(-1);
             iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
-
             uint8_t nk = (uint8_t)iris_as_int(args[1]);
             /* Generate a unique node ID from node count + salt */
             uint64_t nid = (uint64_t)g->node_count + 1000;

@@ -211,8 +211,11 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
                     /* Fall through to input lookup */
                 }
 
-                /* Also check if the raw param_idx matches a binder_id in env */
+                /* Check raw param_idx as binder_id, and also with 0xFFFF prefix
+                 * (binder IDs are 0xFFFF0000 + index, but InputRef stores just the index) */
                 iris_value_t *bound = env_get(ctx, param_idx);
+                if (bound) return bound;
+                bound = env_get(ctx, 0xFFFF0000u + param_idx);
                 if (bound) return bound;
 
                 /* Standard input parameter lookup */
@@ -311,18 +314,16 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
     case NK_FOLD: {
         /*
          * Fold: iterative evaluation.
-         * Structure: fold has an Argument edge (port 0) to the initial accumulator,
-         * a Continuation edge to the step function body,
-         * and a Binding edge to a "condition" or "seed" node.
-         *
-         * Simplified: evaluate the body with (accumulator, input) on each step.
+         * Argument edges:
+         *   port 0 = initial accumulator
+         *   port 1 = step function (Prim opcode or Lambda)
+         *   port 2 = collection (tuple to iterate over)
          */
         uint64_t arg_ids[4];
         uint32_t nargs = collect_args(ctx->graph, node_id, arg_ids, 4);
 
-        uint64_t cont_id;
-        if (!find_continuation(ctx->graph, node_id, &cont_id)) {
-            /* No continuation: just return the argument */
+        if (nargs < 3) {
+            /* Malformed fold — need acc, step, collection */
             if (nargs > 0) {
                 ctx->depth++;
                 iris_value_t *r = eval_node(ctx, arg_ids[0]);
@@ -332,93 +333,109 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
             return iris_unit();
         }
 
-        /* Evaluate initial accumulator */
-        iris_value_t *acc = iris_unit();
-        if (nargs > 0) {
-            ctx->depth++;
-            acc = eval_node(ctx, arg_ids[0]);
-            ctx->depth--;
-        }
+        /* Evaluate initial accumulator (port 0) */
+        ctx->depth++;
+        iris_value_t *acc = eval_node(ctx, arg_ids[0]);
+        ctx->depth--;
 
-        /* Get the step function's binder (if continuation is a Lambda) */
-        iris_node_t *cont_node = iris_graph_raw_find_node(ctx->graph, cont_id);
-        uint32_t step_binder = 0xFFFFFFFF;
-        uint64_t step_body = cont_id;
-        if (cont_node && cont_node->kind == NK_LAMBDA) {
-            step_binder = cont_node->payload.lambda.binder_id;
-            uint64_t body_id;
-            if (find_continuation(ctx->graph, cont_id, &body_id)) {
-                step_body = body_id;
-            }
-        }
+        /* Step function node (port 1) — could be Prim or Lambda */
+        uint64_t step_id = arg_ids[1];
+        iris_node_t *step_node = iris_graph_raw_find_node(ctx->graph, step_id);
 
-        /* Evaluate the collection (second arg if present) */
-        iris_value_t *collection = ctx->input;
-        if (nargs > 1) {
-            ctx->depth++;
-            collection = eval_node(ctx, arg_ids[1]);
-            ctx->depth--;
-        }
+        /* Evaluate collection (port 2) */
+        ctx->depth++;
+        iris_value_t *collection = eval_node(ctx, arg_ids[2]);
+        ctx->depth--;
 
-        /* If collection is a tuple, fold over its elements */
-        if (collection && collection->tag == IRIS_TUPLE) {
-            for (uint32_t iter = 0; iter < collection->tuple.len; iter++) {
-                iris_value_t *elem = collection->tuple.elems[iter];
-                iris_value_t *step_elems[2] = { acc, elem };
-                iris_value_t *step_input = iris_tuple(step_elems, 2);
+        if (!collection) return acc;
 
-                eval_ctx_t step_ctx = *ctx;
-                step_ctx.input = step_input;
-                step_ctx.depth = ctx->depth + 1;
-                step_ctx.memo_count = 0; /* Fresh memo per iteration */
-
-                if (step_binder != 0xFFFFFFFF) {
-                    env_push(&step_ctx, step_binder, step_input);
+        /* Int-as-range: fold over 0..n-1 */
+        if (collection->tag == IRIS_INT) {
+            int64_t n = collection->i;
+            if (n <= 0) return acc;
+            if (n > 100000) n = 100000; /* safety limit */
+            for (int64_t iter = 0; iter < n; iter++) {
+                iris_value_t *elem = iris_int(iter);
+                if (step_node && step_node->kind == NK_PRIM) {
+                    iris_value_t *prim_args[2] = { acc, elem };
+                    acc = iris_eval_prim(step_node->payload.prim_opcode,
+                                         prim_args, 2, ctx->self_program);
+                } else if (step_node && step_node->kind == NK_LAMBDA) {
+                    uint32_t binder = step_node->payload.lambda.binder_id;
+                    uint64_t body_id;
+                    if (find_continuation(ctx->graph, step_id, &body_id)) {
+                        iris_value_t *pair_elems[2] = { acc, elem };
+                        iris_value_t *pair = iris_tuple(pair_elems, 2);
+                        eval_ctx_t step_ctx = *ctx;
+                        step_ctx.depth = ctx->depth + 1;
+                        step_ctx.memo_count = 0;
+                        env_push(&step_ctx, binder, pair);
+                        acc = eval_node(&step_ctx, body_id);
+                        ctx->steps = step_ctx.steps;
+                    }
+                } else {
+                    iris_value_t *pair_elems[2] = { acc, elem };
+                    iris_value_t *pair = iris_tuple(pair_elems, 2);
+                    eval_ctx_t step_ctx = *ctx;
+                    step_ctx.input = pair;
+                    step_ctx.depth = ctx->depth + 1;
+                    step_ctx.memo_count = 0;
+                    acc = eval_node(&step_ctx, step_id);
+                    ctx->steps = step_ctx.steps;
                 }
-
-                iris_value_t *result = eval_node(&step_ctx, step_body);
-                ctx->steps = step_ctx.steps;
-                acc = result;
             }
             return acc;
         }
 
-        /* Fallback: iterative fold with termination check */
-        for (int iter = 0; iter < 1000; iter++) {
-            iris_value_t *step_elems[2] = { acc, ctx->input };
-            iris_value_t *step_input = iris_tuple(step_elems, 2);
+        if (collection->tag != IRIS_TUPLE || collection->tuple.len == 0) {
+            return acc;
+        }
 
-            eval_ctx_t step_ctx = *ctx;
-            step_ctx.input = step_input;
-            step_ctx.depth = ctx->depth + 1;
-            step_ctx.memo_count = 0;
+        /* Iterate over tuple collection elements */
+        for (uint32_t iter = 0; iter < collection->tuple.len; iter++) {
+            iris_value_t *elem = collection->tuple.elems[iter];
 
-            if (step_binder != 0xFFFFFFFF) {
-                env_push(&step_ctx, step_binder, step_input);
-            }
+            if (step_node && step_node->kind == NK_PRIM) {
+                /* Prim step: apply opcode directly to (acc, elem) */
+                iris_value_t *prim_args[2] = { acc, elem };
+                acc = iris_eval_prim(step_node->payload.prim_opcode,
+                                     prim_args, 2, ctx->self_program);
+            } else if (step_node && step_node->kind == NK_LAMBDA) {
+                /* Lambda step: bind param to (acc, elem), eval body */
+                uint32_t binder = step_node->payload.lambda.binder_id;
+                uint64_t body_id;
+                if (find_continuation(ctx->graph, step_id, &body_id)) {
+                    iris_value_t *pair_elems[2] = { acc, elem };
+                    iris_value_t *pair = iris_tuple(pair_elems, 2);
 
-            iris_value_t *result = eval_node(&step_ctx, step_body);
-            ctx->steps = step_ctx.steps;
+                    eval_ctx_t step_ctx = *ctx;
+                    step_ctx.depth = ctx->depth + 1;
+                    step_ctx.memo_count = 0;
+                    env_push(&step_ctx, binder, pair);
 
-            /* If result is a tuple (tag, value), check for termination */
-            if (result->tag == IRIS_TAGGED) {
-                /* Tagged(0, payload) = continue, Tagged(1, payload) = done */
-                if (result->tagged.tag_index == 1) {
-                    return result->tagged.payload;
+                    acc = eval_node(&step_ctx, body_id);
+                    ctx->steps = step_ctx.steps;
+                } else {
+                    /* Lambda without continuation — eval it as a function */
+                    iris_value_t *pair_elems[2] = { acc, elem };
+                    iris_value_t *pair = iris_tuple(pair_elems, 2);
+                    eval_ctx_t step_ctx = *ctx;
+                    step_ctx.input = pair;
+                    step_ctx.depth = ctx->depth + 1;
+                    step_ctx.memo_count = 0;
+                    acc = eval_node(&step_ctx, step_id);
+                    ctx->steps = step_ctx.steps;
                 }
-                acc = result->tagged.payload;
-            } else if (result->tag == IRIS_TUPLE && result->tuple.len == 2) {
-                /* Convention: (0, val) = continue, (1, val) = done */
-                iris_value_t *tag_val = result->tuple.elems[0];
-                if (tag_val && tag_val->tag == IRIS_BOOL && tag_val->b) {
-                    return result->tuple.elems[1];
-                }
-                if (tag_val && tag_val->tag == IRIS_INT && tag_val->i != 0) {
-                    return result->tuple.elems[1];
-                }
-                acc = result->tuple.elems[1];
             } else {
-                return result;
+                /* Unknown step function — try evaluating it as a graph */
+                iris_value_t *pair_elems[2] = { acc, elem };
+                iris_value_t *pair = iris_tuple(pair_elems, 2);
+                eval_ctx_t step_ctx = *ctx;
+                step_ctx.input = pair;
+                step_ctx.depth = ctx->depth + 1;
+                step_ctx.memo_count = 0;
+                acc = eval_node(&step_ctx, step_id);
+                ctx->steps = step_ctx.steps;
             }
         }
         return acc;
