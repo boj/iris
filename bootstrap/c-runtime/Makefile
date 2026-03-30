@@ -2,7 +2,7 @@ CC      ?= gcc
 CFLAGS  := -O2 -Wall -Wextra -Wno-unused-parameter -std=c11
 LDFLAGS := -lm
 
-SRCS := main.c iris_graph.c iris_prims.c iris_eval.c iris_interp_compiled.c
+SRCS := main.c iris_graph.c iris_prims.c iris_eval.c iris_interp_compiled.c iris_json_write.c
 OBJS := $(SRCS:.c=.o)
 BIN  := iris-stage0-c
 

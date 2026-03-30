@@ -724,9 +724,147 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
         case 0xF0: /* list_len */
             return (nargs >= 1) ? iris_list_len(args[0]) : iris_int(0);
 
-        /* Graph construction */
+        /* Graph construction & mutation */
         case 0xED: /* graph_new */
             return iris_program(iris_graph_raw_alloc());
+
+        case 0x84: { /* graph_add_node_rt(program, kind) → node_id */
+            if (nargs < 2) return iris_int(-1);
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return iris_int(-1);
+            uint8_t nk = (uint8_t)iris_as_int(args[1]);
+            /* Generate a unique node ID from node count + salt */
+            uint64_t nid = (uint64_t)g->node_count + 1000;
+            iris_node_t node = {0};
+            node.id = nid;
+            node.kind = nk;
+            iris_graph_raw_add_node(g, node);
+            return iris_int((int64_t)nid);
+        }
+
+        case 0x85: { /* graph_connect(program, src, tgt) → program */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            uint64_t src = (uint64_t)iris_as_int(args[1]);
+            uint64_t tgt = (uint64_t)iris_as_int(args[2]);
+            /* Find existing edge count from src to determine port */
+            uint8_t port = 0;
+            for (uint32_t i = 0; i < g->edge_count; i++) {
+                if (g->edges[i].source == src && g->edges[i].label == EL_ARGUMENT) port++;
+            }
+            iris_edge_t e = { .source = src, .target = tgt, .port = port, .label = EL_ARGUMENT };
+            iris_graph_raw_add_edge(g, e);
+            return args[0];
+        }
+
+        case 0x86: { /* graph_set_prim_op(program, node_id, opcode) → program */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            iris_node_t *n = iris_graph_raw_find_node(g, (uint64_t)iris_as_int(args[1]));
+            if (n) n->payload.prim_opcode = (uint8_t)iris_as_int(args[2]);
+            return args[0];
+        }
+
+        case 0x87: { /* graph_disconnect(program, src, tgt) → program */
+            /* Simplified: remove first edge from src to tgt */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            uint64_t src = (uint64_t)iris_as_int(args[1]);
+            uint64_t tgt = (uint64_t)iris_as_int(args[2]);
+            for (uint32_t i = 0; i < g->edge_count; i++) {
+                if (g->edges[i].source == src && g->edges[i].target == tgt) {
+                    g->edges[i] = g->edges[g->edge_count - 1];
+                    g->edge_count--;
+                    break;
+                }
+            }
+            return args[0];
+        }
+
+        case 0x88: { /* graph_replace_subtree(program, old, new) → program */
+            /* Replace all edges pointing to old_id with new_id */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            uint64_t old_id = (uint64_t)iris_as_int(args[1]);
+            uint64_t new_id = (uint64_t)iris_as_int(args[2]);
+            for (uint32_t i = 0; i < g->edge_count; i++) {
+                if (g->edges[i].target == old_id) g->edges[i].target = new_id;
+            }
+            if (g->root == old_id) g->root = new_id;
+            return args[0];
+        }
+
+        case 0x8B: { /* graph_add_guard_rt(program, pred, body, fallback) → node_id */
+            if (nargs < 4) return iris_int(-1);
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return iris_int(-1);
+            uint64_t nid = (uint64_t)g->node_count + 1000;
+            iris_node_t node = {0};
+            node.id = nid;
+            node.kind = NK_GUARD;
+            node.payload.guard.predicate_node = (uint64_t)iris_as_int(args[1]);
+            node.payload.guard.body_node = (uint64_t)iris_as_int(args[2]);
+            node.payload.guard.fallback_node = (uint64_t)iris_as_int(args[3]);
+            iris_graph_raw_add_node(g, node);
+            return iris_int((int64_t)nid);
+        }
+
+        case 0x8C: { /* graph_add_ref_rt(program, target_node) → node_id */
+            if (nargs < 2) return iris_int(-1);
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return iris_int(-1);
+            uint64_t nid = (uint64_t)g->node_count + 1000;
+            iris_node_t node = {0};
+            node.id = nid;
+            node.kind = NK_REF;
+            iris_graph_raw_add_node(g, node);
+            iris_edge_t e = { .source = nid, .target = (uint64_t)iris_as_int(args[1]), .port = 0, .label = EL_ARGUMENT };
+            iris_graph_raw_add_edge(g, e);
+            return iris_int((int64_t)nid);
+        }
+
+        case 0x8D: { /* graph_set_cost(program, node_id, cost) → program */
+            /* Cost is stored as node metadata — we don't track it in C */
+            return (nargs >= 1) ? args[0] : iris_unit();
+        }
+
+        case 0x96: { /* graph_set_node_type(program, node_id, type_id) → program */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            iris_node_t *n = iris_graph_raw_find_node(g, (uint64_t)iris_as_int(args[1]));
+            if (n) n->type_sig = (uint64_t)iris_as_int(args[2]);
+            return args[0];
+        }
+
+        case 0xF1: { /* graph_set_lit_value(program, node_id, value) → program */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            iris_node_t *n = iris_graph_raw_find_node(g, (uint64_t)iris_as_int(args[1]));
+            if (n && n->kind == NK_LIT) {
+                int64_t val = iris_as_int(args[2]);
+                if (!n->payload.lit.value) {
+                    n->payload.lit.value = arena_alloc(8);
+                    n->payload.lit.value_len = 8;
+                }
+                memcpy(n->payload.lit.value, &val, 8);
+            }
+            return args[0];
+        }
+
+        case 0xF2: { /* graph_set_field_index(program, node_id, idx) → program */
+            if (nargs < 3) return args[0];
+            iris_graph_t *g = (args[0] && args[0]->tag == IRIS_PROGRAM) ? args[0]->graph : NULL;
+            if (!g) return args[0];
+            iris_node_t *n = iris_graph_raw_find_node(g, (uint64_t)iris_as_int(args[1]));
+            if (n && n->kind == NK_PROJECT) n->payload.field_index = (uint16_t)iris_as_int(args[2]);
+            return args[0];
+        }
 
         /* String operations */
         case 0xB0: return prim_str_len(args, nargs);

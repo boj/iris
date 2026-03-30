@@ -35,16 +35,41 @@
  * Evaluation context (threaded through recursive calls)
  * ----------------------------------------------------------------------- */
 
+/* Simple node memoization: cache evaluated results for DAG sharing */
+#define MEMO_CAP 4096
+typedef struct {
+    uint64_t       key;
+    iris_value_t  *val;
+} memo_entry_t;
+
 typedef struct {
     iris_graph_t   *graph;
     iris_value_t   *input;
     iris_value_t   *self_program;   /* Value::Program(self) for opcode 0x80 */
     uint32_t        depth;
     uint64_t        steps;
+    memo_entry_t    memo[MEMO_CAP];
+    uint32_t        memo_count;
 } eval_ctx_t;
 
-/* Forward declaration */
+static iris_value_t *memo_get(eval_ctx_t *ctx, uint64_t node_id) {
+    for (uint32_t i = 0; i < ctx->memo_count; i++) {
+        if (ctx->memo[i].key == node_id) return ctx->memo[i].val;
+    }
+    return NULL;
+}
+
+static void memo_put(eval_ctx_t *ctx, uint64_t node_id, iris_value_t *val) {
+    if (ctx->memo_count < MEMO_CAP) {
+        ctx->memo[ctx->memo_count].key = node_id;
+        ctx->memo[ctx->memo_count].val = val;
+        ctx->memo_count++;
+    }
+}
+
+/* Forward declarations */
 static iris_value_t *eval_node(eval_ctx_t *ctx, uint64_t node_id);
+static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id);
 
 /* -----------------------------------------------------------------------
  * Collect argument targets sorted by port
@@ -95,6 +120,23 @@ static iris_value_t *eval_node(eval_ctx_t *ctx, uint64_t node_id) {
         return iris_unit();
     }
     ctx->steps++;
+
+    /* Memoize: return cached result for shared DAG nodes.
+     * Skip Guard nodes — they have short-circuit semantics. */
+    iris_node_t *peek = iris_graph_raw_find_node(ctx->graph, node_id);
+    if (peek && peek->kind != NK_GUARD) {
+        iris_value_t *cached = memo_get(ctx, node_id);
+        if (cached) return cached;
+    }
+
+    iris_value_t *_memo_result = eval_node_inner(ctx, node_id);
+    if (peek && peek->kind != NK_GUARD) {
+        memo_put(ctx, node_id, _memo_result);
+    }
+    return _memo_result;
+}
+
+static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
 
     iris_node_t *node = iris_graph_raw_find_node(ctx->graph, node_id);
     if (!node) {
@@ -481,13 +523,13 @@ iris_value_t *iris_eval_graph(iris_graph_t *g, iris_value_t *input) {
 
     iris_value_t *self_prog = iris_program(g);
 
-    eval_ctx_t ctx = {
-        .graph        = g,
-        .input        = input ? input : iris_unit(),
-        .self_program = self_prog,
-        .depth        = 0,
-        .steps        = 0,
-    };
+    eval_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.graph        = g;
+    ctx.input        = input ? input : iris_unit();
+    ctx.self_program = self_prog;
+    ctx.depth        = 0;
+    ctx.steps        = 0;
 
     return eval_node(&ctx, g->root);
 }
@@ -498,13 +540,13 @@ iris_value_t *iris_eval_node(iris_graph_t *g, uint64_t node_id,
 
     iris_value_t *self_prog = iris_program(g);
 
-    eval_ctx_t ctx = {
-        .graph        = g,
-        .input        = input ? input : iris_unit(),
-        .self_program = self_prog,
-        .depth        = depth,
-        .steps        = 0,
-    };
+    eval_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.graph        = g;
+    ctx.input        = input ? input : iris_unit();
+    ctx.self_program = self_prog;
+    ctx.depth        = depth;
+    ctx.steps        = 0;
 
     return eval_node(&ctx, node_id);
 }

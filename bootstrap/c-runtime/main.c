@@ -121,10 +121,21 @@ int main(int argc, char **argv) {
         if (!low) { fprintf(stderr, "error: cannot load lowerer.json\n"); return 1; }
         iris_value_t *graph_val = iris_eval_graph(low, ast);
 
-        /* Print the resulting graph as JSON */
-        /* For now, just print the value representation */
-        print_value(graph_val, 0);
-        printf("\n");
+        /* The lowerer returns (program, metadata). Extract the program. */
+        iris_value_t *compiled = graph_val;
+        if (compiled && compiled->tag == IRIS_TUPLE && compiled->tuple.len >= 1) {
+            compiled = compiled->tuple.elems[0];
+        }
+        if (!compiled || compiled->tag != IRIS_PROGRAM || !compiled->graph) {
+            fprintf(stderr, "error: lowerer did not produce a Program value\n");
+            print_value(graph_val, 0);
+            fprintf(stderr, "\n");
+            return 1;
+        }
+
+        /* Serialize the compiled graph to JSON on stdout */
+        extern void iris_graph_write_json(FILE *fp, const iris_graph_t *g);
+        iris_graph_write_json(stdout, compiled->graph);
         return 0;
     }
 

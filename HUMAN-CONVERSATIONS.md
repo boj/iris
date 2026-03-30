@@ -637,3 +637,12 @@
 
 **Assistant:** Actually, let me think about what stage1 really is. The C binary is the seed evaluator — it loads a JSON graph and evaluates it. Stage1 is the IRIS program that becomes the "operating system" — it handles CLI arguments, file loading, compilation, and evaluation. All logic in IRIS, running on the C seed.
 
+
+---
+
+**2026-03-29 20:36**
+
+**Human:** Let's build a self-compiling native binary in IRIS
+
+**Assistant:** Here's where we are on the self-compilation loop:
+
