@@ -106,28 +106,32 @@ int main(int argc, char **argv) {
         iris_value_t *src_val = iris_string(source, (uint32_t)fsize);
         free(source);
 
-        /* Load and run tokenizer */
+        /* Load and run tokenizer (1 param: source string)
+         * Wrap in 1-tuple so InputRef(0) = source string */
         iris_graph_t *tok = iris_graph_load_json("bootstrap/tokenizer.json");
         if (!tok) { fprintf(stderr, "error: cannot load tokenizer.json\n"); return 1; }
-        iris_value_t *tokens = iris_eval_graph(tok, src_val);
+        iris_value_t *tok_elems[1] = { src_val };
+        iris_value_t *tokens = iris_eval_graph(tok, iris_tuple(tok_elems, 1));
         fprintf(stderr, "tokens: tag=%d", tokens ? tokens->tag : -1);
         if (tokens && tokens->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", tokens->tuple.len);
         fprintf(stderr, "\n");
 
-        /* Load and run parser (expects (tokens, source_string) as input) */
+        /* Load and run parser (2 params: tokens, source_string)
+         * Pass as 2-tuple so InputRef(0)=tokens, InputRef(1)=source */
         iris_graph_t *par = iris_graph_load_json("bootstrap/parser.json");
         if (!par) { fprintf(stderr, "error: cannot load parser.json\n"); return 1; }
         iris_value_t *parser_elems[2] = { tokens, src_val };
-        iris_value_t *parser_input = iris_tuple(parser_elems, 2);
-        iris_value_t *ast = iris_eval_graph(par, parser_input);
+        iris_value_t *ast = iris_eval_graph(par, iris_tuple(parser_elems, 2));
         fprintf(stderr, "ast: tag=%d", ast ? ast->tag : -1);
         if (ast && ast->tag == IRIS_TUPLE) fprintf(stderr, " len=%u", ast->tuple.len);
         fprintf(stderr, "\n");
 
-        /* Load and run lowerer */
+        /* Load and run lowerer (1 param: AST)
+         * Wrap in 1-tuple so InputRef(0) = AST */
         iris_graph_t *low = iris_graph_load_json("bootstrap/lowerer.json");
         if (!low) { fprintf(stderr, "error: cannot load lowerer.json\n"); return 1; }
-        iris_value_t *graph_val = iris_eval_graph(low, ast);
+        iris_value_t *low_elems[1] = { ast };
+        iris_value_t *graph_val = iris_eval_graph(low, iris_tuple(low_elems, 1));
         fprintf(stderr, "lowerer: tag=%d", graph_val ? graph_val->tag : -1);
         if (graph_val && graph_val->tag == IRIS_TUPLE) {
             fprintf(stderr, " len=%u", graph_val->tuple.len);

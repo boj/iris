@@ -274,6 +274,8 @@ static iris_value_t *eval_node_inner(eval_ctx_t *ctx, uint64_t node_id) {
         if (pred->tag == IRIS_BOOL)     cond = pred->b;
         else if (pred->tag == IRIS_INT) cond = (pred->i != 0);
 
+        /* Debug trace removed */
+
         ctx->depth++;
         iris_value_t *result;
         if (cond) {
@@ -670,18 +672,11 @@ iris_value_t *iris_eval_graph(iris_graph_t *g, iris_value_t *input) {
 
     iris_value_t *self_prog = iris_program(g);
 
-    /* Wrap single-value input in a 1-element tuple.
-     * This matches the Rust evaluator convention: evaluate(graph, &[val])
-     * where InputRef(0) returns inputs[0] = val (the whole value).
-     * Without wrapping, a tuple input like tokens=(t1,t2,...) would be
-     * decomposed by InputRef(0) → tokens[0] instead of → tokens. */
+    /* The input is passed directly to the graph as the evaluation context.
+     * InputRef(N) extracts element N from a tuple input, or returns the
+     * scalar value directly for InputRef(0).
+     * Callers are responsible for the wrapping convention. */
     iris_value_t *wrapped = input ? input : iris_unit();
-    if (wrapped->tag != IRIS_TUPLE || wrapped->tuple.len != 1) {
-        /* Not already a 1-tuple — wrap it */
-        iris_value_t **elems = malloc(sizeof(iris_value_t *));
-        elems[0] = wrapped;
-        wrapped = iris_tuple(elems, 1);
-    }
 
     eval_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
