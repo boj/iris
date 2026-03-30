@@ -747,3 +747,59 @@ iris_value_t *iris_eval_prim(uint8_t opcode, iris_value_t **args, uint32_t nargs
             return iris_unit();
     }
 }
+
+/* -----------------------------------------------------------------------
+ * Named wrappers (called by generated iris_interp_compiled.c)
+ * ----------------------------------------------------------------------- */
+
+#define WRAP2(name, op) \
+    iris_value_t *name(iris_value_t *a, iris_value_t *b) { \
+        iris_value_t *args[2] = {a, b}; \
+        return iris_eval_prim(op, args, 2, NULL); \
+    }
+#define WRAP1(name, op) \
+    iris_value_t *name(iris_value_t *a) { \
+        iris_value_t *args[1] = {a}; \
+        return iris_eval_prim(op, args, 1, NULL); \
+    }
+
+WRAP2(iris_add, 0x00)
+WRAP2(iris_sub, 0x01)
+WRAP2(iris_mul, 0x02)
+WRAP2(iris_div, 0x03)
+WRAP2(iris_mod, 0x04)
+WRAP1(iris_neg, 0x05)
+WRAP1(iris_abs_val, 0x06)
+WRAP2(iris_min, 0x07)
+WRAP2(iris_max, 0x08)
+WRAP2(iris_pow, 0x09)
+
+WRAP2(iris_eq, 0x20)
+WRAP2(iris_ne, 0x21)
+WRAP2(iris_lt, 0x22)
+WRAP2(iris_gt, 0x23)
+WRAP2(iris_le, 0x24)
+WRAP2(iris_ge, 0x25)
+
+WRAP2(iris_and, 0x26)
+WRAP2(iris_or,  0x27)
+WRAP1(iris_not, 0x28)
+
+WRAP2(iris_str_concat, 0xB1)
+WRAP1(iris_str_len, 0xB0)
+WRAP1(iris_str_to_int, 0xB6)
+WRAP1(iris_int_to_string, 0xB7)
+WRAP2(iris_list_append, 0xC5)
+
+iris_value_t *iris_tuple_get(iris_value_t *tup, iris_value_t *idx) {
+    iris_value_t *args[2] = {tup, idx};
+    return iris_eval_prim(0xD2, args, 2, NULL);
+}
+
+iris_value_t *iris_tuple_len_val(iris_value_t *v) {
+    iris_value_t *args[1] = {v};
+    return iris_eval_prim(0xD6, args, 1, NULL);
+}
+
+#undef WRAP2
+#undef WRAP1

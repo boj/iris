@@ -131,6 +131,54 @@ iris_value_t *iris_list_len(iris_value_t *v);
 iris_value_t *iris_list_nth(iris_value_t *list, iris_value_t *idx);
 
 /* -----------------------------------------------------------------------
+ * Truthiness + named prim wrappers (called by compiled interpreter)
+ * ----------------------------------------------------------------------- */
+
+static inline bool iris_is_truthy(iris_value_t *v) {
+    if (!v) return false;
+    if (v->tag == IRIS_INT)  return v->i != 0;
+    if (v->tag == IRIS_BOOL) return v->b;
+    return true; /* non-null, non-zero = truthy */
+}
+
+/* Arithmetic */
+iris_value_t *iris_add(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_sub(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_mul(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_div(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_mod(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_neg(iris_value_t *a);
+iris_value_t *iris_abs_val(iris_value_t *a);
+iris_value_t *iris_min(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_max(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_pow(iris_value_t *a, iris_value_t *b);
+
+/* Comparison */
+iris_value_t *iris_eq(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_ne(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_lt(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_gt(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_le(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_ge(iris_value_t *a, iris_value_t *b);
+
+/* Logic */
+iris_value_t *iris_and(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_or(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_not(iris_value_t *a);
+
+/* String */
+iris_value_t *iris_str_concat(iris_value_t *a, iris_value_t *b);
+iris_value_t *iris_str_len(iris_value_t *s);
+iris_value_t *iris_str_to_int(iris_value_t *s);
+iris_value_t *iris_int_to_string(iris_value_t *v);
+iris_value_t *iris_list_append(iris_value_t *list, iris_value_t *elem);
+iris_value_t *iris_tuple_get(iris_value_t *tup, iris_value_t *idx);
+iris_value_t *iris_tuple_len_val(iris_value_t *v);
+
+/* Compiled interpreter entry point (generated) */
+iris_value_t *iris_interpret(iris_value_t *program, iris_value_t *inputs);
+
+/* -----------------------------------------------------------------------
  * Prim dispatch (called by evaluator)
  * ----------------------------------------------------------------------- */
 
