@@ -60,6 +60,11 @@ name = "iris-lsp"
 path = "src/bin/iris-lsp.rs"
 required-features = ["syntax"]
 
+[[bin]]
+name = "iris-c-codegen"
+path = "src/bin/iris-c-codegen.rs"
+required-features = ["syntax"]
+
 [[test]]
 name = "test_bootstrap_effects"
 path = "tests/test_bootstrap_effects.rs"
