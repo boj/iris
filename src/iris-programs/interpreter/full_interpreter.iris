@@ -46,13 +46,15 @@
 -- - TypeApp (kind=15): transparent wrapper, evaluate body
 -- - Apply+Lambda (kind=1): bind argument via graph_eval_env
 -- - Let (kind=3): bind value and evaluate continuation via graph_eval_env
--- - Tuple (kind=11): evaluate all children, return as tuple
+-- - Tuple (kind=11): evaluate all children (up to 16), return as tuple via list_append
 -- - Match (kind=4): evaluate scrutinee, dispatch on tag to correct arm
--- - Fold (kind=8): evaluate base/collection, iterate with Prim step (up to 8 elements)
+-- - Fold (kind=8): evaluate base/collection, iterate with Prim step (up to 16 elements)
+--                   or Lambda step (up to 16 elements via graph_eval_env)
 -- - Unfold (kind=9): generate sequence from seed with Prim step (up to 8 elements)
 -- - Inject (kind=12): get tag via graph_get_tag, evaluate payload, wrap with value_make_tagged
 -- - Project (kind=13): get field_index via graph_get_field_index, evaluate tuple, extract via tuple_get
--- - Effect (kind=10): get effect_tag via graph_get_effect_tag, evaluate args, dispatch via perform_effect
+-- - Effect (kind=10): get effect_tag via graph_get_effect_tag, evaluate all args (up to 8),
+--                      dispatch via perform_effect with tuple packing for 2+ args
 -- - LetRec (kind=16): get binder via graph_get_binder, bind value, evaluate body
 --
 -- Delegated to graph_eval (require Rust-side infrastructure):
@@ -312,7 +314,10 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
   -- Children via graph_outgoing: [base(port 0), step(port 1), collection(port 2)]
   -- The step function is either a Prim node (opcode for binop) or a Lambda.
   -- We evaluate base and collection, then iterate: for each element, apply step(acc, elem).
-  -- For collections larger than 8 elements, we fall back to graph_eval.
+  -- Prim step: native handling for up to 16 elements, graph_eval fallback for larger.
+  -- Lambda step: native handling using graph_eval_env to apply the lambda body
+  --   with its binder bound to (acc, elem) tuples, up to 16 elements.
+  -- Other step kinds: delegate to graph_eval.
   else if kind == 8 then
     let fold_children = graph_outgoing program root in
     let fold_nch = list_len fold_children in
@@ -334,12 +339,10 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
         let coll_len = tuple_len coll_val in
         -- For empty collection, return base
         if coll_len == 0 then acc0
-        -- For Prim step function: apply the binop natively for up to 8 elements
+        -- For Prim step function: apply the binop natively for up to 16 elements
         else if step_kind == 0 then
           let step_op = graph_get_prim_op program step_id in
-          -- Helper: apply a single step of fold with a prim binop
-          -- We unroll up to 8 iterations. For larger, fall back to graph_eval.
-          if coll_len > 8 then graph_eval program inputs
+          if coll_len > 16 then graph_eval program inputs
           else
             let e0 = tuple_get coll_val 0 in
             let a1 = if step_op == 0 then acc0 + e0
@@ -419,8 +422,161 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
                             else if step_op == 8 then (if a7 > e7 then a7 else e7)
                             else graph_eval program inputs
                           in
-                          a8
-        -- Lambda step or other: fall back to graph_eval for now
+                          if coll_len == 8 then a8
+                          else
+                            -- Second block: elements 8..15
+                            let e8 = tuple_get coll_val 8 in
+                            let a9 = if step_op == 0 then a8 + e8
+                              else if step_op == 1 then a8 - e8
+                              else if step_op == 2 then a8 * e8
+                              else if step_op == 7 then (if a8 < e8 then a8 else e8)
+                              else if step_op == 8 then (if a8 > e8 then a8 else e8)
+                              else graph_eval program inputs
+                            in
+                            if coll_len == 9 then a9
+                            else
+                              let e9 = tuple_get coll_val 9 in
+                              let a10 = if step_op == 0 then a9 + e9
+                                else if step_op == 1 then a9 - e9
+                                else if step_op == 2 then a9 * e9
+                                else if step_op == 7 then (if a9 < e9 then a9 else e9)
+                                else if step_op == 8 then (if a9 > e9 then a9 else e9)
+                                else graph_eval program inputs
+                              in
+                              if coll_len == 10 then a10
+                              else
+                                let e10 = tuple_get coll_val 10 in
+                                let a11 = if step_op == 0 then a10 + e10
+                                  else if step_op == 1 then a10 - e10
+                                  else if step_op == 2 then a10 * e10
+                                  else if step_op == 7 then (if a10 < e10 then a10 else e10)
+                                  else if step_op == 8 then (if a10 > e10 then a10 else e10)
+                                  else graph_eval program inputs
+                                in
+                                if coll_len == 11 then a11
+                                else
+                                  let e11 = tuple_get coll_val 11 in
+                                  let a12 = if step_op == 0 then a11 + e11
+                                    else if step_op == 1 then a11 - e11
+                                    else if step_op == 2 then a11 * e11
+                                    else if step_op == 7 then (if a11 < e11 then a11 else e11)
+                                    else if step_op == 8 then (if a11 > e11 then a11 else e11)
+                                    else graph_eval program inputs
+                                  in
+                                  if coll_len == 12 then a12
+                                  else
+                                    let e12 = tuple_get coll_val 12 in
+                                    let a13 = if step_op == 0 then a12 + e12
+                                      else if step_op == 1 then a12 - e12
+                                      else if step_op == 2 then a12 * e12
+                                      else if step_op == 7 then (if a12 < e12 then a12 else e12)
+                                      else if step_op == 8 then (if a12 > e12 then a12 else e12)
+                                      else graph_eval program inputs
+                                    in
+                                    if coll_len == 13 then a13
+                                    else
+                                      let e13 = tuple_get coll_val 13 in
+                                      let a14 = if step_op == 0 then a13 + e13
+                                        else if step_op == 1 then a13 - e13
+                                        else if step_op == 2 then a13 * e13
+                                        else if step_op == 7 then (if a13 < e13 then a13 else e13)
+                                        else if step_op == 8 then (if a13 > e13 then a13 else e13)
+                                        else graph_eval program inputs
+                                      in
+                                      if coll_len == 14 then a14
+                                      else
+                                        let e14 = tuple_get coll_val 14 in
+                                        let a15 = if step_op == 0 then a14 + e14
+                                          else if step_op == 1 then a14 - e14
+                                          else if step_op == 2 then a14 * e14
+                                          else if step_op == 7 then (if a14 < e14 then a14 else e14)
+                                          else if step_op == 8 then (if a14 > e14 then a14 else e14)
+                                          else graph_eval program inputs
+                                        in
+                                        if coll_len == 15 then a15
+                                        else
+                                          let e15 = tuple_get coll_val 15 in
+                                          if step_op == 0 then a15 + e15
+                                          else if step_op == 1 then a15 - e15
+                                          else if step_op == 2 then a15 * e15
+                                          else if step_op == 7 then (if a15 < e15 then a15 else e15)
+                                          else if step_op == 8 then (if a15 > e15 then a15 else e15)
+                                          else graph_eval program inputs
+        -- Lambda step (kind=2): apply step function via graph_eval_env
+        -- The lambda takes a single tuple (acc, elem) argument. For each element,
+        -- we bind the lambda's binder to the (acc, elem) pair and evaluate the body.
+        else if step_kind == 2 then
+          let lam_binder = graph_get_binder program step_id in
+          let lam_body_id = graph_edge_target program step_id 0 3 in
+          let lam_body_id2 = if lam_body_id == 0 - 1 then graph_edge_target program step_id 0 0 else lam_body_id in
+          if lam_binder == 0 - 1 then graph_eval program inputs
+          else if lam_body_id2 == 0 - 1 then graph_eval program inputs
+          else if coll_len > 16 then graph_eval program inputs
+          else
+            let body_prog = graph_set_root program lam_body_id2 in
+            let le0 = tuple_get coll_val 0 in
+            let la1 = graph_eval_env body_prog lam_binder (acc0, le0) in
+            if coll_len == 1 then la1
+            else
+              let le1 = tuple_get coll_val 1 in
+              let la2 = graph_eval_env body_prog lam_binder (la1, le1) in
+              if coll_len == 2 then la2
+              else
+                let le2 = tuple_get coll_val 2 in
+                let la3 = graph_eval_env body_prog lam_binder (la2, le2) in
+                if coll_len == 3 then la3
+                else
+                  let le3 = tuple_get coll_val 3 in
+                  let la4 = graph_eval_env body_prog lam_binder (la3, le3) in
+                  if coll_len == 4 then la4
+                  else
+                    let le4 = tuple_get coll_val 4 in
+                    let la5 = graph_eval_env body_prog lam_binder (la4, le4) in
+                    if coll_len == 5 then la5
+                    else
+                      let le5 = tuple_get coll_val 5 in
+                      let la6 = graph_eval_env body_prog lam_binder (la5, le5) in
+                      if coll_len == 6 then la6
+                      else
+                        let le6 = tuple_get coll_val 6 in
+                        let la7 = graph_eval_env body_prog lam_binder (la6, le6) in
+                        if coll_len == 7 then la7
+                        else
+                          let le7 = tuple_get coll_val 7 in
+                          let la8 = graph_eval_env body_prog lam_binder (la7, le7) in
+                          if coll_len == 8 then la8
+                          else
+                            let le8 = tuple_get coll_val 8 in
+                            let la9 = graph_eval_env body_prog lam_binder (la8, le8) in
+                            if coll_len == 9 then la9
+                            else
+                              let le9 = tuple_get coll_val 9 in
+                              let la10 = graph_eval_env body_prog lam_binder (la9, le9) in
+                              if coll_len == 10 then la10
+                              else
+                                let le10 = tuple_get coll_val 10 in
+                                let la11 = graph_eval_env body_prog lam_binder (la10, le10) in
+                                if coll_len == 11 then la11
+                                else
+                                  let le11 = tuple_get coll_val 11 in
+                                  let la12 = graph_eval_env body_prog lam_binder (la11, le11) in
+                                  if coll_len == 12 then la12
+                                  else
+                                    let le12 = tuple_get coll_val 12 in
+                                    let la13 = graph_eval_env body_prog lam_binder (la12, le12) in
+                                    if coll_len == 13 then la13
+                                    else
+                                      let le13 = tuple_get coll_val 13 in
+                                      let la14 = graph_eval_env body_prog lam_binder (la13, le13) in
+                                      if coll_len == 14 then la14
+                                      else
+                                        let le14 = tuple_get coll_val 14 in
+                                        let la15 = graph_eval_env body_prog lam_binder (la14, le14) in
+                                        if coll_len == 15 then la15
+                                        else
+                                          let le15 = tuple_get coll_val 15 in
+                                          graph_eval_env body_prog lam_binder (la15, le15)
+        -- Other step kind: delegate to Rust evaluator
         else graph_eval program inputs
   -- Unfold (kind=9): anamorphism -- dual of Fold, generates a sequence from a seed.
   -- Children via graph_outgoing: [seed(port 0), step(port 1), termination(port 2), bound(port 3)]
@@ -524,7 +680,9 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
           else graph_eval program inputs
   -- Effect (kind=10): side effect dispatch
   -- Evaluate argument children, read effect_tag from node, call perform_effect.
-  -- For 0-arg and 1-arg effects, dispatch natively. For 2+ args, fall back.
+  -- For 0-arg effects: perform_effect tag 0
+  -- For 1-arg effects: perform_effect tag val
+  -- For 2+ arg effects: evaluate all args, pack into a tuple, pass to perform_effect.
   else if kind == 10 then
     let eff_tag = graph_get_effect_tag program root in
     if eff_tag == 0 - 1 then graph_eval program inputs
@@ -538,38 +696,178 @@ let full_interpret program inputs : Program -> Tuple -> Value [cost: Unknown] =
         let ea0_sub = graph_set_root program ea0_id in
         let ea0_val = graph_eval ea0_sub inputs in
         perform_effect eff_tag ea0_val
-      -- 2+ args: fall back to Rust evaluator (perform_effect is arity-2 in syntax)
-      else graph_eval program inputs
+      else if eff_nargs == 2 then
+        let ea0_id = list_nth eff_args 0 in
+        let ea1_id = list_nth eff_args 1 in
+        let ea0_sub = graph_set_root program ea0_id in
+        let ea1_sub = graph_set_root program ea1_id in
+        let ea0_val = graph_eval ea0_sub inputs in
+        let ea1_val = graph_eval ea1_sub inputs in
+        perform_effect eff_tag (ea0_val, ea1_val)
+      else if eff_nargs == 3 then
+        let ea0_id = list_nth eff_args 0 in
+        let ea1_id = list_nth eff_args 1 in
+        let ea2_id = list_nth eff_args 2 in
+        let ea0_sub = graph_set_root program ea0_id in
+        let ea1_sub = graph_set_root program ea1_id in
+        let ea2_sub = graph_set_root program ea2_id in
+        let ea0_val = graph_eval ea0_sub inputs in
+        let ea1_val = graph_eval ea1_sub inputs in
+        let ea2_val = graph_eval ea2_sub inputs in
+        perform_effect eff_tag (ea0_val, ea1_val, ea2_val)
+      else
+        -- 4+ args: evaluate all and pack into tuple via list_append
+        let ea0_id = list_nth eff_args 0 in
+        let ea0_sub = graph_set_root program ea0_id in
+        let ea0_val = graph_eval ea0_sub inputs in
+        let eff_tup = (ea0_val,) in
+        let ea1_id = list_nth eff_args 1 in
+        let ea1_sub = graph_set_root program ea1_id in
+        let ea1_val = graph_eval ea1_sub inputs in
+        let eff_tup = list_append eff_tup ea1_val in
+        let ea2_id = list_nth eff_args 2 in
+        let ea2_sub = graph_set_root program ea2_id in
+        let ea2_val = graph_eval ea2_sub inputs in
+        let eff_tup = list_append eff_tup ea2_val in
+        let ea3_id = list_nth eff_args 3 in
+        let ea3_sub = graph_set_root program ea3_id in
+        let ea3_val = graph_eval ea3_sub inputs in
+        let eff_tup = list_append eff_tup ea3_val in
+        -- For remaining args (5+), continue appending
+        let eff_tup = if eff_nargs > 4 then
+            let ea4_id = list_nth eff_args 4 in
+            let ea4_sub = graph_set_root program ea4_id in
+            let ea4_val = graph_eval ea4_sub inputs in
+            list_append eff_tup ea4_val
+          else eff_tup
+        in
+        let eff_tup = if eff_nargs > 5 then
+            let ea5_id = list_nth eff_args 5 in
+            let ea5_sub = graph_set_root program ea5_id in
+            let ea5_val = graph_eval ea5_sub inputs in
+            list_append eff_tup ea5_val
+          else eff_tup
+        in
+        let eff_tup = if eff_nargs > 6 then
+            let ea6_id = list_nth eff_args 6 in
+            let ea6_sub = graph_set_root program ea6_id in
+            let ea6_val = graph_eval ea6_sub inputs in
+            list_append eff_tup ea6_val
+          else eff_tup
+        in
+        let eff_tup = if eff_nargs > 7 then
+            let ea7_id = list_nth eff_args 7 in
+            let ea7_sub = graph_set_root program ea7_id in
+            let ea7_val = graph_eval ea7_sub inputs in
+            list_append eff_tup ea7_val
+          else eff_tup
+        in
+        perform_effect eff_tag eff_tup
   -- Tuple (kind=11): product construction -- evaluate all children
+  -- Uses list_append for incremental construction, handles up to 16 elements.
+  -- For >16 elements, falls back to graph_eval.
   else if kind == 11 then
     let tup_args = graph_outgoing program root in
     let tup_len = list_len tup_args in
     if tup_len == 0 then graph_eval program inputs
-    else if tup_len == 1 then
+    else if tup_len > 16 then graph_eval program inputs
+    else
+      -- Evaluate first element and start building tuple
       let t0_id = list_nth tup_args 0 in
       let t0_sub = graph_set_root program t0_id in
       let t0_val = graph_eval t0_sub inputs in
-      (t0_val,)
-    else if tup_len == 2 then
-      let t0_id = list_nth tup_args 0 in
-      let t1_id = list_nth tup_args 1 in
-      let t0_sub = graph_set_root program t0_id in
-      let t1_sub = graph_set_root program t1_id in
-      let t0_val = graph_eval t0_sub inputs in
-      let t1_val = graph_eval t1_sub inputs in
-      (t0_val, t1_val)
-    else if tup_len == 3 then
-      let t0_id = list_nth tup_args 0 in
-      let t1_id = list_nth tup_args 1 in
-      let t2_id = list_nth tup_args 2 in
-      let t0_sub = graph_set_root program t0_id in
-      let t1_sub = graph_set_root program t1_id in
-      let t2_sub = graph_set_root program t2_id in
-      let t0_val = graph_eval t0_sub inputs in
-      let t1_val = graph_eval t1_sub inputs in
-      let t2_val = graph_eval t2_sub inputs in
-      (t0_val, t1_val, t2_val)
-    else graph_eval program inputs
+      let tup_result = (t0_val,) in
+      if tup_len == 1 then tup_result
+      else
+        let t1_id = list_nth tup_args 1 in
+        let t1_sub = graph_set_root program t1_id in
+        let t1_val = graph_eval t1_sub inputs in
+        let tup_result = list_append tup_result t1_val in
+        if tup_len == 2 then tup_result
+        else
+          let t2_id = list_nth tup_args 2 in
+          let t2_sub = graph_set_root program t2_id in
+          let t2_val = graph_eval t2_sub inputs in
+          let tup_result = list_append tup_result t2_val in
+          if tup_len == 3 then tup_result
+          else
+            let t3_id = list_nth tup_args 3 in
+            let t3_sub = graph_set_root program t3_id in
+            let t3_val = graph_eval t3_sub inputs in
+            let tup_result = list_append tup_result t3_val in
+            if tup_len == 4 then tup_result
+            else
+              let t4_id = list_nth tup_args 4 in
+              let t4_sub = graph_set_root program t4_id in
+              let t4_val = graph_eval t4_sub inputs in
+              let tup_result = list_append tup_result t4_val in
+              if tup_len == 5 then tup_result
+              else
+                let t5_id = list_nth tup_args 5 in
+                let t5_sub = graph_set_root program t5_id in
+                let t5_val = graph_eval t5_sub inputs in
+                let tup_result = list_append tup_result t5_val in
+                if tup_len == 6 then tup_result
+                else
+                  let t6_id = list_nth tup_args 6 in
+                  let t6_sub = graph_set_root program t6_id in
+                  let t6_val = graph_eval t6_sub inputs in
+                  let tup_result = list_append tup_result t6_val in
+                  if tup_len == 7 then tup_result
+                  else
+                    let t7_id = list_nth tup_args 7 in
+                    let t7_sub = graph_set_root program t7_id in
+                    let t7_val = graph_eval t7_sub inputs in
+                    let tup_result = list_append tup_result t7_val in
+                    if tup_len == 8 then tup_result
+                    else
+                      -- Second block: elements 8..15
+                      let t8_id = list_nth tup_args 8 in
+                      let t8_sub = graph_set_root program t8_id in
+                      let t8_val = graph_eval t8_sub inputs in
+                      let tup_result = list_append tup_result t8_val in
+                      if tup_len == 9 then tup_result
+                      else
+                        let t9_id = list_nth tup_args 9 in
+                        let t9_sub = graph_set_root program t9_id in
+                        let t9_val = graph_eval t9_sub inputs in
+                        let tup_result = list_append tup_result t9_val in
+                        if tup_len == 10 then tup_result
+                        else
+                          let t10_id = list_nth tup_args 10 in
+                          let t10_sub = graph_set_root program t10_id in
+                          let t10_val = graph_eval t10_sub inputs in
+                          let tup_result = list_append tup_result t10_val in
+                          if tup_len == 11 then tup_result
+                          else
+                            let t11_id = list_nth tup_args 11 in
+                            let t11_sub = graph_set_root program t11_id in
+                            let t11_val = graph_eval t11_sub inputs in
+                            let tup_result = list_append tup_result t11_val in
+                            if tup_len == 12 then tup_result
+                            else
+                              let t12_id = list_nth tup_args 12 in
+                              let t12_sub = graph_set_root program t12_id in
+                              let t12_val = graph_eval t12_sub inputs in
+                              let tup_result = list_append tup_result t12_val in
+                              if tup_len == 13 then tup_result
+                              else
+                                let t13_id = list_nth tup_args 13 in
+                                let t13_sub = graph_set_root program t13_id in
+                                let t13_val = graph_eval t13_sub inputs in
+                                let tup_result = list_append tup_result t13_val in
+                                if tup_len == 14 then tup_result
+                                else
+                                  let t14_id = list_nth tup_args 14 in
+                                  let t14_sub = graph_set_root program t14_id in
+                                  let t14_val = graph_eval t14_sub inputs in
+                                  let tup_result = list_append tup_result t14_val in
+                                  if tup_len == 15 then tup_result
+                                  else
+                                    let t15_id = list_nth tup_args 15 in
+                                    let t15_sub = graph_set_root program t15_id in
+                                    let t15_val = graph_eval t15_sub inputs in
+                                    list_append tup_result t15_val
   -- Inject (kind=12): sum constructor -- wrap payload in Tagged value
   else if kind == 12 then
     let inj_tag = graph_get_tag program root in
