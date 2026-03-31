@@ -151,6 +151,26 @@ pub extern "C" fn rt_prim_dispatch(opcode: i64, a: i64, b: i64, c: i64) -> i64 {
             (Value::String(s), Value::String(from), Value::String(to)) => Value::String(s.replace(from.as_str(), to.as_str())),
             _ => Value::Unit,
         },
+        0xB6 => match &va { // str_to_int
+            Value::String(s) => s.parse::<i64>().map(Value::Int).unwrap_or(Value::Int(0)),
+            _ => Value::Int(0),
+        },
+        0xB7 => match &va { // int_to_string
+            Value::Int(n) => Value::String(n.to_string()),
+            _ => Value::String("0".to_string()),
+        },
+        0xBC => match &va { // str_trim
+            Value::String(s) => Value::String(s.trim().to_string()),
+            _ => Value::Unit,
+        },
+        0xBD => match &va { // str_upper
+            Value::String(s) => Value::String(s.to_uppercase()),
+            _ => Value::Unit,
+        },
+        0xBE => match &va { // str_lower
+            Value::String(s) => Value::String(s.to_lowercase()),
+            _ => Value::Unit,
+        },
         0xBF => match &va { // str_chars
             Value::String(s) => Value::tuple(s.chars().map(|c| Value::Int(c as i64)).collect()),
             _ => Value::Unit,

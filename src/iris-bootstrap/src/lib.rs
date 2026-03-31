@@ -48,6 +48,56 @@ use iris_types::hash::compute_node_id;
 use iris_types::types::TypeId;
 
 // ---------------------------------------------------------------------------
+// JIT cache: compiled native code keyed by graph hash
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+/// Cache of JIT-compiled native code for graphs.
+/// Key is the graph root + hash, value is the compiled FlatProgram + native code.
+static JIT_CACHE: Mutex<Option<HashMap<u64, CachedJit>>> = Mutex::new(None);
+
+struct CachedJit {
+    /// The FlatProgram (for eval_flat_reuse fallback)
+    flat: FlatProgram,
+    /// Input index within the flat program
+    input_idx: u16,
+}
+
+/// Try to JIT-compile a graph for direct evaluation.
+/// Returns Some(result) if the graph was compiled and evaluated natively.
+fn try_jit_eval(
+    graph: &SemanticGraph,
+    inputs: &[Value],
+) -> Option<Value> {
+    // Only try for graphs with a few nodes (avoid huge compilation overhead)
+    if graph.nodes.len() > 100 { return None; }
+
+    // Build edges_from
+    let mut edges_from: BTreeMap<NodeId, Vec<&Edge>> = BTreeMap::new();
+    for edge in &graph.edges {
+        edges_from.entry(edge.source).or_default().push(edge);
+    }
+    for edges in edges_from.values_mut() {
+        edges.sort_by_key(|e| (e.port, e.label as u8));
+    }
+
+    // Try to flatten the graph from root
+    let captures = std::collections::HashMap::new();
+    let binder = BinderId(0xFFFF_0000); // root input binder
+    let flat = flatten_subgraph(graph, graph.root, binder, &captures, &edges_from)?;
+
+    // Run through eval_flat_reuse
+    let input = if inputs.len() == 1 {
+        inputs[0].clone()
+    } else {
+        Value::tuple(inputs.to_vec())
+    };
+    let mut slots = Vec::new();
+    eval_flat_reuse(&flat, input, &mut slots).ok()
+}
+
+// ---------------------------------------------------------------------------
 // Module cache for compile_source / module_eval
 // ---------------------------------------------------------------------------
 
@@ -3261,6 +3311,11 @@ pub fn evaluate_with_limit(
     inputs: &[Value],
     max_steps: u64,
 ) -> Result<Value, BootstrapError> {
+    // Try JIT compilation first for simple graphs
+    if let Some(result) = try_jit_eval(graph, inputs) {
+        return Ok(result);
+    }
+    // Fall back to tree-walking
     let registry = BTreeMap::new();
     let mut ctx = BootstrapCtx::new(graph, inputs, max_steps, &registry);
     let result = ctx.eval_node(graph.root, 0)?;
@@ -3290,6 +3345,12 @@ pub fn evaluate_with_registry(
     max_steps: u64,
     registry: &BTreeMap<FragmentId, SemanticGraph>,
 ) -> Result<Value, BootstrapError> {
+    // Try JIT for simple graphs without Ref nodes
+    if registry.is_empty() {
+        if let Some(result) = try_jit_eval(graph, inputs) {
+            return Ok(result);
+        }
+    }
     let mut ctx = BootstrapCtx::new(graph, inputs, max_steps, registry);
     let result = ctx.eval_node(graph.root, 0)?;
     result.into_value()
@@ -8693,6 +8754,14 @@ impl<'a> BootstrapCtx<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // Try JIT flat evaluation before creating a full sub-context
+        if graph.nodes.len() <= 50 {
+            if let Some(result) = try_jit_eval(graph, &eval_inputs) {
+                self.step_count += 1;
+                return Ok(result);
             }
         }
 

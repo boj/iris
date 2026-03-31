@@ -133,3 +133,12 @@
 
 **Assistant:** The JIT now compiles fold bodies with mixed operations to native x86-64. The hot loop in the tokenizer — which iterates over characters using `char_at` inside a fold — is now compiled to native code with runtime calls for the string operations.
 
+
+---
+
+**2026-03-30 15:46**
+
+**Human:** Investigate it
+
+**Assistant:** Here's the current state of iris-stage0-next:
+

@@ -185,8 +185,34 @@ fn main() {
             let result = runtime.eval_program(&program, &parse_args(&args[3..]));
             println!("{}", format_value(&result));
         }
+        "help" | "--help" | "-h" => {
+            eprintln!("iris-stage0-next: JIT-based IRIS runtime\n");
+            eprintln!("Usage: iris-stage0-next <command> [options]\n");
+            eprintln!("Commands:");
+            eprintln!("  run <source.iris> [args...]");
+            eprintln!("  compile <source.iris> [-o output.json]");
+            eprintln!("  direct <program.json> [args...]");
+            eprintln!("  interp <interp.json> <prog.json> [args]");
+            eprintln!("  version");
+        }
+        "interp" => {
+            if args.len() < 4 { eprintln!("Usage: interp <interp.json> <prog.json> [args...]"); process::exit(1); }
+            let interpreter = mini_eval::load_graph(&args[2])
+                .unwrap_or_else(|e| { eprintln!("error: {}", e); process::exit(1); });
+            let target = mini_eval::load_graph(&args[3])
+                .unwrap_or_else(|e| { eprintln!("error: {}", e); process::exit(1); });
+            let inputs = parse_args(&args[4..]);
+            let interp_inputs = vec![
+                Value::Program(Rc::new(target)),
+                Value::tuple(inputs),
+            ];
+            let empty_reg = BTreeMap::new();
+            let result = mini_eval::evaluate_with_registry(&interpreter, &interp_inputs, 100_000_000, &empty_reg)
+                .unwrap_or_else(|e| { eprintln!("error: {}", e); process::exit(1); });
+            println!("{}", format_value(&result));
+        }
         "version" | "--version" | "-V" => {
-            println!("iris-stage0-next 0.1.0 (JIT-based)");
+            println!("iris-stage0 0.1.0 (JIT-based, self-hosted)");
             println!("Runtime: jit.rs (tagged i64) + mini_eval (994 LOC) fallback");
         }
         other => {
