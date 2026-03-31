@@ -6,37 +6,34 @@ weight: 10
 
 ## Install {#install}
 
-IRIS requires Rust and Lean 4:
+IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is included in the repository -- no build step required.
 
-- **Rust** 1.75+ ([rustup](https://rustup.rs/))
-- **Lean 4** ([elan](https://github.com/leanprover/elan) or `nix-shell -p lean4` on NixOS)
-
-The proof kernel is written in Lean 4 and compiled to a native binary. Rust's build script invokes `lake build` automatically on first build.
+Optionally, **Lean 4** ([elan](https://github.com/leanprover/elan) or `nix-shell -p lean4` on NixOS) is needed if you want to rebuild the proof kernel.
 
 ```bash
 # Clone the repository
 git clone https://github.com/boj/iris.git
 cd iris
 
-# Build (auto-compiles the Lean kernel server on first run)
-cargo build --release
+# Add iris-stage0 to your PATH
+export PATH="$PWD/bootstrap:$PATH"
 ```
 
-The `iris` binary will be at `target/release/iris`.
+The `iris-stage0` binary is at `bootstrap/iris-stage0`.
 
 ## Run a Program {#run}
 
 A library of example programs is included. Try running the factorial example:
 
 ```bash
-cargo run --release --bin iris -- run examples/algorithms/factorial.iris 10
+iris-stage0 run examples/algorithms/factorial.iris 10
 # Output: 3628800
 ```
 
 Or Fibonacci:
 
 ```bash
-cargo run --release --bin iris -- run examples/algorithms/fibonacci.iris 10
+iris-stage0 run examples/algorithms/fibonacci.iris 10
 # Output: 55
 ```
 
@@ -54,7 +51,7 @@ let rec gcd a b : Int -> Int -> Int [cost: Unknown] =
 Run it:
 
 ```bash
-cargo run --release --bin iris -- run hello.iris 48 18
+iris-stage0 run hello.iris 48 18
 # Output: 6
 ```
 
@@ -115,7 +112,7 @@ Higher-order functions like `map`, `filter`, and `and_then` work correctly acros
 ## Interactive REPL {#repl}
 
 ```bash
-cargo run --release --bin iris -- repl
+iris-stage0 repl
 ```
 
 ## Type-Check a Program {#check}
@@ -123,7 +120,7 @@ cargo run --release --bin iris -- repl
 Verify a program's correctness obligations:
 
 ```bash
-cargo run --release --bin iris -- check examples/algorithms/factorial.iris
+iris-stage0 check examples/algorithms/factorial.iris
 # Output: [OK] factorial: 5/5 obligations satisfied (score: 1.00)
 ```
 
@@ -132,7 +129,7 @@ cargo run --release --bin iris -- check examples/algorithms/factorial.iris
 Provide a specification and let the solver evolve a solution:
 
 ```bash
-cargo run --release --bin iris -- solve spec.iris
+iris-stage0 run solve_spec.iris
 ```
 
 ## Observation-Driven Improvement {#improve}
@@ -140,27 +137,31 @@ cargo run --release --bin iris -- solve spec.iris
 Run any program with `--improve` and the runtime automatically traces function calls, builds test cases from observed I/O, evolves faster implementations, and hot-swaps them in:
 
 ```bash
-cargo run --release --bin iris -- run --improve examples/algorithms/factorial.iris 10
+iris-stage0 run --improve examples/algorithms/factorial.iris 10
 ```
 
 No manual specs needed. The program improves itself from its own behavior. See [Evolution & Improvement](/learn/daemon/) for options and details.
 
-## Build Options {#build-options}
+## CLI Commands {#cli-commands}
+
+`iris-stage0` is the self-hosted IRIS binary. It supports the following commands:
 
 ```bash
-# Default build (evaluator + Lean kernel)
-cargo build --release
+# Compile a program to SemanticGraph
+iris-stage0 compile <file.iris>
 
-# With syntax pipeline (parser, lowerer, type checker)
-cargo build --release --features syntax
+# Run a program
+iris-stage0 run <file.iris> [args...]
+
+# Build a native binary
+iris-stage0 build <file.iris>
 
 # Run tests
-cargo test --features syntax
-```
+iris-stage0 test
 
-| Feature | What it enables |
-|---------|-----------------|
-| `syntax` | Parser, lowerer, type checker, kernel correspondence tests |
+# Rebuild the bootstrap binary
+iris-stage0 rebuild
+```
 
 ## What's Next {#next}
 

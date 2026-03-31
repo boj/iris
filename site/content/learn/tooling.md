@@ -304,7 +304,7 @@ Add to `.vscode/settings.json`:
 
 ```json
 {
-  "iris.serverPath": "/path/to/target/release/iris-lsp"
+  "iris.serverPath": "/path/to/iris/bootstrap/iris-lsp"
 }
 ```
 
@@ -315,7 +315,7 @@ Or create a custom language configuration in `.vscode/settings.json`:
   "[iris]": {
     "editor.tabSize": 2
   },
-  "languageServerHaskell.serverExecutablePath": "/path/to/iris-lsp"
+  "languageServerHaskell.serverExecutablePath": "/path/to/iris/bootstrap/iris-lsp"
 }
 ```
 
@@ -327,9 +327,9 @@ local configs = require('lspconfig.configs')
 
 configs.iris = {
   default_config = {
-    cmd = { '/path/to/target/release/iris-lsp' },
+    cmd = { '/path/to/iris/bootstrap/iris-lsp' },
     filetypes = { 'iris' },
-    root_dir = lspconfig.util.root_pattern('.git', 'Cargo.toml'),
+    root_dir = lspconfig.util.root_pattern('.git'),
     settings = {},
   },
 }
@@ -350,7 +350,7 @@ comment-token = "--"
 language-servers = ["iris-lsp"]
 
 [language-server.iris-lsp]
-command = "/path/to/target/release/iris-lsp"
+command = "/path/to/iris/bootstrap/iris-lsp"
 ```
 
 ---
@@ -364,12 +364,3 @@ iris fmt <file.iris>
 ```
 
 The formatter handles `let` declarations, type declarations, imports, `match` expressions, `if`/`then`/`else`, lambdas, and mutual recursion groups (`and` blocks).
-
-This command is a work in progress. The formatting engine (`iris_bootstrap::syntax::formatter`) is implemented but not yet wired into the CLI as a subcommand. To use it programmatically:
-
-```rust
-use iris_bootstrap::syntax::{parse, formatter};
-
-let module = parse(source)?;
-let formatted = formatter::format_module(&module);
-```

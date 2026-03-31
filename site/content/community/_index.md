@@ -8,7 +8,7 @@ IRIS is an open-source project. Here's how to get involved.
 
 ## Source Code {#source}
 
-IRIS is developed on GitHub. The repository contains the full Rust implementation, the IRIS program library, and the integration test suite.
+IRIS is developed on GitHub. The repository contains the self-hosted IRIS compiler and evaluator, the IRIS program library, and the test suite.
 
 **Repository:** [github.com/boj/iris](https://github.com/boj/iris)
 
@@ -17,8 +17,8 @@ IRIS is developed on GitHub. The repository contains the full Rust implementatio
 Contributions are welcome. The best way to start:
 
 1. **Read the code.** Start with the [Architecture guide](/learn/architecture/) to understand the four-layer stack.
-2. **Run the tests.** `cargo test --release --no-fail-fast` runs the full test suite.
-3. **Pick an area.** The codebase is organized into focused crates -- find the one that interests you.
+2. **Run the tests.** `iris-stage0 test` runs the full test suite.
+3. **Pick an area.** The codebase is organized into `.iris` program modules -- find the one that interests you.
 4. **Open a PR.** Fork, branch, and submit. Every PR should include tests.
 
 ### Areas of Interest {#areas}

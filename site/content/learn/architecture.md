@@ -9,8 +9,8 @@ IRIS is a four-layer stack. Each layer operates on a single canonical representa
 ```
 L0  Evolution        -- population search (NSGA-II + lexicase + novelty)
 L1  Semantics        -- SemanticGraph (20 node kinds, BLAKE3 content-addressed)
-L2  Verification     -- LCF proof kernel (20 inference rules, zero unsafe Rust)
-L3  Hardware         -- bootstrap evaluator + JIT (W^X x86-64) + CLCU (AVX-512)
+L2  Verification     -- LCF proof kernel (20 inference rules, Lean 4 formalization)
+L3  Hardware         -- iris-stage0 evaluator + native x86-64 + CLCU (AVX-512)
 ```
 
 ## SemanticGraph (L1) {#semanticgraph}
@@ -132,11 +132,11 @@ See the [Verification](/learn/verification/) page for a deep dive into the proof
 
 ## Execution (L3) {#execution}
 
-Programs run through the bootstrap evaluator with optional JIT compilation and effect dispatch:
+Programs run through `iris-stage0` with optional native compilation and effect dispatch:
 
 ### Bootstrap Evaluator {#evaluator}
 
-The bootstrap evaluator handles all 20 node kinds directly. It dispatches primitive operations (50+ opcodes), manages closures, and evaluates fold/unfold recursion. The meta-circular interpreter (`full_interpreter.iris`) can also dispatch on node kind tags via graph introspection.
+The `iris-stage0` evaluator handles all 20 node kinds directly. It dispatches primitive operations (50+ opcodes), manages closures, and evaluates fold/unfold recursion. The meta-circular interpreter (`full_interpreter.iris`) can also dispatch on node kind tags via graph introspection.
 
 **Effect Dispatch:** Opcode `0xA1` (`perform_effect`) dispatches all 44 effect tags through an `EffectHandler`. The `RuntimeEffectHandler` implements real I/O (files, TCP, environment, time, random). The `CapabilityGuardHandler` wraps any handler and enforces capability restrictions before each effect call.
 
@@ -148,7 +148,7 @@ The JIT generates x86-64 machine code, compiles it via the `mmap_exec` effect (W
 
 **W^X enforcement:** Pages are allocated read-write, code bytes are copied in, then `mprotect` flips them to read-execute. Pages are never simultaneously writable and executable. Each region is limited to 1 MiB. All regions are `munmap`'d on cleanup.
 
-**Performance:** JIT `add` runs in ~64 ns (3.1× faster than interpreted). Feature-gated behind `--features jit` and capability-gated (sandboxes block `MmapExec`/`CallNative`).
+**Performance:** JIT `add` runs in ~64 ns (3.1x faster than interpreted). Capability-gated (sandboxes block `MmapExec`/`CallNative`).
 
 ### CLCU (AVX-512) {#clcu}
 
@@ -164,12 +164,13 @@ Key properties:
 - Stagnation detection: stops investing in components that plateau
 - State persists to disk; improvements survive restarts
 
-## Crate Map {#crates}
+## Component Map {#components}
 
-The permanent substrate is 2 Rust crates + the Lean 4 kernel:
+IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is the sole execution engine, with the Lean 4 proof kernel as an IPC subprocess:
 
 | Component | Purpose |
 |-----------|---------|
-| `iris-types` (Rust) | SemanticGraph, types, values, wire format |
-| `iris-bootstrap` (Rust) | Bootstrap evaluator + syntax pipeline + kernel bridge |
+| `bootstrap/iris-stage0` | Frozen self-hosted binary: compiler, evaluator, all CLI commands |
+| `bootstrap/*.json` | Pre-compiled pipeline (tokenizer, parser, lowerer) |
 | `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, runs as IPC subprocess |
+| `src/iris-programs/` | 372 `.iris` programs: stdlib, compiler passes, evolution, LSP, deploy |

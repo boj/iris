@@ -20,20 +20,20 @@ The verification system serves three purposes:
 
 ## The Proof Kernel {#kernel}
 
-The kernel is the trusted computing base, written in **Lean 4** and running as a separate IPC subprocess (`iris-kernel-server`). All 20 inference rules execute in Lean — the running code is the formal proof. Lean's type system guarantees that every judgment was derived by a valid sequence of rule applications.
+The kernel is the trusted computing base, written in **Lean 4** and running as a separate IPC subprocess (`iris-kernel-server`). All 20 inference rules execute in Lean -- the running code is the formal proof. Lean's type system guarantees that every judgment was derived by a valid sequence of rule applications.
 
-The Rust side wraps Lean's results in opaque `Theorem` values (with BLAKE3 proof hashes for audit trails) but never evaluates inference rules itself. The only code that can construct `Theorem` values lives in the kernel bridge. No external code can forge a proof.
+The `iris-stage0` evaluator wraps Lean's results in opaque `Theorem` values (with BLAKE3 proof hashes for audit trails) but never evaluates inference rules itself. The only code that can construct `Theorem` values lives in the kernel bridge. No external code can forge a proof.
 
 ### Why Lean? {#why-lean}
 
-In a self-improving system, the kernel is the one component that must never be wrong — everything else (mutations, evolutions, deployments) is gated through it. Rust gives memory safety but not logical correctness. Lean 4 is both a proof assistant and a compiled language: the inference rules are executable functions with machine-checked correspondence proofs linking them to their formal specification. If it compiles, the proofs hold.
+In a self-improving system, the kernel is the one component that must never be wrong -- everything else (mutations, evolutions, deployments) is gated through it. Lean 4 is both a proof assistant and a compiled language: the inference rules are executable functions with machine-checked correspondence proofs linking them to their formal specification. If it compiles, the proofs hold.
 
 ### Properties {#kernel-properties}
 
 - 20 inference rules implemented in Lean 4 with correspondence proofs
 - Runs as a native subprocess via stdin/stdout IPC (~microsecond latency per rule)
 - Every theorem records: context, node, type, cost bound, and a cryptographic hash (BLAKE3) of the derivation chain
-- No `unsafe` Rust in the kernel path — communication is via `std::process` and `std::io`
+- Communication is via stdin/stdout IPC with the `iris-stage0` evaluator
 
 ### The 20 Rules {#rules}
 

@@ -6,7 +6,7 @@ weight: 20
 
 This tutorial teaches IRIS by building up from simple expressions to a complete program that evolves itself. No prior functional programming experience is required.
 
-> **Note:** This tutorial uses `iris` to invoke the CLI. If you haven't installed IRIS to your PATH, substitute `cargo run --release --bin iris --` for `iris` in all commands below. See [Getting Started](/learn/get-started/) for build instructions.
+> **Note:** This tutorial uses `iris` to invoke the CLI. If you haven't added IRIS to your PATH, substitute `iris-stage0` (located at `bootstrap/iris-stage0` in the repository) for `iris` in all commands below. See [Getting Started](/learn/get-started/) for setup instructions.
 
 ---
 

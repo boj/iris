@@ -631,7 +631,7 @@ let home = env_get "HOME"
 let handle = thread_spawn my_program
 let result = thread_join handle
 
--- JIT compilation (requires --features jit)
+-- JIT compilation
 let code_bytes = flatten_code (x86_mov_imm64 0 42) in
 let fn_ptr = mmap_exec code_bytes in
 let result = call_native fn_ptr ()

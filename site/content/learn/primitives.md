@@ -4,7 +4,7 @@ description: "Complete reference for every IRIS primitive function."
 weight: 95
 ---
 
-This is the definitive reference for every primitive operation available in the IRIS bootstrap evaluator. Each primitive maps to a fixed opcode and arity, resolved at compile time from the name table in `src/iris-bootstrap/src/syntax/prim.rs`.
+This is the definitive reference for every primitive operation available in the IRIS bootstrap evaluator. Each primitive maps to a fixed opcode and arity, resolved at compile time by the IRIS lowerer (`src/iris-programs/syntax/iris_lowerer.iris`).
 
 **Numeric coercion rules** apply across arithmetic, comparison, and math primitives:
 - If either operand is `Float64`, the other is promoted to `Float64` before the operation.
@@ -900,7 +900,7 @@ let kg2 = kg_set_edge_weight kg "alice" "bob" 2.5
 
 Scale a named numeric property on all nodes by a factor. Takes (graph, property_name, factor).
 
-Note: Despite the 2-arg arity in `prim.rs`, the implementation expects 3 arguments.
+Note: Despite the 2-arg arity in the lowerer, the implementation expects 3 arguments.
 
 ```iris
 let kg2 = kg_map_nodes kg "weight" 2.0
@@ -928,7 +928,7 @@ let merged = kg_merge kg1 kg2
 
 Find all targets reachable from a node via edges of a specific type. Takes (graph, source_node_id, edge_type).
 
-Note: Despite the 2-arg arity in `prim.rs`, the implementation expects 3 arguments.
+Note: Despite the 2-arg arity in the lowerer, the implementation expects 3 arguments.
 
 ```iris
 let targets = kg_query_by_edge_type kg "alice" "knows"
@@ -1536,7 +1536,7 @@ let elem = tuple_get my_tuple 2
 
 ### Evaluator-internal opcodes (0xD3--0xD6)
 
-The following opcodes are implemented in the bootstrap evaluator but do not have name bindings in `prim.rs`. They are accessible from IRIS programs when defined as user functions or through stdlib wrappers:
+The following opcodes are implemented in the bootstrap evaluator but do not have name bindings in the IRIS lowerer. They are accessible from IRIS programs when defined as user functions or through stdlib wrappers:
 
 - `0xD3` **str_from_chars** (arity 1) -- Convert a tuple of integer char codes to a String.
 - `0xD4` **is_unit** (arity 1) -- Test whether a value is Unit. Returns Bool.

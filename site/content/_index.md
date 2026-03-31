@@ -41,16 +41,15 @@ L3  Hardware       Tree-walker → flat eval → native AVX x86-64 + CLCU (AVX-5
 
 ```bash
 git clone https://github.com/boj/iris.git && cd iris
-cargo build --release
 
 # Run a program
-cargo run --release -- run examples/algorithms/fibonacci.iris
+iris-stage0 run examples/algorithms/fibonacci.iris
 
 # Evolve a solution from test cases
-cargo run --release -- solve spec.iris
+iris-stage0 run solve_spec.iris
 
 # Run with observation-driven improvement
-cargo run --release -- run --improve examples/algorithms/factorial.iris 10
+iris-stage0 run --improve examples/algorithms/factorial.iris 10
 ```
 
 <div class="cta">

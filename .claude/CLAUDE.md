@@ -6,11 +6,11 @@
 Replace Zig as the implementation language for Daimon (~/Development/daimon), and replace Daimon's implementation with IRIS so that Daimon can do full self-modification. IRIS is not a standalone project — it exists to become Daimon's substrate.
 
 ### 2. IRIS writes itself in IRIS (→ three phase transitions)
-All Rust scaffolding has been replaced by .iris programs. The only permanent Rust is the proof kernel (iris-types + iris-bootstrap, Lob's theorem ceiling). Everything else -- mutation operators, seed generators, compiler passes, fitness functions, the interpreter itself -- is IRIS programs that IRIS bred.
+IRIS is 100% self-hosted. No Rust, no Cargo, no .rs files remain. The only non-IRIS component is the Lean 4 proof kernel (Lob's theorem ceiling -- a system cannot verify its own verifier). Everything else -- compiler passes, mutation operators, seed generators, fitness functions, the interpreter itself -- is IRIS programs compiled through the IRIS pipeline.
 
 Three phase transitions required (from the AI Minds Council, docs/council/10-ai-council-overview.md):
 
-**Phase Transition 1: Tool → Organism** -- COMPLETE. All Rust components replaced by IRIS equivalents. Bootstrap evaluator is the sole execution engine.
+**Phase Transition 1: Tool → Organism** -- COMPLETE. All scaffolding replaced by IRIS equivalents. Bootstrap evaluator is the sole execution engine.
 
 **Phase Transition 2: Individual → Ecology** -- Programs must interact, compete, cooperate, and form emergent structures larger than any individual. Not just message passing -- an ecology where programs REACT to each other.
 
@@ -27,20 +27,24 @@ Three phase transitions required (from the AI Minds Council, docs/council/10-ai-
 - Formal verification of cognitive invariants
 
 ## Current State
-- Fully self-hosted: all scaffolding (iris-exec, iris-evolve) deleted
-- Permanent Rust: iris-types (types + graph), iris-bootstrap (evaluator + proof kernel + syntax)
-- Everything else is .iris programs: evolution, mutation, crossover, fitness, compiler passes, codec, repr, deploy, LSP
+- 100% self-hosted: no Rust, no Cargo, no .rs files
+- Bootstrap: frozen `iris-stage0` binary (mini_eval + JIT) in `bootstrap/`
+- Pre-compiled pipeline stages: `bootstrap/*.json` (tokenizer, parser, lowerer, interpreter, compiler)
+- 243 infrastructure .iris files in `src/iris-programs/` (19 categories)
+- 119 example .iris files, 10 benchmark .iris files
+- Only non-IRIS component: Lean 4 proof kernel in `lean/`
 
 ## Architecture
 - 4-layer stack: Evolution (L0) → Semantics (L1) → Verification (L2) → Hardware (L3)
 - Canonical representation: SemanticGraph (20 node kinds, purely functional)
-- Proof kernel: LCF-style, 20 inference rules, zero unsafe Rust
+- Proof kernel: Lean 4, LCF-style, 20 inference rules (runs as IPC subprocess)
+- Self-hosting pipeline: tokenizer.iris → parser.iris → lowerer.iris (all in IRIS)
 - Compiler: 10-pass pipeline (SemanticGraph → CLCU containers), implemented in .iris
-- Execution: bootstrap evaluator (iris-bootstrap) with Rc<SemanticGraph> copy-on-write
+- Execution: bootstrap evaluator (`iris-stage0`) with mini_eval + JIT
 
 ## IRIS Program Quality Rules (for agents writing .iris files)
 
-When writing IRIS programs that replace Rust scaffolding, these are absolute requirements:
+These are absolute requirements for all .iris programs:
 
 ### Programs must TRANSFORM data, not DESCRIBE it
 - A compiler pass must produce a transformed SemanticGraph, not a tuple of statistics
@@ -50,7 +54,6 @@ When writing IRIS programs that replace Rust scaffolding, these are absolute req
 - **Test:** does the function's return value contain the actual output, or just metadata about what the output would be?
 
 ### Tests must execute the .iris files
-- Rust tests that construct SemanticGraphs in Rust and test Rust APIs do NOT test .iris programs
 - Tests must: load the .iris file → compile it → evaluate it through the bootstrap evaluator or interpreter → assert on the result
 - A test that returns `= 1` unconditionally is a stub, not a test
 - **Test:** remove the .iris file — does the test still pass? If yes, it's not testing the .iris file
@@ -63,15 +66,18 @@ When writing IRIS programs that replace Rust scaffolding, these are absolute req
 ### Bootstrap compatibility
 - `graph_add_node_rt pg 0` creates a Prim node, then `graph_set_prim_op pg node opcode` sets the opcode
 - Never pass `()` as a node ID — use `graph_get_root pg` explicitly
-- **Test:** does the program work under `cargo test` (default build)?
+- **Test:** does the program work under `bootstrap/iris-stage0 run`?
 
 ## Build Conventions
-- Rust workspace: iris-types + iris-bootstrap (2 crates)
-- CLCU hardware layer at iris-clcu/ (AVX-512 container runtime, not yet integrated)
+- No Rust, no Cargo. Everything goes through `bootstrap/iris-stage0`
+- Compile: `bootstrap/iris-stage0 compile <source.iris> -o output.json`
+- Run: `bootstrap/iris-stage0 run <source.iris> [args...]`
+- Build native: `bootstrap/iris-stage0 build <source.iris> -o binary`
+- Direct eval: `bootstrap/iris-stage0 direct <program.json> [args...]`
+- Interp: `bootstrap/iris-stage0 interp <interp.json> <prog.json> [args]`
+- Test: `bootstrap/iris-stage0 test src/iris-programs/`
+- Rebuild pipeline: `bootstrap/iris-stage0 rebuild`
 - BLAKE3 for all hashing
-- Zero unsafe in proof kernel
+- Lean 4 proof kernel at `lean/` (optional, for verification)
 - NixOS: use `nix-shell -p <packages> --run '<command>'` for tools not on PATH
-- Default build: `cargo build` (evaluator + types)
-- With parser/lowerer: `cargo build --features syntax`
-- Stage0 binary: `cargo build --release --features syntax --bin iris-stage0 && cp target/release/iris-stage0 bootstrap/`
-- Stage0 is the frozen bootstrap seed — all commands: compile, run, direct, interp, test, rebuild
+- Stage0 is the frozen bootstrap seed — it never changes. All commands: compile, run, build, direct, interp, test, rebuild

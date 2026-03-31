@@ -442,7 +442,7 @@ jit_mul_fn                 -- Compile a multiplication function
 jit_identity_fn            -- Compile an identity function
 ```
 
-Requires `--features jit`. Capability-gated: sandboxes deny `MmapExec` by default.
+Capability-gated: sandboxes deny `MmapExec` by default.
 
 ## Type Modules {#type-modules}
 

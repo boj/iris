@@ -8,7 +8,7 @@ This is the complete reference for the IRIS language: formal grammar, every prim
 
 ## Grammar {#grammar}
 
-The IRIS surface syntax is defined in `src/iris-bootstrap/src/syntax/parser.rs` and `src/iris-bootstrap/src/syntax/lexer.rs`.
+The IRIS surface syntax is defined in `src/iris-programs/syntax/iris_parser.iris` and `src/iris-programs/syntax/iris_lowerer.iris`, with pre-compiled pipelines in `bootstrap/*.json`.
 
 ### Module Structure {#grammar-module}
 
@@ -212,7 +212,7 @@ allow  deny
 
 ## Primitive Opcodes {#opcodes}
 
-All primitives are named functions resolved by `src/iris-bootstrap/src/syntax/prim.rs`. Each maps to a `(opcode, arity)` pair.
+All primitives are named functions resolved by the IRIS lowerer (`src/iris-programs/syntax/iris_lowerer.iris`). Each maps to a `(opcode, arity)` pair.
 
 ### Arithmetic (0x00--0x09) {#op-arithmetic}
 

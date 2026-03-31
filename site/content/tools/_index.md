@@ -15,7 +15,7 @@ The IRIS command-line tool is your primary interface. One binary handles running
 | `iris run --improve` | Run with observation-driven improvement |
 | `iris check` | Type-check correctness obligations |
 | `iris repl` | Interactive REPL |
-| `iris deploy` | Generate standalone Rust source |
+| `iris deploy` | Generate a standalone native binary |
 
 ### Run a Program {#run}
 
@@ -57,53 +57,57 @@ iris run --improve myprogram.iris 42
 
 ### Deploy {#deploy}
 
-Generate standalone Rust source:
+Generate a standalone native binary:
 
 ```bash
-iris deploy examples/algorithms/factorial.iris -o factorial.rs
-# Compile the output with: rustc --edition 2021 -O factorial.rs -o factorial
+iris-stage0 build examples/algorithms/factorial.iris -o factorial
+./factorial 10
+# Output: 3628800
 ```
 
 ## Build from Source {#build}
 
-IRIS is a Rust workspace. Building is straightforward:
+IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is included in the repository -- no external build tools required.
 
 ```bash
 # Clone
 git clone https://github.com/boj/iris.git
 cd iris
 
-# Build (release mode recommended)
-cargo build --release
+# Add iris-stage0 to your PATH
+export PATH="$PWD/bootstrap:$PATH"
 
-# Build with JIT support (x86-64 only)
-cargo build --release --features jit
+# Run a program
+iris-stage0 run examples/algorithms/factorial.iris 10
 
-# Run the test suite (2260+ tests)
-cargo test --features jit -- --skip evolution --skip convergence
+# Compile a program
+iris-stage0 compile myprogram.iris
 
-# Run micro-benchmarks (criterion)
-cargo bench --features jit
+# Build a native binary
+iris-stage0 build myprogram.iris
 
-# Run Benchmarks Game suite (10 programs)
-cargo test --release --test test_benchmarks_game
+# Run the test suite
+iris-stage0 test
+
+# Rebuild the bootstrap binary (self-hosted)
+iris-stage0 rebuild
 ```
 
 ### System Requirements {#requirements}
 
-- Rust 1.75+
-- C compiler (for CLCU library)
-- x86-64 (for AVX-512 CLCU features)
+- x86-64 Linux (for the pre-built bootstrap binary)
+- Lean 4 (optional, for rebuilding the proof kernel)
 
-### Crate Structure {#crates}
+### Component Structure {#components}
 
-The permanent substrate is 2 Rust crates + the Lean 4 kernel:
+IRIS is fully self-hosted with the Lean 4 proof kernel as an IPC subprocess:
 
 | Component | Description |
 |-----------|-------------|
-| `iris-types` (Rust) | SemanticGraph, types, values, wire format |
-| `iris-bootstrap` (Rust) | Bootstrap evaluator + syntax pipeline + kernel bridge |
+| `bootstrap/iris-stage0` | Frozen self-hosted binary: compiler, evaluator, all CLI commands |
+| `bootstrap/*.json` | Pre-compiled pipeline (tokenizer, parser, lowerer) |
 | `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, IPC server |
+| `src/iris-programs/` | 372 `.iris` programs: stdlib, compiler passes, evolution, LSP, deploy |
 
 ## Examples {#examples}
 
@@ -162,8 +166,8 @@ IRIS implements all 10 programs from the [Computer Language Benchmarks Game](htt
 
 ```bash
 # All 10 benchmarks
-cargo test --release --test test_benchmarks_game
+iris-stage0 test benchmarks/
 
 # Individual benchmark
-iris run benchmark/n-body/n-body.iris
+iris-stage0 run benchmark/n-body/n-body.iris
 ```

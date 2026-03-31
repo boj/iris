@@ -364,8 +364,7 @@ Same result, but now running the 2.8x faster evolved version. No `--improve` fla
 The integration test demonstrates all 6 stages with printed output:
 
 ```bash
-cargo test --release --no-default-features --features syntax \
-  --test test_content_addressed_lifecycle -- --nocapture
+iris-stage0 test examples/lifecycle/content-addressed-evolution.iris
 ```
 
 ```
@@ -387,8 +386,7 @@ cargo test --release --no-default-features --features syntax \
 The end-to-end test proves improvements survive across restarts:
 
 ```bash
-cargo test --release --no-default-features --features syntax \
-  --test test_fragment_cache_e2e -- --nocapture
+iris-stage0 test examples/lifecycle/fragment-cache-e2e.iris
 ```
 
 ```
@@ -421,6 +419,4 @@ iris daemon 100 --max-cycles 10
 | File | Purpose |
 |------|---------|
 | [`examples/lifecycle/content-addressed-evolution.iris`](https://github.com/boj/iris/blob/main/examples/lifecycle/content-addressed-evolution.iris) | Pre/post evolution programs |
-| [`tests/test_content_addressed_lifecycle.rs`](https://github.com/boj/iris/blob/main/tests/test_content_addressed_lifecycle.rs) | 6-stage lifecycle test |
-| [`tests/test_fragment_cache_e2e.rs`](https://github.com/boj/iris/blob/main/tests/test_fragment_cache_e2e.rs) | Generational persistence test |
-| [`src/iris-bootstrap/src/fragment_cache.rs`](https://github.com/boj/iris/blob/main/src/iris-bootstrap/src/fragment_cache.rs) | Fragment cache implementation |
+| [`src/iris-programs/stdlib/fragment_cache.iris`](https://github.com/boj/iris/blob/main/src/iris-programs/stdlib/fragment_cache.iris) | Fragment cache implementation |

@@ -24,7 +24,7 @@ The flat evaluator closes much of the gap with bytecode interpreters for compute
 
 ## Evaluator Micro-Benchmarks
 
-Measured with [Criterion.rs](https://bheisler.github.io/criterion.rs/book/) in `--release` mode.
+Measured with the IRIS benchmark harness via `iris-stage0 run`.
 
 ### Core Operations
 
@@ -151,7 +151,7 @@ The n-body benchmark uses the f64 path, achieving **578× speedup** over the tre
 | `add(3,5)` | 207 ns | **60 ns** | **3.5×** |
 | `mul(6,7)` | ~207 ns | **60 ns** | 3.5× |
 
-The JIT compiles SemanticGraphs to x86-64 machine code via the pure-IRIS code generator (`jit_runtime.iris`), maps it into W^X memory (write then flip to execute-only), and invokes it via System V AMD64 ABI. Feature-gated behind `--features jit`; sandboxes block it by default.
+The JIT compiles SemanticGraphs to x86-64 machine code via the pure-IRIS code generator (`jit_runtime.iris`), maps it into W^X memory (write then flip to execute-only), and invokes it via System V AMD64 ABI. Sandboxes block it by default.
 
 ---
 
@@ -185,7 +185,7 @@ The JIT compiles SemanticGraphs to x86-64 machine code via the pure-IRIS code ge
 | | token=50K | 16.5 ms | |
 | **fannkuch-redux** | N=3..6 | < 0.1 ms | Pancake flipping |
 | **regex-redux** | N=100 | < 0.1 ms | Pattern matching (no regex engine) |
-| **spectral-norm** | 3-elem | < 0.1 ms | Partial (Rust-orchestrated) |
+| **spectral-norm** | 3-elem | < 0.1 ms | Partial (orchestrated) |
 
 ### Comparison to Other Languages
 
@@ -223,7 +223,7 @@ The native codegen eliminates the tree-walker's per-node overhead (HashMap looku
 
 ## Evolution Convergence
 
-The evolution engine (`iris-evolve`) uses NSGA-II multi-objective search with 16 mutation operators and phase-adaptive parameter control.
+The evolution engine uses NSGA-II multi-objective search with 16 mutation operators and phase-adaptive parameter control.
 
 ### Default Parameters
 
@@ -250,15 +250,14 @@ The observation-driven improvement system (`--improve`) completes the full trace
 ## Running Benchmarks
 
 ```bash
-# Criterion micro-benchmarks
-cargo bench --bench evaluator
-
-# Benchmarks Game profiling (all 10 programs, scaling analysis)
-cargo test --release --features rust-scaffolding --test bench_profiling -- --nocapture
+# Run all benchmarks (math, algorithms, CS)
+iris-stage0 run benchmarks/bench_math.iris
+iris-stage0 run benchmarks/bench_algorithms.iris
+iris-stage0 run benchmarks/bench_cs.iris
 
 # Full Benchmarks Game suite
 ./benchmark/run_all.sh
 
 # Single benchmark
-./benchmark/n-body/run.sh 100
+iris-stage0 run benchmarks/n-body.iris 100
 ```
