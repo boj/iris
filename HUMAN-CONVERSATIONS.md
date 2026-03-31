@@ -124,3 +124,12 @@
 
 **Assistant:** Here's the honest picture:
 
+
+---
+
+**2026-03-31 13:48**
+
+**Human:** Investigate it
+
+**Assistant:** **Native fold at 0.8ns/iteration.** That's:
+
