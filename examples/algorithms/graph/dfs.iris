@@ -3,8 +3,8 @@
 -- Graph represented as adjacency lists: graph[i] = tuple of neighbor indices.
 
 -- Check if a value exists in a tuple.
-let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =
-  fold false (\found x -> if x == val then true else found) xs
+let contains xs v : Tuple -> Int -> Bool [cost: Linear(xs)] =
+  fold false (\found x -> if x == v then true else found) xs
 
 -- DFS from a start node. Returns the list of visited nodes in DFS order.
 -- `graph` is a tuple of adjacency lists (one per node).

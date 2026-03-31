@@ -9,7 +9,7 @@ let rec serve conn : Int -> Int [cost: Unknown] =
   let data = tcp_read conn 1024 in
   if data == 0 then tcp_close conn
   else
-    let _ = tcp_write conn data in
+    let _r = tcp_write conn data in
     serve conn
 
 -- Accept a single connection on `port` and echo it until done.

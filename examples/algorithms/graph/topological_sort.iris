@@ -4,12 +4,12 @@
 -- Algorithm: repeatedly remove zero-in-degree nodes and decrement their neighbors.
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Check if a value exists in a tuple.
-let contains xs val : Tuple -> Int -> Bool [cost: Linear(xs)] =
-  fold false (\found x -> if x == val then true else found) xs
+let contains xs v : Tuple -> Int -> Bool [cost: Linear(xs)] =
+  fold false (\found x -> if x == v then true else found) xs
 
 -- Compute in-degrees for all nodes.
 let compute_in_degrees graph n : Tuple -> Int -> Tuple [cost: Unknown] =

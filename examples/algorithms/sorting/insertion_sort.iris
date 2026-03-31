@@ -3,16 +3,16 @@
 -- O(n^2) time, stable sort, good for small or nearly-sorted data.
 
 -- Insert a value into a sorted list at the correct position.
-let rec insert sorted val : Tuple -> Int -> Tuple [cost: Linear(sorted)] =
+let rec insert sorted v : Tuple -> Int -> Tuple [cost: Linear(sorted)] =
   let n = list_len sorted in
-  if n == 0 then (val,)
+  if n == 0 then (v,)
   else
     let head = list_nth sorted 0 in
-    if val <= head then
-      list_concat (val,) sorted
+    if v <= head then
+      list_concat (v,) sorted
     else
       let rest = list_drop sorted 1 in
-      list_concat (head,) (insert rest val)
+      list_concat (head,) (insert rest v)
 
 -- Sort by folding insert over the input.
 let insertion_sort xs : Tuple -> Tuple [cost: Unknown] =

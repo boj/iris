@@ -972,6 +972,9 @@ let lower ast src =
                 -- atomic_read (hash=1144)
                 else if fa.1 == 1144 then
                   (pg, ns, nsp, (aa, ((61, 34, mt), rws)), nwsp + 2, sc)
+                -- atomic_new (hash=1062)
+                else if fa.1 == 1062 then
+                  (pg, ns, nsp, (aa, ((61, 44, mt), rws)), nwsp + 2, sc)
                 -- rwlock_release (hash=1490)
                 else if fa.1 == 1490 then
                   (pg, ns, nsp, (aa, ((61, 40, mt), rws)), nwsp + 2, sc)

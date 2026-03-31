@@ -13,7 +13,7 @@ let newton_sqrt_n x n : Float -> Int -> Float [cost: Linear(n)] =
 
 -- Good default: 20 iterations gives excellent precision for most inputs.
 let newton_sqrt x : Float -> Float [cost: Const(60)] =
-  if x < 0.0 then 0.-1.0  -- error: negative input
+  if x < 0.0 then 0.0 - 1.0  -- error: negative input
   else if x == 0.0 then 0.0
   else newton_sqrt_n x 20
 

@@ -11,8 +11,8 @@ let run_state comp init_state : (State -> Tuple) -> State -> Tuple [cost: Unknow
   comp init_state
 
 -- Return: wrap a value in the state monad (state passes through unchanged).
-let state_return val state : Int -> State -> Tuple [cost: Const(1)] =
-  (val, state)
+let state_return v state : Int -> State -> Tuple [cost: Const(1)] =
+  (v, state)
 
 -- Bind: chain two stateful computations.
 -- comp1: state -> (val1, state2)    -- first computation

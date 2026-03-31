@@ -7,8 +7,8 @@
 -- Uses a linear min-scan instead of a priority queue (simpler, acceptable for small graphs).
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
 -- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
@@ -72,10 +72,12 @@ let shortest_path graph source target : Tuple -> Int -> Int -> Tuple [cost: Unkn
   else
     -- Backtrack from target to source
     let n = list_len graph in
-    let rec backtrack current path : Int -> Tuple -> Tuple [cost: Unknown] =
-      if current == source then list_concat (source,) path
+    -- Iterative backtracking using fold (max n steps)
+    let bt = fold (target, ()) (\state _i ->
+      let cur = state.0 in
+      let path = state.1 in
+      if cur == source then (cur, list_concat (source,) path)
       else
-        -- Find the predecessor: neighbor u where dist[u] + weight(u,current) == dist[current]
         let pred = fold_while -1 (\pair ->
           let best = pair.0 in
           let u = pair.1 in
@@ -83,14 +85,15 @@ let shortest_path graph source target : Tuple -> Int -> Int -> Tuple [cost: Unkn
           let found = fold false (\f edge ->
             if f then true
             else
-              let v = list_nth edge 0 in
+              let vv = list_nth edge 0 in
               let w = list_nth edge 1 in
-              v == current && list_nth dist u + w == list_nth dist current
+              vv == cur && list_nth dist u + w == list_nth dist cur
           ) neighbors in
           if found then (false, u) else (true, best)
         ) (list_range 0 n) in
-        backtrack pred (list_concat (current,) path) in
-    backtrack target ()
+        (pred, list_concat (cur,) path)
+    ) n in
+    bt.1
 
 -- Test: weighted graph
 --   0 --(4)--> 1 --(1)--> 3

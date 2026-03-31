@@ -7,8 +7,8 @@
 -- sufficient for small graphs.
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
 -- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.
@@ -91,14 +91,15 @@ let a_star grid rows cols start_r start_c goal_r goal_c : Tuple -> Int -> Int ->
             let nb_g = acc.1 in
             let tent_g = cur_g + 1 in
             -- 999999 acts as "infinity" for unvisited neighbors
-            let old_g = if map_contains_key nb_g nb then map_get nb_g nb else 999999 in
+            let old_g_v = map_get nb_g nb in
+            let old_g = if old_g_v == () then 999999 else old_g_v in
             if tent_g < old_g then
               let nb_pos = decode nb cols in
               let h = manhattan nb_pos.0 nb_pos.1 goal_r goal_c in
               let f = tent_g + h in
               let new_g = map_insert nb_g nb tent_g in
               -- Insert into open list maintaining sort order by f_score
-              let new_open = sort_by (\ab -> ab.0.0 - ab.1.0) (list_append nb_open (f, nb)) in
+              let new_open = sort_by (\ab -> let a0 = ab.0 in let b0 = ab.1 in a0.0 - b0.0) (list_append nb_open (f, nb)) in
               (new_open, new_g)
             else acc
           ) nbrs in
@@ -107,7 +108,8 @@ let a_star grid rows cols start_r start_c goal_r goal_c : Tuple -> Int -> Int ->
   -- Extract g-score at goal (= path length), or -1 if goal never reached
   let final_state = result in
   let final_g = final_state.1 in
-  if map_contains_key final_g goal then map_get final_g goal
+  let goal_v = map_get final_g goal in
+  if goal_v != () then goal_v
   else -1
 
 -- Test: 5x5 grid with walls

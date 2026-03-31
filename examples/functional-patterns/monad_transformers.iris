@@ -6,9 +6,15 @@
 --   stdlib/writer.iris  -- Writer (logging)
 --   stdlib/reader.iris  -- Reader (environment)
 
-import "stdlib/either.iris" as Either
-import "stdlib/writer.iris" as Writer
-import "stdlib/list_ops.iris" as List
+-- Inline monad primitives (stdlib exports use different names)
+let either_return x = (0, x)
+let either_fail e = (1, e)
+let either_bind m f = if m.0 == 0 then f m.1 else m
+let writer_return x = (x, ())
+let writer_bind m f = let r = f m.0 in (r.0, (m.1, r.1))
+let writer_tell x = ((), x)
+let list_return x = (x,)
+let list_bind xs f = fold () (\acc i -> let r = f (list_nth xs i) in list_concat acc r) (list_len xs)
 
 -- ============================================================
 -- Writer + Either combined (WriterT over Either)
@@ -18,7 +24,7 @@ import "stdlib/list_ops.iris" as List
 -- ============================================================
 
 -- Lift a pure value into the WriterT monad (success, no log entries).
-let wt_return val = (0, val, ())
+let wt_return v = (0, v, ())
 -- Lift an error into the WriterT monad (failure, no log entries).
 let wt_fail err = (1, err, ())
 -- Append a log entry and return unit (0) as the value.

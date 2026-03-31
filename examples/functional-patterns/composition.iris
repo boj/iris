@@ -31,7 +31,7 @@ let flip f a b : (Int -> Int -> Int) -> Int -> Int -> Int [cost: Const(1)] =
   f b a
 
 -- Constant function: always returns the same value.
-let const_fn val x : Int -> Int -> Int [cost: Const(1)] = val
+let const_fn v x : Int -> Int -> Int [cost: Const(1)] = v
 
 -- Identity function.
 let id x : Int -> Int [cost: Const(1)] = x

@@ -4,8 +4,8 @@
 -- Works on integer sequences (character codes) since IRIS lacks char indexing.
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Inline helper: fold with early termination via (continue?, acc) pairs.
 -- step_fn receives acc and returns (continue, new_acc). Stops when continue = false.

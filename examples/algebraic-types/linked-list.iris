@@ -4,19 +4,19 @@
 type List = Cons(Int) | Nil
 
 -- Length of a linked list, counting Cons cells.
-let length xs : Int -> Int [cost: Linear(xs)] =
+let rec length xs : Int -> Int [cost: Linear(xs)] =
     match xs with
       | Cons(head) -> 1 + length head
       | Nil -> 0
 
 -- Sum all elements in a linked list.
-let sum_list xs : Int -> Int [cost: Linear(xs)] =
+let rec sum_list xs : Int -> Int [cost: Linear(xs)] =
     match xs with
       | Cons(head) -> head + sum_list head
       | Nil -> 0
 
 -- Check if a list contains a given value.
-let contains xs needle : Int -> Int -> Bool =
+let rec contains xs needle : Int -> Int -> Bool =
     match xs with
       | Cons(head) -> if head == needle then true else contains head needle
       | Nil -> false

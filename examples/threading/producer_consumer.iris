@@ -9,7 +9,7 @@
 -- Write `value` to the named atomic slot `key` and return the value.
 -- Returning the value lets the producer chain further work without an extra read.
 let produce key value : Int -> Int -> Int [cost: Const(2)] =
-  let _ = atomic_write key value in
+  let _r = atomic_write key value in
   value
 
 -- Read and return the current value of the named atomic slot `key`.

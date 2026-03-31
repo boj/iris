@@ -102,7 +102,7 @@ let rec gen_codes tree node_idx prefix codes : Tuple -> Int -> Tuple -> State ->
 let huffman_encode symbols codes : Tuple -> State -> Tuple [cost: Unknown] =
   fold () (\acc sym ->
     let code = map_get codes sym in
-    if is_unit code then acc  -- skip unknown symbols
+    if code == () then acc  -- skip unknown symbols
     else list_concat acc code
   ) symbols
 

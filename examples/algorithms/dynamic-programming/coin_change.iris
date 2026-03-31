@@ -4,8 +4,8 @@
 -- Also includes coin_ways: count distinct ways to make change (order-independent).
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- A large sentinel value for "impossible".
 let inf x : Int -> Int [cost: Const(1)] = 999999

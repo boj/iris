@@ -17,7 +17,7 @@ let caesar_char code shift : Int -> Int -> Int [cost: Const(5)] =
 -- Encrypt a string: shift forward.
 let caesar_encrypt s shift : String -> Int -> String [cost: Linear(s)] =
   let codes = map (\c -> char_at c 0) (str_chars s) in
-  str_from_chars (map (\c -> caesar_char c shift) codes)
+  str_join "" (map (\c -> caesar_char c shift) codes)
 
 -- Decrypt a string: shift backward (by 26 - shift).
 let caesar_decrypt s shift : String -> Int -> String [cost: Linear(s)] =

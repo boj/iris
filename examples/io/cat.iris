@@ -7,5 +7,5 @@
 let main path : Int -> Int [cost: Linear(path)] =
   let h = file_open path 0 in
   let contents = file_read_bytes h 1048576 in  -- 1MB max read
-  let _ = file_close h in
+  let _r = file_close h in
   print contents

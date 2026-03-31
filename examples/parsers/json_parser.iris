@@ -122,8 +122,8 @@ let rec parse_json s pos : String -> Int -> Tuple [cost: Unknown] =
           let colon_pos = skip_ws s key.1 in
           let after_colon = if char_at s colon_pos == 58 then colon_pos + 1 else colon_pos in
           -- Parse value
-          let val = parse_json s after_colon in
-          (true, (list_append pairs (key.0, val.0), val.1, false))
+          let v = parse_json s after_colon in
+          (true, (list_append pairs (key.0, v.0), v.1, false))
       ) (list_range 0 100) in
       ((5, result.0), result.1)
     else ((3,), p)  -- unknown, treat as null

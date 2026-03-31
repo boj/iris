@@ -22,7 +22,7 @@ let rot13_char code : Int -> Int [cost: Const(5)] =
 let rot13 s : String -> String [cost: Linear(s)] =
   let codes = map (\c -> char_at c 0) (str_chars s) in
   let rotated = map rot13_char codes in
-  str_from_chars rotated
+  str_join "" rotated
 
 -- ROT13 is its own inverse: applying it twice yields the original.
 let rot13_roundtrip s : String -> String [cost: Linear(s)] =

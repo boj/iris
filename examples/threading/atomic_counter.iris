@@ -8,6 +8,6 @@
 
 -- Initialize the "count" slot to x, increment by 1, return the new value.
 let counter x : Int -> Int [cost: Const(3)] =
-  let _ = atomic_write "count" x in
-  let _ = atomic_add "count" 1 in
+  let _r1 = atomic_write "count" x in
+  let _r2 = atomic_add "count" 1 in
   atomic_read "count"

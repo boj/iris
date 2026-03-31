@@ -37,14 +37,15 @@ let sym_null x : Int -> Int = -15
 -- each other without any combined-function workaround.
 let rec lisp_eval expr env : Int -> State -> Int [cost: Unknown] =
   -- If it's the empty tuple (), it evaluates to 0
-  if is_unit expr then 0
+  if expr == () then 0
   else
     -- Check if it's a symbol (negative int = variable lookup)
     let is_symbol = expr < 0 in
     if is_symbol then
       -- Look up in environment
-      if map_contains_key env expr then map_get env expr
-      else expr  -- unbound symbol evaluates to itself
+      let looked_up = map_get env expr in
+      if looked_up == () then expr  -- unbound symbol evaluates to itself
+      else looked_up
     else
       -- It's a literal integer
       expr

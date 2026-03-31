@@ -3,8 +3,8 @@
 -- O(n^2) comparisons, O(n) swaps. Not stable.
 
 -- Inline helper: replace element at index.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Find the index of the minimum element in xs[start..n-1], starting from `start`.
 let rec find_min_idx xs start current_min_idx : Tuple -> Int -> Int -> Int [cost: Linear(xs)] =

@@ -16,13 +16,13 @@ let bst_empty x : Int -> State [cost: Const(1)] =
   map_insert m "root" -1
 
 -- Allocate a new node, returns (new_state, node_id).
-let bst_alloc_node m val : State -> Int -> Tuple [cost: Const(1)] =
+let bst_alloc_node m v : State -> Int -> Tuple [cost: Const(1)] =
   let nid = map_get m "next_id" in
   let m = map_insert m "next_id" (nid + 1) in
   let key_val = str_concat (int_to_string nid) "_val" in
   let key_left = str_concat (int_to_string nid) "_left" in
   let key_right = str_concat (int_to_string nid) "_right" in
-  let m = map_insert m key_val val in
+  let m = map_insert m key_val v in
   let m = map_insert m key_left -1 in
   let m = map_insert m key_right -1 in
   (m, nid)
@@ -48,49 +48,49 @@ let node_set_right m nid child_id : State -> Int -> Int -> State [cost: Const(1)
   map_insert m (str_concat (int_to_string nid) "_right") child_id
 
 -- Insert a value into the BST. Returns updated state.
-let rec bst_insert_node m node_id val : State -> Int -> Int -> State [cost: Unknown] =
+let rec bst_insert_node m node_id v : State -> Int -> Int -> State [cost: Unknown] =
   if node_id == -1 then m  -- should not happen; allocation handled by caller
   else
     let v = node_val m node_id in
-    if val == v then m  -- duplicate, no change
-    else if val < v then
+    if v == v then m  -- duplicate, no change
+    else if v < v then
       let left = node_left m node_id in
       if left == -1 then
-        let result = bst_alloc_node m val in
+        let result = bst_alloc_node m v in
         let m2 = result.0 in
         let new_id = result.1 in
         node_set_left m2 node_id new_id
       else
-        bst_insert_node m left val
+        bst_insert_node m left v
     else
       let right = node_right m node_id in
       if right == -1 then
-        let result = bst_alloc_node m val in
+        let result = bst_alloc_node m v in
         let m2 = result.0 in
         let new_id = result.1 in
         node_set_right m2 node_id new_id
       else
-        bst_insert_node m right val
+        bst_insert_node m right v
 
 -- Public insert: handles the root case.
-let bst_insert m val : State -> Int -> State [cost: Unknown] =
+let bst_insert m v : State -> Int -> State [cost: Unknown] =
   let root = map_get m "root" in
   if root == -1 then
-    let result = bst_alloc_node m val in
+    let result = bst_alloc_node m v in
     let m2 = result.0 in
     let new_id = result.1 in
     map_insert m2 "root" new_id
   else
-    bst_insert_node m root val
+    bst_insert_node m root v
 
 -- Search for a value. Returns true/false.
-let rec bst_search m node_id val : State -> Int -> Int -> Bool [cost: Unknown] =
+let rec bst_search m node_id v : State -> Int -> Int -> Bool [cost: Unknown] =
   if node_id == -1 then false
   else
     let v = node_val m node_id in
-    if val == v then true
-    else if val < v then bst_search m (node_left m node_id) val
-    else bst_search m (node_right m node_id) val
+    if v == v then true
+    else if v < v then bst_search m (node_left m node_id) v
+    else bst_search m (node_right m node_id) v
 
 -- In-order traversal: returns sorted tuple of all values.
 let rec bst_inorder m node_id : State -> Int -> Tuple [cost: Unknown] =
@@ -100,7 +100,7 @@ let rec bst_inorder m node_id : State -> Int -> Tuple [cost: Unknown] =
     let right_vals = bst_inorder m (node_right m node_id) in
     list_concat left_vals (list_append right_vals (node_val m node_id))
 
--- Actually: append val between left and right for sorted order.
+-- Actually: append v between left and right for sorted order.
 let rec bst_inorder_sorted m node_id : State -> Int -> Tuple [cost: Unknown] =
   if node_id == -1 then ()
   else

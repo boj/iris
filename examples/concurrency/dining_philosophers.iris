@@ -1,7 +1,7 @@
--- Inline helper: return a new tuple with index i replaced by val.
--- list_take gives elements before i, list_append appends val, list_drop skips the old element.
-let list_set xs i val =
-  list_concat (list_append (list_take xs i) val) (list_drop xs (i + 1))
+-- Inline helper: return a new tuple with index i replaced by v.
+-- list_take gives elements before i, list_append appends v, list_drop skips the old element.
+let list_set xs i v =
+  list_concat (list_append (list_take xs i) v) (list_drop xs (i + 1))
 
 -- Dining Philosophers Problem
 -- Classic concurrency problem: 5 philosophers sit at a table, alternating

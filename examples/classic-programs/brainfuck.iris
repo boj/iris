@@ -16,12 +16,12 @@ let bf_init program : Tuple -> Tuple [cost: Const(1)] =
 
 -- Read current cell value (default 0 if uninitialized).
 let bf_read mem ptr : State -> Int -> Int [cost: Const(1)] =
-  if map_contains_key mem ptr then map_get mem ptr
-  else 0
+  let v = map_get mem ptr in
+  if v == () then 0 else v
 
 -- Write a value to the current cell.
-let bf_write mem ptr val : State -> Int -> Int -> State [cost: Const(1)] =
-  map_insert mem ptr val
+let bf_write mem ptr v : State -> Int -> Int -> State [cost: Const(1)] =
+  map_insert mem ptr v
 
 -- Find matching closing bracket from position pc.
 let rec find_matching_close program pc depth : Tuple -> Int -> Int -> Int [cost: Unknown] =
@@ -55,23 +55,23 @@ let bf_step mem ptr output pc program : State -> Int -> Tuple -> Int -> Tuple ->
     if instr == 62 then (mem, ptr + 1, output, pc + 1)           -- >
     else if instr == 60 then (mem, ptr - 1, output, pc + 1)      -- <
     else if instr == 43 then                                       -- +
-      let val = bf_read mem ptr in
-      (bf_write mem ptr (val + 1), ptr, output, pc + 1)
+      let v = bf_read mem ptr in
+      (bf_write mem ptr (v + 1), ptr, output, pc + 1)
     else if instr == 45 then                                       -- -
-      let val = bf_read mem ptr in
-      (bf_write mem ptr (val - 1), ptr, output, pc + 1)
+      let v = bf_read mem ptr in
+      (bf_write mem ptr (v - 1), ptr, output, pc + 1)
     else if instr == 46 then                                       -- .
-      let val = bf_read mem ptr in
-      (mem, ptr, list_append output val, pc + 1)
+      let v = bf_read mem ptr in
+      (mem, ptr, list_append output v, pc + 1)
     else if instr == 91 then                                       -- [
-      let val = bf_read mem ptr in
-      if val == 0 then
+      let v = bf_read mem ptr in
+      if v == 0 then
         let close = find_matching_close program pc 0 in
         (mem, ptr, output, close + 1)
       else (mem, ptr, output, pc + 1)
     else if instr == 93 then                                       -- ]
-      let val = bf_read mem ptr in
-      if val != 0 then
+      let v = bf_read mem ptr in
+      if v != 0 then
         let open = find_matching_open program pc 0 in
         (mem, ptr, output, open + 1)
       else (mem, ptr, output, pc + 1)

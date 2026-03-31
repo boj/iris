@@ -16,12 +16,12 @@ let rle_encode xs : Tuple -> Tuple [cost: Linear(xs)] =
         let result = state.0 in
         let cur = state.1 in
         let count = state.2 in
-        let val = list_nth xs i in
-        if val == cur then
+        let v = list_nth xs i in
+        if v == cur then
           (result, cur, count + 1)
         else
           -- Flush current run, start new one
-          (list_concat result (count, cur), val, 1)
+          (list_concat result (count, cur), v, 1)
     ) (list_range 0 n) in
     -- Flush final run
     list_concat state.0 (state.2, state.1)
@@ -32,9 +32,9 @@ let rle_decode encoded : Tuple -> Tuple [cost: Unknown] =
   let pairs = list_range 0 (n / 2) in
   fold () (\result i ->
     let count = list_nth encoded (i * 2) in
-    let val = list_nth encoded (i * 2 + 1) in
-    -- Append `val` count times
-    fold result (\r step -> list_append r val) (list_range 0 count)
+    let v = list_nth encoded (i * 2 + 1) in
+    -- Append `v` count times
+    fold result (\r step -> list_append r v) (list_range 0 count)
   ) pairs
 
 -- Test: encode and decode

@@ -6,8 +6,8 @@
 let stack_new x : Int -> Tuple [cost: Const(1)] = ()
 
 -- Push a value onto the stack.
-let stack_push s val : Tuple -> Int -> Tuple [cost: Const(1)] =
-  list_append s val
+let stack_push s v : Tuple -> Int -> Tuple [cost: Const(1)] =
+  list_append s v
 
 -- Pop the top value. Returns (new_stack, top_value).
 -- Returns ((), -1) if empty.

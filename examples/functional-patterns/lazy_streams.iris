@@ -12,7 +12,7 @@ let stream_take stream n : Tuple -> Int -> Tuple [cost: Linear(n)] =
 
 -- Fibonacci stream: each element is sum of previous two.
 let fib_stream x : Int -> Tuple [cost: Unknown] =
-  lazy_unfold (0, 1) (\(a, b) -> (a, (b, a + b)))
+  lazy_unfold (0, 1) (\p -> (p.0, (p.1, p.0 + p.1)))
 
 -- Powers of 2: 1, 2, 4, 8, 16, ...
 let powers_of_2 x : Int -> Tuple [cost: Unknown] =

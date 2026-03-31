@@ -6,8 +6,8 @@
 let queue_new x : Int -> Tuple [cost: Const(1)] = ()
 
 -- Enqueue a value at the back.
-let queue_enqueue q val : Tuple -> Int -> Tuple [cost: Const(1)] =
-  list_append q val
+let queue_enqueue q v : Tuple -> Int -> Tuple [cost: Const(1)] =
+  list_append q v
 
 -- Dequeue from the front. Returns (new_queue, front_value).
 -- Returns ((), -1) if empty.

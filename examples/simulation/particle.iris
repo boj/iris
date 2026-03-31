@@ -10,8 +10,12 @@ type Particle = (Float64, Float64, Float64, Float64, Float64)  -- (x, y, vx, vy,
 -- Compute gravitational force between two particles.
 -- Returns (fx, fy) force on particle 1 from particle 2.
 let gravity p1 p2 g : Particle -> Particle -> Float -> Vec2 [cost: Const(20)] =
-  let (x1, y1, _, _, m1) = p1 in
-  let (x2, y2, _, _, m2) = p2 in
+  let x1 = p1.0 in
+  let y1 = p1.1 in
+  let m1 = p1.4 in
+  let x2 = p2.0 in
+  let y2 = p2.1 in
+  let m2 = p2.4 in
   let dx = x2 - x1 in
   let dy = y2 - y1 in
   let dist_sq = dx * dx + dy * dy in
@@ -25,21 +29,26 @@ let gravity p1 p2 g : Particle -> Particle -> Float -> Vec2 [cost: Const(20)] =
 let total_force particles i g : Tuple -> Int -> Float -> Vec2 [cost: Unknown] =
   let p = list_nth particles i in
   let n = list_len particles in
-  fold (0.0, 0.0) (\(ax, ay) j ->
-    if j == i then (ax, ay)
+  fold (0.0, 0.0) (\acc j ->
+    if j == i then acc
     else
-      let (fx, fy) = gravity p (list_nth particles j) g in
-      (ax + fx, ay + fy)
+      let fv = gravity p (list_nth particles j) g in
+      (acc.0 + fv.0, acc.1 + fv.1)
   ) (list_range 0 n)
 
 -- Advance one timestep using Euler integration.
 let step particles dt g : Tuple -> Float -> Float -> Tuple [cost: Unknown] =
   let n = list_len particles in
   map (\i ->
-    let (x, y, vx, vy, mass) = list_nth particles i in
-    let (fx, fy) = total_force particles i g in
-    let ax = fx / mass in
-    let ay = fy / mass in
+    let pi = list_nth particles i in
+    let x = pi.0 in
+    let y = pi.1 in
+    let vx = pi.2 in
+    let vy = pi.3 in
+    let mass = pi.4 in
+    let fv = total_force particles i g in
+    let ax = fv.0 / mass in
+    let ay = fv.1 / mass in
     let new_vx = vx + ax * dt in
     let new_vy = vy + ay * dt in
     let new_x = x + new_vx * dt in
@@ -53,15 +62,18 @@ let simulate particles n_steps dt g : Tuple -> Int -> Float -> Float -> Tuple [c
 
 -- Compute total kinetic energy.
 let kinetic_energy particles : Tuple -> Float [cost: Linear(particles)] =
-  fold 0.0 (\acc (_, _, vx, vy, mass) ->
+  fold 0.0 (\acc p ->
+    let vx = p.2 in
+    let vy = p.3 in
+    let mass = p.4 in
     acc + 0.5 * mass * (vx * vx + vy * vy)
   ) particles
 
 -- Compute center of mass.
 let center_of_mass particles : Tuple -> Vec2 [cost: Linear(particles)] =
-  let total_mass = fold 0.0 (\acc (_, _, _, _, mass) -> acc + mass) particles in
-  let cx = fold 0.0 (\acc (x, _, _, _, mass) -> acc + x * mass) particles in
-  let cy = fold 0.0 (\acc (_, y, _, _, mass) -> acc + y * mass) particles in
+  let total_mass = fold 0.0 (\acc p -> acc + p.4) particles in
+  let cx = fold 0.0 (\acc p -> acc + p.0 * p.4) particles in
+  let cy = fold 0.0 (\acc p -> acc + p.1 * p.4) particles in
   (cx / total_mass, cy / total_mass)
 
 -- Test: two-body orbit
