@@ -942,3 +942,193 @@ fn test_iris_lowerer_lambda_fold() {
     // For now, just check it doesn't crash
     assert!(result.is_ok());
 }
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_inspect_iris_lambda_graph() {
+    use iris_types::eval::Value;
+    use iris_types::graph::*;
+
+    // Compile through IRIS pipeline
+    let csj_src = "let test src = compile_source_json src";
+    let csj_result = iris_bootstrap::syntax::compile(csj_src);
+    let mut reg = std::collections::BTreeMap::new();
+    for (_, frag, _) in &csj_result.fragments {
+        reg.insert(frag.id, frag.graph.clone());
+    }
+    let csj_graph = csj_result.fragments.last().unwrap().1.graph.clone();
+
+    let result = iris_bootstrap::evaluate_with_registry(
+        &csj_graph,
+        &[Value::String(r"let f = \x -> x + 1".to_string())],
+        50_000_000,
+        &reg,
+    ).unwrap();
+
+    // result is (module_id, entries)
+    if let Value::Tuple(fields) = &result {
+        eprintln!("compile_source_json result: {} fields", fields.len());
+        eprintln!("  module_id: {:?}", fields.get(0));
+    }
+
+    // Get the graph from the module cache via module_eval
+    // Actually I can't easily extract the graph. Let me just test evaluation.
+    let eval_src = r"let test src arg = let m = compile_source_json src in module_eval (m.0) 0 (arg,)";
+    let eval_result = iris_bootstrap::syntax::compile(eval_src);
+    let mut reg2 = std::collections::BTreeMap::new();
+    for (_, frag, _) in &eval_result.fragments {
+        reg2.insert(frag.id, frag.graph.clone());
+    }
+    let eval_graph = eval_result.fragments.last().unwrap().1.graph.clone();
+
+    // Test single-param lambda in fold
+    let r1 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String(r"let f n = fold 0 (\x -> x + 1) n".to_string()), Value::Int(5)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold 0 (\\x -> x+1) 5 via IRIS pipeline: {:?}", r1);
+
+    // Test: what does the fold step look like?
+    // fold 0 (\x -> x+1) 5: the step is Lambda, not Prim.
+    // The fold should call the lambda 5 times with acc values.
+    // \x -> x+1 takes ONE arg and returns x+1.
+    // fold passes (acc, i) as the lambda input.
+    // So the lambda gets a tuple (acc, i) but only uses it as x (= tuple).
+    // x + 1 would be tuple + 1 which fails.
+    //
+    // The CORRECT fold lambda takes TWO params: \acc i -> acc + i
+    // Let's test that:
+    let r2 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String(r"let f n = fold 0 (\acc i -> acc + i) n".to_string()), Value::Int(10)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold 0 (\\acc i -> acc+i) 10 via IRIS pipeline: {:?}", r2);
+
+    // Test simple fold with Prim step (should work):
+    let r3 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String("let f n = fold 0 add n".to_string()), Value::Int(10)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold 0 add 10 via IRIS pipeline: {:?}", r3);
+    assert_eq!(r3, Value::Int(45));
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_debug_iris_lambda_fold() {
+    use iris_types::eval::Value;
+    use iris_types::graph::*;
+
+    let eval_src = r"let test src = let m = compile_source_json src in let mid = m.0 in module_eval mid 0 ()";
+    let eval_result = iris_bootstrap::syntax::compile(eval_src);
+    let mut reg = std::collections::BTreeMap::new();
+    for (_, frag, _) in &eval_result.fragments {
+        reg.insert(frag.id, frag.graph.clone());
+    }
+    let eval_graph = eval_result.fragments.last().unwrap().1.graph.clone();
+
+    // Get the PROGRAM value (not evaluated result)
+    let prog = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String(r"let f n = fold 0 (\acc i -> acc + i) n".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+
+    // This evaluates the function with no args, which returns the fold's base (0).
+    // I need to get the GRAPH. Let me check what module_eval returns.
+    eprintln!("module_eval result type: {:?}", match &prog {
+        Value::Int(n) => format!("Int({})", n),
+        Value::Program(_) => "Program".to_string(),
+        Value::Tuple(t) => format!("Tuple({})", t.len()),
+        _ => format!("{:?}", prog),
+    });
+
+    // If it's Int(0), the fold evaluated with no args: n=Unit, fold runs 0 iterations = 0.
+    // That's correct behavior! The issue is not in the Lambda but in how we pass args.
+    // Let me check with args:
+    let eval2_src = r"let test src arg = let m = compile_source_json src in let mid = m.0 in module_eval mid 0 (arg,)";
+    let eval2_result = iris_bootstrap::syntax::compile(eval2_src);
+    let mut reg2 = std::collections::BTreeMap::new();
+    for (_, frag, _) in &eval2_result.fragments {
+        reg2.insert(frag.id, frag.graph.clone());
+    }
+    let eval2_graph = eval2_result.fragments.last().unwrap().1.graph.clone();
+
+    // With arg = 10
+    let r = iris_bootstrap::evaluate_with_registry(
+        &eval2_graph,
+        &[Value::String(r"let f n = fold 0 (\acc i -> acc + i) n".to_string()), Value::Int(10)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold lambda with arg 10: {:?}", r);
+
+    // Now let me try the simplest possible lambda fold: fold 0 (\x -> x) 5
+    let r2 = iris_bootstrap::evaluate_with_registry(
+        &eval2_graph,
+        &[Value::String(r"let f n = fold 0 (\x -> x) n".to_string()), Value::Int(5)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold 0 identity 5: {:?}", r2);
+
+    // And: fold 42 (\x -> x) 5 -- should return 42 (identity step, base=42)
+    let r3 = iris_bootstrap::evaluate_with_registry(
+        &eval2_graph,
+        &[Value::String("let f n = fold 42 (\\x -> x) n".to_string()), Value::Int(5)],
+        50_000_000, &reg2,
+    ).unwrap();
+    eprintln!("fold 42 identity 5: {:?}", r3);
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_iris_lambda_standalone() {
+    use iris_types::eval::Value;
+
+    let eval_src = r"let test src = let m = compile_source_json src in let mid = m.0 in module_eval mid 0 ()";
+    let eval_result = iris_bootstrap::syntax::compile(eval_src);
+    let mut reg = std::collections::BTreeMap::new();
+    for (_, frag, _) in &eval_result.fragments {
+        reg.insert(frag.id, frag.graph.clone());
+    }
+    let eval_graph = eval_result.fragments.last().unwrap().1.graph.clone();
+
+    // Test: compile just a constant (should work)
+    let r1 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String("let f = 42".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("constant: {:?}", r1);
+    assert_eq!(r1, Value::Int(42));
+
+    // Test: compile fold 0 add 5 (Prim step, should work)
+    let r2 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String("let f = fold 0 add 5".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("fold 0 add 5: {:?}", r2);
+    assert_eq!(r2, Value::Int(10));
+
+    // Test: what does fold 42 add 0 return? (zero iterations = base)
+    let r3 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String("let f = fold 42 add 0".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("fold 42 add 0: {:?}", r3);
+    assert_eq!(r3, Value::Int(42));
+
+    // NOW: what does the IRIS lowerer produce for fold 42 ... 0
+    // If the lambda step fold returns 0 even with base=42, the fold node
+    // itself might be malformed (not actually a Fold node).
+    let r4 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String(r"let f = fold 42 (\x -> x) 0".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("fold 42 (lambda identity) 0: {:?} (should be 42)", r4);
+}

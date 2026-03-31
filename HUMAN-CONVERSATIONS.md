@@ -250,3 +250,12 @@
 
 **Assistant:** Almost. Here's the honest picture:
 
+
+---
+
+**2026-03-30 19:21**
+
+**Human:** Investigate it
+
+**Assistant:** The lambda-in-fold issue in the IRIS lowerer is a deep parser/lowerer interaction problem. The parser produces AST nodes, the lowerer's stack machine processes them, and the Lambda combine creates graph nodes. The chain works for simple cases but the multi-param lambda + fold interaction requires careful scope management and parameter destructuring.
+

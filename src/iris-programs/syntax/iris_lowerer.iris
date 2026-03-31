@@ -258,6 +258,15 @@ let lower ast src =
             let arg_id = ns.0 in
             let func_id = (ns.1).0 in
             let rns = (ns.1).1 in
+            -- Check if func is a Fold node (kind 8) — special handling
+            let func_kind = graph_get_kind pg func_id in
+            if func_kind == 8 then
+              -- Fold application: connect arg to next available port
+              -- Count existing argument edges to determine port number
+              let existing = graph_edge_count pg func_id in
+              let p2 = graph_connect pg func_id arg_id existing in
+              (p2, (func_id, rns), nsp - 1, rws, nwsp, sc)
+            else
             let step = graph_add_node_rt pg 1 in
             let p2 = graph_connect (step.0) (step.1) func_id 0 in
             let p3 = graph_connect p2 (step.1) arg_id 1 in
@@ -576,6 +585,12 @@ let lower ast src =
                 let step = graph_add_node_rt pg 0 in
                 let step2 = graph_set_prim_op (step.0) (step.1) (prim_result.1) in
                 (step2.0, (step2.1, ns), nsp + 1, rws, nwsp, sc)
+              else if nh == 421 then
+                -- 'fold' keyword: create a Fold node (kind 8).
+                -- The Apply chain will connect base (port 0), step (port 1),
+                -- and coll (port 2) as arguments.
+                let step = graph_add_node_rt pg 8 in
+                (step.0, (step.1, ns), nsp + 1, rws, nwsp, sc)
               else
                 -- Unknown: emit int 0
                 let step = graph_add_node_rt pg 5 in
