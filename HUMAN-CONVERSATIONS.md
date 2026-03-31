@@ -160,3 +160,12 @@
 
 **Assistant:** Background benchmark run confirmed complete — all results already captured and published.
 
+
+---
+
+**2026-03-31 14:47**
+
+**Human:** Investigate it
+
+**Assistant:** Pushed. Multi-function AOT now works for the common case. Here's where we are:
+
