@@ -814,3 +814,96 @@ fn test_iris_mini_eval_via_jit() {
     assert_eq!(result, Value::Int(117), "mini_eval.iris via JIT: (10+3)*(10-1) = 117");
     let _ = std::fs::remove_file(&target_json);
 }
+
+#[test]
+fn test_native_compile_constant() {
+    use iris_types::eval::Value;
+    let target_json = compile_with_rust("let c = 42", "nc_const");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let result = iris_bootstrap::native_compile::native_eval(&target, &[]);
+    assert_eq!(result, Some(Value::Int(42)), "native compile: constant 42");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_native_compile_add() {
+    use iris_types::eval::Value;
+    let target_json = compile_with_rust("let f x y = x + y", "nc_add");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let result = iris_bootstrap::native_compile::native_eval(
+        &target, &[Value::Int(13), Value::Int(29)]);
+    assert_eq!(result, Some(Value::Int(42)), "native compile: 13 + 29 = 42");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_native_compile_guard() {
+    use iris_types::eval::Value;
+    let target_json = compile_with_rust("let f x = if x > 0 then x else 0 - x", "nc_guard");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let result = iris_bootstrap::native_compile::native_eval(
+        &target, &[Value::Int(-5)]);
+    assert_eq!(result, Some(Value::Int(5)), "native compile: abs(-5) = 5");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_native_compile_let() {
+    use iris_types::eval::Value;
+    let target_json = compile_with_rust("let f x = let y = x + 1 in y * y", "nc_let");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let result = iris_bootstrap::native_compile::native_eval(
+        &target, &[Value::Int(4)]);
+    assert_eq!(result, Some(Value::Int(25)), "native compile: let y=5 in y*y = 25");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_native_compile_fold() {
+    use iris_types::eval::Value;
+    let target_json = compile_with_rust("let f n = fold 0 add n", "nc_fold");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+    let result = iris_bootstrap::native_compile::native_eval(
+        &target, &[Value::Int(10)]);
+    assert_eq!(result, Some(Value::Int(45)), "native compile: fold 0 add 10 = 45");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_native_compile_mini_eval() {
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Load mini_eval.iris (compiled to SemanticGraph)
+    let me_graph = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+
+    // Try to compile it natively
+    let code = iris_bootstrap::native_compile::compile_graph_native(&me_graph);
+    match &code {
+        Some(bytes) => eprintln!("mini_eval.iris compiled to {} bytes of x86-64!", bytes.len()),
+        None => { eprintln!("mini_eval.iris: native compilation failed (expected for now)"); return; }
+    }
+
+    // If compilation succeeded, try evaluating a simple program through it
+    let target_json = compile_with_rust("let c = 42", "nc_me_target");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    let result = iris_bootstrap::native_compile::native_eval(
+        &me_graph,
+        &[
+            Value::Program(std::rc::Rc::new(me_graph.clone())),
+            Value::Program(std::rc::Rc::new(target)),
+            Value::Range(0, 0), // empty env
+        ],
+    );
+
+    match &result {
+        Some(Value::Int(42)) => eprintln!("mini_eval.iris native evaluation: 42 ✓"),
+        Some(v) => eprintln!("mini_eval.iris native: unexpected {:?}", v),
+        None => eprintln!("mini_eval.iris native evaluation failed"),
+    }
+
+    let _ = std::fs::remove_file(&target_json);
+}

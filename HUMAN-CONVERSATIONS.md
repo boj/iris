@@ -205,3 +205,12 @@
 
 **Assistant:** Yes. Option B gets us to a native binary that IS the evaluator, compiled by the Rust JIT from IRIS source. Once we have that:
 
+
+---
+
+**2026-03-30 16:45**
+
+**Human:** Investigate it
+
+**Assistant:** Already clean. Here's where we stand:
+
