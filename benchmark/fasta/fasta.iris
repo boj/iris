@@ -161,3 +161,9 @@ let fasta_seed_only n seed =
   fold seed (\s i ->
     (s * 3877 + 29573) % 139968
   ) (list_range 0 n)
+
+-- Main entry point: generate a DNA sequence of length n and return its length
+let main n =
+  let res = random_dna_buf n 42 in
+  let dna = res.1 in
+  str_len dna

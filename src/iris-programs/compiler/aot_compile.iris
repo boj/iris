@@ -388,13 +388,10 @@ let aot_compile_node program node_id next_reg default_type =
       else if lit_val == 3 then (emit_load_rbp out_reg 0xb8, out_reg, next_reg + 1)
       else if lit_val == 4 then (emit_load_rbp out_reg 0xb0, out_reg, next_reg + 1)
       else if lit_val == 5 then (emit_load_rbp out_reg 0xa8, out_reg, next_reg + 1)
-      -- Lambda param (0x80 = 128): for fold, push acc then elem as stack-based
-      -- tuple (needed for Project to index into).  Fall back to stack for this.
+      -- Lambda param (0x80 = 128): fold lambda parameter.
+      -- No-op: Project on InputRef(128) reads directly from fold slots.
       else if lit_val == 128 then
-        (bytes_from_ints (
-          0x48, 0x8b, 0x45, 0x98, 0x50,    -- mov rax,[rbp-104]; push (elem)
-          0x48, 0x8b, 0x45, 0xa0, 0x50      -- mov rax,[rbp-96]; push (acc)
-        ), out_reg, next_reg + 1)
+        (bytes_from_ints (), out_reg, next_reg + 1)
       else (emit_xor_rr out_reg, out_reg, next_reg + 1)
     -- Float64 constant (type_tag 2): convert to bits, then mov imm64
     else if type_tag == 2 then
@@ -593,7 +590,7 @@ let aot_compile_node program node_id next_reg default_type =
             bytes_from_ints (rex_id, 0xf7, modrm_id) in
           let mov_rdx_to_left =
             let l_hi = reg_hi left in
-            let rex_m = bitand (72 + 1 * 4 + l_hi) 255 in
+            let rex_m = bitand (72 + l_hi) 255 in
             let modrm_m = bitand (192 + 2 * 8 + bitand left 7) 255 in
             bytes_from_ints (rex_m, 0x89, modrm_m) in
           let skip_len = 2 + bytes_len idiv_bytes + bytes_len mov_rdx_to_left in
@@ -745,30 +742,86 @@ let aot_compile_node program node_id next_reg default_type =
     -- Return dummy register since Project will handle the actual value extraction
     (result.0, out_reg, next_reg + 1)
 
-  -- Project (kind 13): tuple field access via stack offset
-  -- After Tuple pushes values, they're on the stack. Project pops the right one.
+  -- Project (kind 13): tuple field access
+  -- For fold lambda params (InputRef 128), read directly from fold stack slots.
+  -- For other tuples, read from the stack where Tuple pushed values.
   else if kind == 13 then
     let children = graph_outgoing program node_id in
     let child0 = list_nth children 0 in
-    let me = self_graph in
-    let r0 = graph_eval me (program, child0, next_reg, default_type) in
-    let code0 = r0.0 in
     let field_idx = graph_get_field_index program node_id in
-    let offset = field_idx * 8 in
-    let off = encode_i32 offset in
-    -- Load from stack: mov out_reg, [rsp + offset]
-    let load_code =
-      let d_hi = reg_hi out_reg in
-      let rex = bitand (72 + d_hi * 4) 255 in
-      let modrm = bitand (4 + bitand out_reg 7 * 8) 255 in
-      -- ModRM = 00_reg_100 (SIB follows), SIB = 00_100_100 (rsp, no index)
-      -- Actually for [rsp + disp32]: ModRM=10_reg_100, SIB=00_100_100, disp32
-      if offset == 0 then
-        bytes_from_ints (rex, 0x8b, bitand (4 + bitand out_reg 7 * 8) 255, 0x24)
+    let child0_kind = graph_get_kind program child0 in
+
+    -- Check: is child an InputRef(128) (fold lambda param)?
+    let is_fold_input =
+      if child0_kind == 5 then
+        let ctt = graph_get_lit_type_tag program child0 in
+        let clv = graph_get_lit_value program child0 in
+        if ctt == 255 then if clv == 128 then 1 else 0
+        else 0
+      else 0 in
+
+    -- Check: is child a Project on InputRef(128)? (nested tuple acc access)
+    let nested_info =
+      if child0_kind == 13 then
+        let gc_list = graph_outgoing program child0 in
+        let grandchild = list_nth gc_list 0 in
+        let gc_kind = graph_get_kind program grandchild in
+        if gc_kind == 5 then
+          let gc_tt = graph_get_lit_type_tag program grandchild in
+          let gc_lv = graph_get_lit_value program grandchild in
+          if gc_tt == 255 then
+            if gc_lv == 128 then
+              let parent_fi = graph_get_field_index program child0 in
+              (1, parent_fi)  -- (is_nested, parent_field_index)
+            else (0, 0)
+          else (0, 0)
+        else (0, 0)
+      else (0, 0) in
+
+    if is_fold_input == 1 then
+      -- Direct fold slot access: Project on InputRef(128)
+      -- field 0 = acc (or acc.0 for tuple acc) at [rbp-96] = disp 0xa0
+      -- field 1 = elem/index at [rbp-104] = disp 0x98
+      let disp = if field_idx == 0 then 0xa0
+                 else if field_idx == 1 then 0x98
+                 else 0xa0 in
+      (emit_load_rbp out_reg disp, out_reg, next_reg + 1)
+
+    else if nested_info.0 == 1 then
+      -- Nested: Project(fi, Project(parent_fi, InputRef(128)))
+      -- parent_fi == 0 means acc tuple access:
+      --   field 0 = acc.0 at [rbp-96]  = disp 0xa0
+      --   field 1 = acc.1 at [rbp-128] = disp 0x80
+      -- parent_fi == 1 means elem access (scalar, treat as identity)
+      if nested_info.1 == 0 then
+        let disp = if field_idx == 0 then 0xa0
+                   else if field_idx == 1 then 0x80
+                   else 0xa0 in
+        (emit_load_rbp out_reg disp, out_reg, next_reg + 1)
       else
-        bytes_from_ints (rex, 0x8b, bitand (132 + bitand out_reg 7 * 8) 255, 0x24,
-          list_nth off 0, list_nth off 1, list_nth off 2, list_nth off 3) in
-    (bytes_concat code0 load_code, out_reg, next_reg + 1)
+        -- elem is scalar, Project on it is identity
+        (emit_load_rbp out_reg 0x98, out_reg, next_reg + 1)
+
+    else
+      -- Normal Project: compile child, read from stack (for Tuple nodes etc.)
+      let me = self_graph in
+      let r0 = graph_eval me (program, child0, next_reg, default_type) in
+      let code0 = r0.0 in
+      let offset = field_idx * 8 in
+      let off = encode_i32 offset in
+      -- Load from stack: mov out_reg, [rsp + offset]
+      let load_code =
+        let d_hi = reg_hi out_reg in
+        let rex = bitand (72 + d_hi * 4) 255 in
+        let modrm = bitand (4 + bitand out_reg 7 * 8) 255 in
+        -- ModRM = 00_reg_100 (SIB follows), SIB = 00_100_100 (rsp, no index)
+        -- Actually for [rsp + disp32]: ModRM=10_reg_100, SIB=00_100_100, disp32
+        if offset == 0 then
+          bytes_from_ints (rex, 0x8b, bitand (4 + bitand out_reg 7 * 8) 255, 0x24)
+        else
+          bytes_from_ints (rex, 0x8b, bitand (132 + bitand out_reg 7 * 8) 255, 0x24,
+            list_nth off 0, list_nth off 1, list_nth off 2, list_nth off 3) in
+      (bytes_concat code0 load_code, out_reg, next_reg + 1)
 
   -- Fold (kind 8): iteration
   else if kind == 8 then
@@ -810,6 +863,8 @@ let aot_compile_node program node_id next_reg default_type =
             else if step_op == 2 then emit_imul_rr base_reg 3
             else emit_alu_rr 0x01 base_reg 3 in
           let alu_len = bytes_len alu_op in
+          -- Save outer fold's rbx/r12 (push rbx = 0x53, push r12 = 0x41 0x54)
+          let save_regs = bytes_from_ints (0x53, 0x41, 0x54) in
           -- Setup: rbx=0 (counter), r12=limit
           let setup = bytes_from_ints (
             0x31, 0xdb                   -- xor ebx, ebx
@@ -831,8 +886,10 @@ let aot_compile_node program node_id next_reg default_type =
           let loop_jmp = bytes_from_ints (
             0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
           ) in
-          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
-            base_code coll_code) setup) set_limit) loop_head) alu_op) (bytes_concat loop_tail loop_jmp),
+          -- Restore outer fold's rbx/r12 (pop r12 = 0x41 0x5C, pop rbx = 0x5B)
+          let restore_regs = bytes_from_ints (0x41, 0x5c, 0x5b) in
+          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+            base_code coll_code) save_regs) setup) set_limit) loop_head) alu_op) (bytes_concat loop_tail loop_jmp)) restore_regs,
            base_reg, next_reg + 1)
 
         else
@@ -856,24 +913,43 @@ let aot_compile_node program node_id next_reg default_type =
         (bytes_concat base_code fold_body, base_reg, next_reg + 1)
 
       -- Strategy (b): Lambda step -> native x86 counted loop
-      -- Use stack-based approach for fold body since lambda bodies use
-      -- InputRef(128) + Project which expect stack layout
+      -- Project on InputRef(128) reads directly from fold slots:
+      --   [rbp-96]  = acc (or acc.0 for tuple acc)
+      --   [rbp-104] = fold element/index
+      --   [rbp-128] = acc.1 (for tuple acc)
       else if step_kind == 2 then
         let lambda_children = graph_outgoing program step_id in
         let body_id = list_nth lambda_children 0 in
-        -- Compile body in stack-based mode (it uses InputRef 128 / Project)
-        -- The body is compiled with next_reg so it produces its result in a register
-        -- but internally it may use push/pop for the lambda param tuple
         let r_body = graph_eval me (program, body_id, next_reg, default_type) in
         let body_code = r_body.0 in
         let body_reg = r_body.1 in
         let body_len = bytes_len body_code in
-        -- Move body result to rax for store to acc slot
-        -- Save body result to acc, then clean up stack from InputRef(128) push
-        let body_save = bytes_concat (emit_mov_rax_from body_reg) (bytes_from_ints (
-          0x48, 0x89, 0x45, 0xa0,       -- mov [rbp-96], rax (store acc)
-          0x48, 0x83, 0xc4, 0x10        -- add rsp, 16 (pop pushed acc+elem)
-        )) in
+
+        -- Check if base is a Tuple (kind 11) for tuple-accumulator fold
+        let base_kind = graph_get_kind program base_id in
+        let base_children = graph_outgoing program base_id in
+        let base_n_children = list_len base_children in
+        let is_tuple_acc = if base_kind == 11 then
+          if base_n_children >= 2 then 1 else 0
+        else 0 in
+
+        -- body_save depends on whether the fold has a tuple or scalar accumulator
+        let body_save =
+          if is_tuple_acc == 1 then
+            -- Tuple-acc: body is a Tuple that pushed N values onto stack.
+            -- Pop them back into acc slots (reverse order: last child on top).
+            -- For 2-tuple: pop [rsp+0] -> [rbp-128] (acc.1), pop [rsp+8] -> [rbp-96] (acc.0)
+            bytes_from_ints (
+              0x58,                         -- pop rax (= new acc.1, child 1 pushed last)
+              0x48, 0x89, 0x45, 0x80,       -- mov [rbp-128], rax
+              0x58,                         -- pop rax (= new acc.0, child 0 pushed first)
+              0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax
+            )
+          else
+            -- Scalar-acc: store body result register to [rbp-96]
+            bytes_concat (emit_mov_rax_from body_reg) (bytes_from_ints (
+              0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax (store acc)
+            )) in
         let body_save_len = bytes_len body_save in
 
         let coll_children = graph_outgoing program coll_id in
@@ -892,13 +968,32 @@ let aot_compile_node program node_id next_reg default_type =
           let coll_code = r_coll.0 in
           let coll_reg = r_coll.1 in
 
-          -- Setup: acc = base_val, counter = 0, limit = coll_reg
-          let setup = bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
-            0x48, 0x89, 0x45, 0xa0,                     -- mov [rbp-96], rax (acc)
-            0x31, 0xdb                                   -- xor ebx, ebx (counter = 0)
-          )) in
+          -- Initialize acc slots from base value.
+          -- Must happen before save_regs (which pushes onto stack).
+          let base_init =
+            if is_tuple_acc == 1 then
+              -- Tuple base: Tuple codegen pushed elements onto stack.
+              -- Pop them into acc slots. For 2-tuple: child1 on top, child0 deeper.
+              bytes_from_ints (
+                0x58,                         -- pop rax (= base child 1)
+                0x48, 0x89, 0x45, 0x80,       -- mov [rbp-128], rax (acc.1)
+                0x58,                         -- pop rax (= base child 0)
+                0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax (acc.0)
+              )
+            else
+              -- Scalar base: move base_reg to [rbp-96]
+              bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
+                0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax (acc)
+              )) in
+
+          -- Save outer fold's rbx/r12 (push rbx = 0x53, push r12 = 0x41 0x54)
+          let save_regs = bytes_from_ints (0x53, 0x41, 0x54) in
+
+          -- Counter and limit setup
+          let loop_setup = bytes_from_ints (
+            0x31, 0xdb                    -- xor ebx, ebx (counter = 0)
+          ) in
           -- mov r12, coll_reg (limit): move coll result to r12 via rax
-          -- Note: coll_reg IS a raw register number (not a slot index)
           let set_limit = bytes_concat (emit_mov_rax_from coll_reg) (bytes_from_ints (
             0x49, 0x89, 0xc4  -- mov r12, rax
           )) in
@@ -907,7 +1002,6 @@ let aot_compile_node program node_id next_reg default_type =
           -- forward jump skips: load_elem(4) + body + body_save + loop_tail(3) + loop_jmp(5)
           let fwd_disp = 4 + body_len + body_save_len + 3 + 5 in
           let fwd = encode_i32 fwd_disp in
-          -- cmp rbx, r12; jge .done (skip body if counter >= limit)
           let loop_header = bytes_from_ints (
             0x4c, 0x39, 0xe3,           -- cmp rbx, r12 (REX.WR for r12)
             0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
@@ -921,8 +1015,6 @@ let aot_compile_node program node_id next_reg default_type =
           let loop_tail = bytes_from_ints (
             0x48, 0xff, 0xc3            -- inc rbx
           ) in
-          -- back jump: load_elem(4) + body(body_len) + body_save(body_save_len)
-          --   + loop_tail(3) + loop_jmp(5) + loop_header(9)
           let back_dist = body_len + body_save_len + 4 + 3 + 5 + 9 in
           let back_neg = 0 - back_dist in
           let back = encode_i32 back_neg in
@@ -930,10 +1022,12 @@ let aot_compile_node program node_id next_reg default_type =
             0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
           ) in
 
+          -- Restore outer fold's rbx/r12 (pop r12 = 0x41 0x5C, pop rbx = 0x5B)
+          let restore_regs = bytes_from_ints (0x41, 0x5c, 0x5b) in
           let load_final = emit_load_rbp out_reg 0xa0 in
 
-          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
-            base_code coll_code) setup) set_limit) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) load_final,
+          (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+            base_code coll_code) base_init) save_regs) loop_setup) set_limit) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) (bytes_concat restore_regs load_final),
            out_reg, next_reg + 1)
 
         else
@@ -959,11 +1053,26 @@ let aot_compile_node program node_id next_reg default_type =
           bytes_from_ints (0x48, 0x81, 0xec, list_nth as_enc 0, list_nth as_enc 1, list_nth as_enc 2, list_nth as_enc 3)
         else bytes_from_ints () in
 
-        let setup = bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
-          0x48, 0x89, 0x45, 0xa0,
-          0x31, 0xdb,
+        -- Initialize acc slots from base (before save_regs pushes)
+        let base_init =
+          if is_tuple_acc == 1 then
+            bytes_from_ints (
+              0x58,                         -- pop rax (= base child 1)
+              0x48, 0x89, 0x45, 0x80,       -- mov [rbp-128], rax (acc.1)
+              0x58,                         -- pop rax (= base child 0)
+              0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax (acc.0)
+            )
+          else
+            bytes_concat (emit_mov_rax_from base_reg) (bytes_from_ints (
+              0x48, 0x89, 0x45, 0xa0        -- mov [rbp-96], rax (acc)
+            )) in
+
+        -- Save outer fold's rbx/r12 (push rbx = 0x53, push r12 = 0x41 0x54)
+        let save_regs = bytes_from_ints (0x53, 0x41, 0x54) in
+        let setup = bytes_from_ints (
+          0x31, 0xdb,                   -- xor ebx, ebx (counter = 0)
           0x49, 0xc7, 0xc4
-        )) in
+        ) in
         let n_enc = encode_i32 n_elems in
         let setup2 = bytes_from_ints (list_nth n_enc 0, list_nth n_enc 1, list_nth n_enc 2, list_nth n_enc 3) in
 
@@ -989,14 +1098,16 @@ let aot_compile_node program node_id next_reg default_type =
           0xe9, list_nth back 0, list_nth back 1, list_nth back 2, list_nth back 3
         ) in
 
+        -- Restore outer fold's rbx/r12 (pop r12 = 0x41 0x5C, pop rbx = 0x5B)
+        let restore_regs = bytes_from_ints (0x41, 0x5c, 0x5b) in
         let load_final = emit_load_rbp out_reg 0xa0 in
 
         let dealloc_array = if n_elems > 0 then
           bytes_from_ints (0x48, 0x81, 0xc4, list_nth as_enc 0, list_nth as_enc 1, list_nth as_enc 2, list_nth as_enc 3)
         else bytes_from_ints () in
 
-        (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
-          base_code alloc_array) elem_codes) setup) setup2) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) (bytes_concat dealloc_array load_final),
+        (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat (bytes_concat
+          base_code base_init) alloc_array) elem_codes) save_regs) setup) setup2) loop_header) load_elem) body_code) body_save) loop_tail) loop_jmp) (bytes_concat (bytes_concat restore_regs dealloc_array) load_final),
          out_reg, next_reg + 1)
 
       -- Unknown step kind
@@ -1068,8 +1179,18 @@ let aot_compile program =
   let result_reg = result.1 in
   -- Move result to rax
   let mov_result = emit_mov_rax_from result_reg in
-  -- Extended System V AMD64 prologue (80 bytes stack frame for fold slots)
+  -- Extended System V AMD64 prologue (112 bytes stack frame for fold/tuple slots)
   -- Prologue: save callee-saved regs (NOT r15 — reserved for heap pointer)
+  -- Stack layout:
+  --   [rbp - 48]  = arg 0 (rdi)      [rbp - 56]  = arg 1 (rsi)
+  --   [rbp - 64]  = arg 2 (rdx)      [rbp - 72]  = arg 3 (rcx)
+  --   [rbp - 80]  = arg 4 (r8)       [rbp - 88]  = arg 5 (r9)
+  --   [rbp - 96]  = fold acc (or acc.0 for tuple)
+  --   [rbp - 104] = fold element/index
+  --   [rbp - 112] = (spare)
+  --   [rbp - 120] = (spare)
+  --   [rbp - 128] = fold acc.1 (for tuple accumulator)
+  --   [rbp - 136] = (spare)
   let prologue = bytes_from_ints (
     0x55,                         -- push rbp
     0x48, 0x89, 0xe5,             -- mov rbp, rsp
@@ -1077,7 +1198,7 @@ let aot_compile program =
     0x41, 0x54,                   -- push r12
     0x41, 0x55,                   -- push r13
     0x41, 0x56,                   -- push r14
-    0x48, 0x83, 0xec, 80,         -- sub rsp, 80 (fold slots)
+    0x48, 0x83, 0xec, 112,        -- sub rsp, 112 (fold + tuple acc slots)
     0x48, 0x89, 0x7d, 0xd0,       -- mov [rbp-48], rdi  (arg0)
     0x48, 0x89, 0x75, 0xc8,       -- mov [rbp-56], rsi  (arg1)
     0x48, 0x89, 0x55, 0xc0,       -- mov [rbp-64], rdx  (arg2)

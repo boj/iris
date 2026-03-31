@@ -37,3 +37,44 @@ let atv_row col v =
 -- Dot product
 let dot a b =
   fold 0.0 (\acc pair -> acc + pair.0 * pair.1) (zip a b)
+
+-- Compute A*v for an n-element vector v, returning an n-element vector
+let multiply_av n v =
+  map (\row ->
+    fold 0.0 (\acc j ->
+      let ij = row + j in
+      acc + 1.0 / int_to_float (ij * (ij + 1) / 2 + row + 1) * list_nth v j
+    ) (list_range 0 n)
+  ) (list_range 0 n)
+
+-- Compute A^T * v for an n-element vector v, returning an n-element vector
+let multiply_atv n v =
+  map (\col ->
+    fold 0.0 (\acc j ->
+      let ji = j + col in
+      acc + 1.0 / int_to_float (ji * (ji + 1) / 2 + j + 1) * list_nth v j
+    ) (list_range 0 n)
+  ) (list_range 0 n)
+
+-- Compute A^T * A * v (one step of the power iteration)
+let multiply_atav n v =
+  let av = multiply_av n v in
+  multiply_atv n av
+
+-- Main entry point: compute spectral norm of the n x n matrix using
+-- 10 steps of power iteration, return sqrt(vBv / vv)
+let main n =
+  let u_init = map (\i -> 1.0) (list_range 0 n) in
+  -- 10 power iteration steps: alternately compute u = AtAv and v = AtAu
+  let state = fold (u_init, u_init) (\st step ->
+    let u = st.0 in
+    let v = st.1 in
+    let new_v = multiply_atav n u in
+    let new_u = multiply_atav n new_v in
+    (new_u, new_v)
+  ) (list_range 0 10) in
+  let u = state.0 in
+  let v = state.1 in
+  let vbv = dot u v in
+  let vv = dot v v in
+  math_sqrt (vbv / vv)

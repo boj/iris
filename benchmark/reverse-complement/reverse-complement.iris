@@ -37,3 +37,28 @@ let verify dna =
   let rc = reverse_complement dna in
   let rcrc = reverse_complement rc in
   str_eq dna rcrc
+
+-- Generate a DNA string of length n using an LCG
+let gen_dna n =
+  let buf = buf_new in
+  let nucs = "ACGT" in
+  let result = fold (42, buf) (\state i ->
+    let s = state.0 in
+    let b = state.1 in
+    let new_seed = (s * 3877 + 29573) % 139968 in
+    let r = new_seed % 4 in
+    let nuc_char = str_slice nucs r (r + 1) in
+    let b2 = buf_push b nuc_char in
+    (new_seed, b2)
+  ) (list_range 0 n) in
+  buf_finish result.1
+
+-- Main entry point: generate DNA of length n, reverse-complement it,
+-- verify round-trip identity, and return the length of the result
+let main n =
+  let dna = gen_dna n in
+  let rc = reverse_complement dna in
+  let rcrc = reverse_complement rc in
+  let ok = str_eq dna rcrc in
+  let rc_len = str_len rc in
+  (rc_len, ok)

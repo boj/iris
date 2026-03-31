@@ -86,3 +86,32 @@ let bench dna =
   let replaced = apply_replacements dna in
   let new_len = str_len replaced in
   (original_len, new_len)
+
+-- Generate a DNA string of length n with IUB ambiguity codes mixed in.
+-- Uses an LCG; every 10th character is an IUB code (B, D, H, K, M, N, R, S, V, W, Y).
+let gen_dna_with_iub n =
+  let buf = buf_new in
+  let nucs = "ACGT" in
+  let iub_codes = "BDHKMNRSVWY" in
+  let result = fold (42, buf) (\state i ->
+    let s = state.0 in
+    let b = state.1 in
+    let new_seed = (s * 3877 + 29573) % 139968 in
+    if i % 10 == 9 then
+      let iub_idx = new_seed % 11 in
+      let ch = str_slice iub_codes iub_idx (iub_idx + 1) in
+      let b2 = buf_push b ch in
+      (new_seed, b2)
+    else
+      let r = new_seed % 4 in
+      let nuc_char = str_slice nucs r (r + 1) in
+      let b2 = buf_push b nuc_char in
+      (new_seed, b2)
+  ) (list_range 0 n) in
+  buf_finish result.1
+
+-- Main entry point: generate DNA with IUB codes, count patterns, apply
+-- replacements, return (original_len, count_A, count_T, count_G, count_C, new_len)
+let main n =
+  let dna = gen_dna_with_iub n in
+  regex_redux dna

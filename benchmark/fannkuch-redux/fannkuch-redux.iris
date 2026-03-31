@@ -43,3 +43,54 @@ let count_flips perm max_iters =
 --   if i is even: +flips, if i is odd: -flips
 let checksum_contrib i flips =
   if i % 2 == 0 then flips else neg flips
+
+-- Generate the i-th permutation of [1..n] using factoradic number system.
+-- The factoradic representation of index i gives us which element to pick
+-- at each position.
+let rec factorial n =
+  if n <= 1 then 1 else n * factorial (n - 1)
+
+-- Remove element at position pos from a list
+let remove_at lst pos =
+  let len = list_len lst in
+  fold (list_range 0 0) (\acc i ->
+    if i == pos then acc
+    else list_append acc (list_nth lst i)
+  ) (list_range 0 len)
+
+-- Convert list_range output to a map-able list (identity map)
+let to_list r = map (\i -> i) r
+
+-- Generate the i-th permutation (0-indexed) of [1..n]
+let ith_permutation n idx =
+  let elems_init = to_list (list_range 1 (n + 1)) in
+  fold (elems_init, list_range 0 0, idx) (\state pos ->
+    let elems = state.0 in
+    let perm = state.1 in
+    let rem = state.2 in
+    let remaining = n - pos in
+    if remaining <= 0 then state
+    else
+      let fact = factorial (remaining - 1) in
+      let pick = rem / fact in
+      let new_rem = rem % fact in
+      let elem = list_nth elems pick in
+      let new_perm = list_append perm elem in
+      let new_elems = remove_at elems pick in
+      (new_elems, new_perm, new_rem)
+  ) (list_range 0 n)
+
+-- Main entry point: enumerate all n! permutations, compute max flips and checksum
+let main n =
+  let num_perms = factorial n in
+  let result = fold (0, 0) (\state i ->
+    let max_flips = state.0 in
+    let checksum = state.1 in
+    let perm_state = ith_permutation n i in
+    let perm = perm_state.1 in
+    let flips = count_flips perm (n * n) in
+    let new_max = if flips > max_flips then flips else max_flips in
+    let contrib = checksum_contrib i flips in
+    (new_max, checksum + contrib)
+  ) (list_range 0 num_perms) in
+  result
