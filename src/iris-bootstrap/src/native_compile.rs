@@ -589,6 +589,28 @@ impl<'a> NativeCodeGen<'a> {
 
 /// Evaluate a graph using the native compiler. Compiles to x86-64, executes.
 pub fn native_eval(graph: &SemanticGraph, inputs: &[Value]) -> Option<Value> {
+    // Only native-compile small-to-medium graphs
+    if graph.nodes.len() > 200 { return None; }
+    // Only compile graphs whose opcodes are correctly handled
+    for node in graph.nodes.values() {
+        match &node.payload {
+            NodePayload::Lit { .. } | NodePayload::Guard { .. } |
+            NodePayload::Tuple | NodePayload::Project { .. } |
+            NodePayload::Let | NodePayload::Fold { .. } |
+            NodePayload::Lambda { .. } | NodePayload::Rewrite { .. } => {}
+            NodePayload::Prim { opcode } => match opcode {
+                0x00..=0x05 | 0x07..=0x08 | // arithmetic
+                0x10..=0x12 |                // bitwise
+                0x20..=0x25 |                // comparison
+                0xB0 | 0xC0..=0xC2 | 0xC7 | // string/collection (via dispatch)
+                0xD2 | 0xD6 | 0xF0 |        // tuple_get, tuple_len, list_len
+                0x82 | 0x83 | 0x89 | 0x8A | // graph introspection
+                0x8F | 0x97 | 0xEE => {}    // graph_outgoing, edge_target, set_root
+                _ => return None,            // unknown opcode → fall back
+            },
+            _ => return None,
+        }
+    }
     let code_bytes = compile_graph_native(graph)?;
 
     // Pack inputs as tagged i64

@@ -3312,11 +3312,10 @@ pub fn evaluate_with_limit(
     inputs: &[Value],
     max_steps: u64,
 ) -> Result<Value, BootstrapError> {
-    // Try JIT compilation first for simple graphs
-    if let Some(result) = try_jit_eval(graph, inputs) {
-        return Ok(result);
-    }
-    // Fall back to tree-walking
+    // JIT and native_compile are available for explicit use but NOT called
+    // automatically here — they don't handle env-dependent evaluation correctly.
+    // The tree-walker handles all cases correctly; JIT accelerates fold bodies
+    // internally via eval_fold → flatten_subgraph → compile_flat_native_int.
     let registry = BTreeMap::new();
     let mut ctx = BootstrapCtx::new(graph, inputs, max_steps, &registry);
     let result = ctx.eval_node(graph.root, 0)?;
@@ -3346,8 +3345,8 @@ pub fn evaluate_with_registry(
     max_steps: u64,
     registry: &BTreeMap<FragmentId, SemanticGraph>,
 ) -> Result<Value, BootstrapError> {
-    // Try JIT for simple graphs without Ref nodes
     if registry.is_empty() {
+        // Try flat JIT for simple graphs
         if let Some(result) = try_jit_eval(graph, inputs) {
             return Ok(result);
         }
@@ -8758,15 +8757,17 @@ impl<'a> BootstrapCtx<'a> {
             }
         }
 
-        // Try JIT flat evaluation before creating a full sub-context
+        // Try flat JIT for small sub-programs
         if graph.nodes.len() <= 50 {
             if let Some(result) = try_jit_eval(graph, &eval_inputs) {
                 self.step_count += 1;
                 return Ok(result);
             }
         }
+        // NOTE: don't use native_compile here — sub-programs have env dependencies
+        // that the native compiler can't handle (InputRef lookups need the env)
 
-        // Full evaluation path
+        // Full evaluation path (tree-walker fallback)
         let remaining_steps = self.max_steps.saturating_sub(self.step_count);
         let mut sub_ctx = BootstrapCtx::new(graph, &eval_inputs, remaining_steps, self.registry);
         sub_ctx.self_eval_depth = self.self_eval_depth + 1;
