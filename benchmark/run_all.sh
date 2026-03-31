@@ -9,9 +9,9 @@ echo "=============================================="
 echo ""
 
 # Build once in release mode
-echo "Building IRIS (release)..."
-cargo build --release --quiet 2>&1
-echo "Build complete."
+
+
+
 echo ""
 
 # Run each benchmark

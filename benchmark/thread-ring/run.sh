@@ -7,7 +7,7 @@ echo "=== Thread Ring Benchmark (token=$TOKEN) ==="
 
 echo ""
 echo "--- IRIS (interpreter) ---"
-time cargo run --release --quiet -- run benchmark/thread-ring/thread-ring.iris "$TOKEN" 2>&1 || echo "(IRIS run failed)"
+time bootstrap/iris-stage0 run benchmark/thread-ring/thread-ring.iris "$TOKEN" 2>&1 || echo "(IRIS run failed)"
 
 echo ""
 echo "--- Python 3 ---"

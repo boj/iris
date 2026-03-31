@@ -28,8 +28,42 @@ let lower ast src =
   else
     let entry = list_nth items (n_items - 1) in
     let params = (entry.2).0 in
-    let body_ast = (entry.2).1 in
+    let raw_body = (entry.2).1 in
     let n_params = list_len params in
+
+    -- Multi-function chaining: wrap ALL earlier LetDecl items as nested
+    -- let-in bindings around the entry point's body. This makes helper
+    -- functions defined in earlier top-level lets available in the last one.
+    --   let a x = x*2       =>  let body = let a = \x -> x*2 in
+    --   let b y = a y + 1        let b = \y -> a y + 1 in
+    --   let main n = b n          b n
+    -- Process items n-2..0 (reverse order) so first item is outermost let.
+    let body_ast = if n_items <= 1 then raw_body
+      else fold raw_body
+        (\wrapped idx ->
+          let rev_idx = n_items - 2 - idx in
+          if rev_idx < 0 then wrapped
+          else
+            let prior = list_nth items rev_idx in
+            if prior.0 != 30 then wrapped
+            else
+              let prior_name = prior.1 in
+              let prior_params = (prior.2).0 in
+              let prior_body = (prior.2).1 in
+              let n_pp = list_len prior_params in
+              let value_ast = if n_pp == 0 then prior_body
+                else
+                  -- Wrap body in curried lambdas: \p1 -> \p2 -> ... -> body
+                  fold prior_body
+                    (\inner j ->
+                      let rj = n_pp - 1 - j in
+                      if rj < 0 then inner
+                      else
+                        let ph = (list_nth prior_params rj).1 in
+                        (13, ph, list_append mt inner, 0))
+                    n_pp in
+              (14, prior_name, (value_ast, wrapped)))
+        (n_items - 1) in
 
     -- Gap 3: Scan imports (kind 32) from items and build import scope entries
     -- Import declarations have kind 32, payload = name_hash
@@ -1157,7 +1191,7 @@ let lower ast src =
           -- Unknown: skip
           else (pg, ns, nsp, rws, nwsp, sc)
       )
-      512 in
+      4096 in
 
     let pre_graph = graph_set_root (result.0) ((result.1).0) in
     let root_id = (result.1).0 in

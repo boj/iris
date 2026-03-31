@@ -7,7 +7,7 @@ echo "=== N-Body Benchmark (N=$N) ==="
 
 echo ""
 echo "--- IRIS (interpreter) ---"
-time cargo run --release --quiet -- run benchmark/n-body/n-body.iris "$N" 2>&1 || echo "(IRIS run failed)"
+time bootstrap/iris-stage0 run benchmark/n-body/n-body.iris "$N" 2>&1 || echo "(IRIS run failed)"
 
 echo ""
 echo "--- Python 3 ---"
