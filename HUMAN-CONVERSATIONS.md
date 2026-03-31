@@ -52,3 +52,30 @@
 
 **Assistant:** Here's the honest picture:
 
+
+---
+
+**2026-03-31 09:42**
+
+**Human:** Investigate it
+
+**Assistant:** ## Benchmark Results
+
+
+---
+
+**2026-03-31 10:18**
+
+**Human:** Investigate it
+
+**Assistant:** Pushed as `a71f0a5`. Both the site benchmarks page and benchmark/README.md now have actual measured data:
+
+
+---
+
+**2026-03-31 10:20**
+
+**Human:** Investigate it
+
+**Assistant:** Here's where we stand:
+
