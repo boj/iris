@@ -223,3 +223,12 @@
 
 **Assistant:** We just crossed a major threshold. Let me summarize what happened:
 
+
+---
+
+**2026-03-30 18:09**
+
+**Human:** Investigate it
+
+**Assistant:** The native compiler is wired in conservatively — available for explicit use but not in the automatic path (to avoid correctness issues with env-dependent evaluation). The automatic path uses the JIT for fold bodies and the tree-walker for everything else.
+
