@@ -7,9 +7,7 @@
 
   outputs = { self, nixpkgs }:
     let
-      # The pre-built iris-stage0 binary is x86-64 Linux ELF only.
-      # Other systems can use the devShell for working with .iris source,
-      # but the package is only available on x86_64-linux.
+      # The pre-built iris-stage0 binary is x86-64 Linux ELF.
       packageSystems = [ "x86_64-linux" ];
       devShellSystems = [
         "x86_64-linux"
@@ -43,21 +41,23 @@
                 ];
               };
 
-            # No build step -- iris-stage0 is a pre-built binary.
+            nativeBuildInputs = [ pkgs.makeWrapper pkgs.autoPatchelfHook ];
+            buildInputs = [ pkgs.stdenv.cc.cc.lib ];
+
             dontBuild = true;
             dontConfigure = true;
-            dontFixup = true;
 
             installPhase = ''
               runHook preInstall
 
-              # Install the stage0 binary
-              install -Dm755 bootstrap/iris-stage0 $out/bin/iris-stage0
-
               # Install bootstrap pipeline stages (pre-compiled JSON)
               install -d $out/share/iris/bootstrap
               install -Dm644 bootstrap/*.json $out/share/iris/bootstrap/
-              install -Dm755 bootstrap/*.sh   $out/share/iris/bootstrap/
+
+              # Install the stage0 binary, wrapped to find bootstrap dir
+              install -Dm755 bootstrap/iris-stage0 $out/libexec/iris-stage0
+              makeWrapper $out/libexec/iris-stage0 $out/bin/iris-stage0 \
+                --set IRIS_BOOTSTRAP_DIR $out/share/iris/bootstrap
 
               # Install IRIS source programs
               cp -r src/iris-programs $out/share/iris/programs
@@ -95,13 +95,8 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Lean 4 proof kernel tooling
               elan
-
-              # General development
               jq
-              file
-              hexdump
             ];
 
             shellHook = ''
