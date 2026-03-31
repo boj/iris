@@ -21,6 +21,11 @@ const PARSER_JSON: &str = include_str!("../../bootstrap/parser.json");
 const LOWERER_JSON: &str = include_str!("../../bootstrap/lowerer.json");
 const SELF_INTERP_JSON: &str = include_str!("../../bootstrap/self_interpreter.json");
 
+// Compiler sources for the `build` command
+const AOT_COMPILE_SRC: &str = include_str!("../../src/iris-programs/compiler/aot_compile.iris");
+const ELF_WRAPPER_SRC: &str = include_str!("../../src/iris-programs/compiler/elf_wrapper.iris");
+const NATIVE_RUNTIME_SRC: &str = include_str!("../../src/iris-programs/compiler/native_runtime.iris");
+
 fn load_embedded(json: &str) -> SemanticGraph {
     serde_json::from_str(json).expect("embedded JSON parse error")
 }
@@ -141,15 +146,134 @@ fn format_value(v: &Value) -> String {
     }
 }
 
+#[cfg(feature = "syntax")]
+fn compile_with_full_registry(source: &str) -> (SemanticGraph, BTreeMap<iris_types::fragment::FragmentId, SemanticGraph>) {
+    let result = iris_bootstrap::syntax::compile(source);
+    if !result.errors.is_empty() {
+        for e in &result.errors {
+            eprintln!("{}", iris_bootstrap::syntax::format_error(source, e));
+        }
+        process::exit(1);
+    }
+    let mut registry = BTreeMap::new();
+    let mut main_graph = None;
+    for (_name, frag, _) in &result.fragments {
+        registry.insert(frag.id, frag.graph.clone());
+        main_graph = Some(frag.graph.clone());
+    }
+    (main_graph.unwrap(), registry)
+}
+
+#[cfg(feature = "syntax")]
+fn cmd_build(runtime: &JitRuntime, args: &[String]) {
+    use iris_types::fragment::FragmentId;
+
+    if args.is_empty() {
+        eprintln!("Usage: iris-stage0 build <source.iris> [-o binary] [--args N]");
+        process::exit(1);
+    }
+
+    let source_path = &args[0];
+    let mut output_path = String::from("a.out");
+    let mut n_args = 0i64;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" if i + 1 < args.len() => { output_path = args[i + 1].clone(); i += 2; }
+            "--args" if i + 1 < args.len() => { n_args = args[i + 1].parse().unwrap_or(0); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    let target_source = std::fs::read_to_string(source_path)
+        .unwrap_or_else(|e| { eprintln!("error: {}", e); process::exit(1); });
+    let target = runtime.compile(&target_source);
+
+    eprintln!("Loading code generator...");
+    let aot_result = iris_bootstrap::syntax::compile(AOT_COMPILE_SRC);
+    let mut aot_reg: BTreeMap<FragmentId, SemanticGraph> = BTreeMap::new();
+    let mut aot_fn = None;
+    for (name, frag, _) in &aot_result.fragments {
+        aot_reg.insert(frag.id, frag.graph.clone());
+        if name == "aot_compile" { aot_fn = Some(frag.graph.clone()); }
+    }
+    let aot_fn = aot_fn.expect("aot_compile not found");
+
+    eprintln!("Loading ELF assembler...");
+    let elf_result = iris_bootstrap::syntax::compile(ELF_WRAPPER_SRC);
+    let mut elf_reg: BTreeMap<FragmentId, SemanticGraph> = BTreeMap::new();
+    let mut elf_wrap_fn = None;
+    let mut elf_wrap_rt_fn = None;
+    for (name, frag, _) in &elf_result.fragments {
+        elf_reg.insert(frag.id, frag.graph.clone());
+        if name == "elf_wrap" { elf_wrap_fn = Some(frag.graph.clone()); }
+        if name == "elf_wrap_rt" { elf_wrap_rt_fn = Some(frag.graph.clone()); }
+    }
+
+    eprintln!("Loading runtime...");
+    let (rt_fn, rt_reg) = compile_with_full_registry(NATIVE_RUNTIME_SRC);
+    let runtime_bytes = iris_bootstrap::evaluate_with_registry(
+        &rt_fn, &[], 1_000_000, &rt_reg,
+    ).unwrap_or_else(|e| { eprintln!("runtime error: {}", e); process::exit(1); });
+    if let Value::Bytes(ref b) = runtime_bytes {
+        eprintln!("Runtime: {} bytes", b.len());
+    }
+
+    eprintln!("Compiling {} to x86-64...", source_path);
+    let code = iris_bootstrap::evaluate_with_registry(
+        &aot_fn,
+        &[Value::Program(Rc::new(target))],
+        50_000_000,
+        &aot_reg,
+    ).unwrap_or_else(|e| { eprintln!("aot_compile error: {}", e); process::exit(1); });
+
+    if let Value::Bytes(ref b) = code {
+        eprintln!("Generated {} bytes of x86-64", b.len());
+    }
+
+    let elf = if let Some(ref wrap_rt) = elf_wrap_rt_fn {
+        iris_bootstrap::evaluate_with_registry(
+            wrap_rt, &[code, runtime_bytes, Value::Int(n_args)],
+            10_000_000, &elf_reg,
+        ).unwrap_or_else(|e| { eprintln!("elf_wrap_rt error: {}", e); process::exit(1); })
+    } else {
+        iris_bootstrap::evaluate_with_registry(
+            &elf_wrap_fn.unwrap(), &[code, Value::Int(n_args)],
+            10_000_000, &elf_reg,
+        ).unwrap_or_else(|e| { eprintln!("elf_wrap error: {}", e); process::exit(1); })
+    };
+
+    if let Value::Bytes(ref b) = elf {
+        std::fs::write(&output_path, b)
+            .unwrap_or_else(|e| { eprintln!("write error: {}", e); process::exit(1); });
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o755)).ok();
+        }
+        eprintln!("{} -> {} ({} bytes)", source_path, output_path, b.len());
+    } else {
+        eprintln!("error: ELF wrapper returned unexpected value");
+        process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "syntax"))]
+fn cmd_build(_runtime: &JitRuntime, _args: &[String]) {
+    eprintln!("error: build command requires syntax feature");
+    process::exit(1);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("iris-stage0-next: JIT-based IRIS runtime\n");
-        eprintln!("Usage: iris-stage0-next <command> [options]\n");
+        eprintln!("iris-stage0: JIT-based IRIS compiler + runtime\n");
+        eprintln!("Usage: iris-stage0 <command> [options]\n");
         eprintln!("Commands:");
-        eprintln!("  run <source.iris> [args...]");
-        eprintln!("  compile <source.iris> [-o output.json]");
-        eprintln!("  direct <program.json> [args...]");
+        eprintln!("  build <source.iris> [-o binary] [--args N]   Compile to native binary");
+        eprintln!("  run <source.iris> [args...]                  Interpret .iris source");
+        eprintln!("  compile <source.iris> [-o output.json]       Compile to JSON graph");
+        eprintln!("  direct <program.json> [args...]              Evaluate JSON graph");
         eprintln!("  version");
         process::exit(1);
     }
@@ -157,6 +281,9 @@ fn main() {
     let runtime = JitRuntime::new();
 
     match args[1].as_str() {
+        "build" => {
+            cmd_build(&runtime, &args[2..].to_vec());
+        }
         "run" => {
             if args.len() < 3 { eprintln!("Usage: run <source.iris> [args...]"); process::exit(1); }
             let source = std::fs::read_to_string(&args[2])
@@ -189,6 +316,7 @@ fn main() {
             eprintln!("iris-stage0-next: JIT-based IRIS runtime\n");
             eprintln!("Usage: iris-stage0-next <command> [options]\n");
             eprintln!("Commands:");
+            eprintln!("  build <source.iris> [-o binary] [--args N]");
             eprintln!("  run <source.iris> [args...]");
             eprintln!("  compile <source.iris> [-o output.json]");
             eprintln!("  direct <program.json> [args...]");

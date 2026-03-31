@@ -142,3 +142,21 @@
 
 **Assistant:** Here's the current state of iris-stage0-next:
 
+
+---
+
+**2026-03-30 16:05**
+
+**Human:** Investigate it
+
+**Assistant:** The JIT now operates at three levels:
+
+
+---
+
+**2026-03-30 16:16**
+
+**Human:** Investigate it
+
+**Assistant:** Here's where we are:
+
