@@ -680,3 +680,137 @@ fn test_native_fold_prim() {
     assert_eq!(native_compile_and_run(
         "let f = fold 0 add 5", "nat_fold_prim", &[]), "10");
 }
+
+// ===========================================================================
+// mini_eval.iris test: IRIS evaluator evaluating IRIS programs
+// ===========================================================================
+
+#[test]
+fn test_iris_mini_eval_constant() {
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Load mini_eval.iris (compiled)
+    let me = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+
+    // Compile target: "let c = 42"
+    let target_json = compile_with_rust("let c = 42", "iris_me_const");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    // Call: mini_eval(me, program, env)
+    let me_val = Value::Program(std::rc::Rc::new(me.clone()));
+    let prog_val = Value::Program(std::rc::Rc::new(target));
+    let env = Value::Range(0, 0); // empty env
+
+    let result = iris_bootstrap::evaluate_with_limit(
+        &me, &[me_val, prog_val, env], 10_000_000,
+    );
+
+    match &result {
+        Ok(Value::Int(42)) => {}
+        Ok(v) => panic!("expected Int(42), got {:?}", v),
+        Err(e) => panic!("mini_eval.iris failed: {}", e),
+    }
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_iris_mini_eval_arithmetic() {
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let me = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+    let target_json = compile_with_rust("let f x = x + 1", "iris_me_add");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    let me_val = Value::Program(std::rc::Rc::new(me.clone()));
+    let prog_val = Value::Program(std::rc::Rc::new(target));
+    let env = Value::tuple(vec![
+        Value::tuple(vec![Value::Int(0xFFFF_0000u32 as i64), Value::Int(41)])
+    ]);
+
+    let result = iris_bootstrap::evaluate_with_limit(
+        &me, &[me_val, prog_val, env], 10_000_000,
+    ).unwrap();
+
+    assert_eq!(result, Value::Int(42), "mini_eval.iris: 41 + 1 = 42");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_iris_mini_eval_guard() {
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let me = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+    let target_json = compile_with_rust("let f x = if x > 0 then x else 0 - x", "iris_me_guard");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    let me_val = Value::Program(std::rc::Rc::new(me.clone()));
+    let prog_val = Value::Program(std::rc::Rc::new(target));
+    let env = Value::tuple(vec![
+        Value::tuple(vec![Value::Int(0xFFFF_0000u32 as i64), Value::Int(-5)])
+    ]);
+
+    let result = iris_bootstrap::evaluate_with_limit(
+        &me, &[me_val, prog_val, env], 10_000_000,
+    ).unwrap();
+
+    assert_eq!(result, Value::Int(5), "mini_eval.iris: abs(-5) = 5");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_iris_mini_eval_let() {
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let me = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+    let target_json = compile_with_rust("let f x = let y = x + 1 in y * y", "iris_me_let");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    let me_val = Value::Program(std::rc::Rc::new(me.clone()));
+    let prog_val = Value::Program(std::rc::Rc::new(target));
+    let env = Value::tuple(vec![
+        Value::tuple(vec![Value::Int(0xFFFF_0000u32 as i64), Value::Int(4)])
+    ]);
+
+    let result = iris_bootstrap::evaluate_with_limit(
+        &me, &[me_val, prog_val, env], 10_000_000,
+    ).unwrap();
+
+    assert_eq!(result, Value::Int(25), "mini_eval.iris: let y=5 in y*y = 25");
+    let _ = std::fs::remove_file(&target_json);
+}
+
+#[test]
+fn test_iris_mini_eval_via_jit() {
+    // Test that the Rust JIT can handle mini_eval.iris evaluation
+    // This goes through try_jit_eval → flatten_subgraph → eval_flat_reuse
+    use iris_types::eval::Value;
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let me = iris_bootstrap::load_graph(
+        manifest.join("bootstrap/mini_eval.json").to_str().unwrap()
+    ).unwrap();
+    let target_json = compile_with_rust("let f x = (x + 3) * (x - 1)", "iris_me_jit");
+    let target = iris_bootstrap::load_graph(target_json.to_str().unwrap()).unwrap();
+
+    let me_val = Value::Program(std::rc::Rc::new(me.clone()));
+    let prog_val = Value::Program(std::rc::Rc::new(target));
+    let env = Value::tuple(vec![
+        Value::tuple(vec![Value::Int(0xFFFF_0000u32 as i64), Value::Int(10)])
+    ]);
+
+    // evaluate_with_limit now tries JIT first via try_jit_eval
+    let result = iris_bootstrap::evaluate_with_limit(
+        &me, &[me_val, prog_val, env], 50_000_000,
+    ).unwrap();
+
+    assert_eq!(result, Value::Int(117), "mini_eval.iris via JIT: (10+3)*(10-1) = 117");
+    let _ = std::fs::remove_file(&target_json);
+}

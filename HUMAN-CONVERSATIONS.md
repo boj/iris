@@ -160,3 +160,48 @@
 
 **Assistant:** Here's where we are:
 
+
+---
+
+**2026-03-30 16:22**
+
+**Human:** Investigate it
+
+**Assistant:** Done. The gap is closed. `iris-stage0` is a complete IRIS development environment:
+
+
+---
+
+**2026-03-30 16:24**
+
+**Human:** Investigate it
+
+**Assistant:** It's the serialized SemanticGraph — the compiled program. It exists because the old architecture had separate compile and evaluate steps, and the JSON was the interchange format between them.
+
+
+---
+
+**2026-03-30 16:26**
+
+**Human:** Investigate it
+
+**Assistant:** Agreed. It's like LLVM IR or Java bytecode — you can look at it, pass it around, evaluate it later. Keep `compile` as a command.
+
+
+---
+
+**2026-03-30 16:35**
+
+**Human:** Investigate it
+
+**Assistant:** The tokenizer build is still running (it's a 395-line file, aot_compile takes a while). But the self-interpreter fails — `aot_compile.iris` can't handle its 789 nodes with 48 opcodes.
+
+
+---
+
+**2026-03-30 16:37**
+
+**Human:** Investigate it
+
+**Assistant:** Yes. Option B gets us to a native binary that IS the evaluator, compiled by the Rust JIT from IRIS source. Once we have that:
+
