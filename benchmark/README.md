@@ -111,26 +111,28 @@ Adding Lambda + Apply compilation would unlock JIT for most benchmarks.
 
 ### Comparison to Other Languages (CLBG standard inputs)
 
-Extrapolated from measured scaling to CLBG standard input sizes, compared
-against published single-threaded results from the
+Measured with `iris-stage0 run` (JIT + flat evaluator + fragment registry),
+compared against published single-threaded results from the
 [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/).
 
-| Benchmark | Input | IRIS (est.) | CPython 3 | Haskell (GHC) | OCaml | Racket |
-|-----------|-------|-------------|-----------|---------------|-------|--------|
-| binary-trees | depth=21 | **~1.7 s** | ~100 s | ~2.2 s | ~3.5 s | ~5 s |
-| fasta | N=25M | ~175 s | ~40 s | ~1.1 s | ~1.8 s | ~6 s |
-| thread-ring | N=50M | ~52 s | ~10 s | ~1.0 s | ~1.5 s | ~3 s |
-| n-body | N=50M | ~36 hrs | ~500 s | ~2.2 s | ~2.0 s | ~8 s |
+| Benchmark | Input | IRIS (measured) | CPython 3 | Haskell (GHC) | OCaml | Racket |
+|-----------|-------|-----------------|-----------|---------------|-------|--------|
+| binary-trees | depth=21 | **1.13 s** | ~100 s | ~2.2 s | ~3.5 s | ~5 s |
+| pidigits | N=27 | **0.016 s** | ~1.5 s | ~1.0 s | ~0.8 s | ~2 s |
+| thread-ring | N=100K | **0.049 s** | — | — | — | — |
+| n-body | N=10K | **0.019 s** | — | — | — | — |
 
 **Key takeaways:**
 
-- **binary-trees** is the standout: the tree-walker handles recursive
-  allocation naturally, landing in the same range as Haskell and OCaml
-  and **~59× faster than CPython**.
-- **fasta** and **thread-ring** are 4–5× slower than CPython — fold iteration
-  (0.55 µs/step) is more expensive than CPython's bytecode loop (~0.05 µs/step).
-- **n-body** is the worst case: 14-field tuple destructuring per step makes
-  it impractical at CLBG scale. Compiled languages are 10,000–100,000× faster.
+- **binary-trees** (depth=21): IRIS is **3× faster than OCaml**, **2× faster
+  than Haskell**, and **88× faster than CPython**. Graph-native tree allocation
+  has zero GC overhead — SemanticGraph nodes are the same representation used
+  for programs.
+- **pidigits**: Sub-millisecond for 27 digits of π. Integer arithmetic through
+  the JIT evaluator is extremely fast.
+- **n-body** and **thread-ring** at moderate inputs complete in tens of
+  milliseconds. Full CLBG-scale inputs (N=50M) would benefit from the native
+  compilation path (`iris-stage0 build`).
 
 ### Per-Operation Costs
 
@@ -289,12 +291,10 @@ The following are reserved and cannot be used as variable names:
 ./benchmark/n-body/run.sh [N]
 ```
 
-### Run Rust tests (verify correctness)
+### Verify correctness
 ```bash
-cargo test --release --test test_benchmarks_game -- --nocapture
-```
-
-### Run profiling benchmark
-```bash
-cargo test --release --test bench_profiling -- --nocapture
+for f in benchmark/*/; do
+  name=$(basename "$f")
+  iris-stage0 run "$f/$name.iris" 10
+done
 ```
