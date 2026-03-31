@@ -1,37 +1,20 @@
 -- Debug/profiling standard library
 --
 -- Utilities for inspecting program behavior at runtime.
--- Uses trace_emit (0xF8) and clock_ns (0xFA) effect primitives.
-
--- Time a computation and return (result, elapsed_ns).
-let time_it f arg =
-  let start = clock_ns 0 in
-  let result = f arg in
-  let end = clock_ns 0 in
-  (result, end - start)
-
--- Time a computation over n iterations, return (last_result, avg_ns).
-let bench f arg n =
-  let results = fold (0, 0) (\state i ->
-    let start = clock_ns 0 in
-    let r = f arg in
-    let elapsed = clock_ns 0 - start in
-    (r, state.1 + elapsed)
-  ) (list_range 0 n) in
-  (results.0, results.1 / n)
+-- Uses debug_print (0xF4) for trace output.
 
 -- Trace a value: emit it to the trace log and return it unchanged.
 -- Useful for debugging: `x |> trace "x value"` prints x without changing the pipeline.
 let trace label value =
-  let msg = str_concat label (str_concat ": " (str_from_int value)) in
-  let emitted = trace_emit msg in
+  let msg = str_concat label (str_concat ": " (int_to_string value)) in
+  let emitted = debug_print msg in
   value
 
 -- Trace a tuple: emit each element with indexed labels.
 let trace_tuple label t n =
   fold 0 (\acc i ->
     let elem = list_nth t i in
-    let idx_label = str_concat label (str_concat "." (str_from_int i)) in
+    let idx_label = str_concat label (str_concat "." (int_to_string i)) in
     trace idx_label elem
   ) (list_range 0 n)
 
@@ -41,37 +24,13 @@ let debug_assert msg condition =
   if condition then condition
   else
     let warning = str_concat "ASSERT FAILED: " msg in
-    let emitted = trace_emit warning in
+    let emitted = debug_print warning in
     condition
 
--- Count function calls: wraps a function to count how many times it's called.
--- Returns (wrapped_fn, get_count_fn) where get_count_fn returns the call count.
-let counted f =
-  let counter = atomic_new 0 in
-  let wrapped = \arg ->
-    let prev = atomic_swap counter (atomic_read counter + 1) in
-    f arg
-  in
-  let get_count = \unit -> atomic_read counter in
-  (wrapped, get_count)
-
--- Profile a fold: measure per-iteration timing.
--- Returns (fold_result, total_ns, iterations).
-let profile_fold init step xs =
-  let n = list_len xs in
-  let start = clock_ns 0 in
-  let result = fold init step xs in
-  let elapsed = clock_ns 0 - start in
-  (result, elapsed, n)
-
 -- Compare two implementations: run both on the same input, verify same result.
--- Returns (result, impl1_ns, impl2_ns, match).
+-- Returns (result1, result2, match) where match is 1 if results agree.
 let compare_impls f1 f2 arg =
-  let t1 = time_it f1 arg in
-  let t2 = time_it f2 arg in
-  let r1 = t1.0 in
-  let r2 = t2.0 in
-  let ns1 = t1.1 in
-  let ns2 = t2.1 in
+  let r1 = f1 arg in
+  let r2 = f2 arg in
   let results_match = if r1 == r2 then 1 else 0 in
-  (r1, ns1, ns2, results_match)
+  (r1, r2, results_match)

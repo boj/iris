@@ -1172,6 +1172,7 @@ fn resolve_effect_name(name: &str) -> Option<u8> {
         "atomic_write" => Some(0x23),
         "atomic_swap" => Some(0x24),
         "atomic_add" => Some(0x25),
+        "atomic_new" => Some(0x2C),
         "rwlock_read" => Some(0x26),
         "rwlock_write" => Some(0x27),
         "rwlock_release" => Some(0x28),

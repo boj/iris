@@ -940,7 +940,7 @@ fn test_iris_lowerer_lambda_fold() {
         Err(e) => eprintln!("Error: {}", e),
     }
     // For now, just check it doesn't crash
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "multi-param lambda fold failed: {:?}", result);
 }
 
 #[cfg(feature = "syntax")]
@@ -1131,4 +1131,296 @@ fn test_iris_lambda_standalone() {
         50_000_000, &reg,
     ).unwrap();
     eprintln!("fold 42 (lambda identity) 0: {:?} (should be 42)", r4);
+    assert_eq!(r4, Value::Int(42));
+
+    // Test: fold with single-param identity lambda and actual iterations
+    let r5 = iris_bootstrap::evaluate_with_registry(
+        &eval_graph,
+        &[Value::String(r"let f = fold 0 (\x -> x + 1) 5".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("fold 0 (\\x -> x+1) 5: {:?} (should be 5)", r5);
+
+    // Note: fold with single-param lambda: step receives (acc, i) as a TUPLE
+    // \x -> x+1 treats x as the tuple, so x+1 = error or wrong
+    // The correct single-param usage is when fold step takes 1 arg
+    // For 2 args, use \acc i -> acc + 1 (multi-param lambda)
+}
+
+#[cfg(feature = "syntax")]
+#[test]
+fn test_iris_pipeline_lambda_paren() {
+    use iris_types::eval::Value;
+    use iris_types::graph::*;
+
+    // ---- Compile through Rust pipeline ----
+    let rust_result = iris_bootstrap::syntax::compile(r"let f = fold 42 (\x -> x) 0");
+    let rust_graph = rust_result.fragments.last().unwrap().1.graph.clone();
+    eprintln!("=== RUST graph ===");
+    eprintln!("root: {:?}", rust_graph.root);
+    for (nid, node) in &rust_graph.nodes {
+        eprintln!("  node {:?}: kind={:?} payload={:?}", nid, node.kind, node.payload);
+    }
+    for edge in &rust_graph.edges {
+        eprintln!("  edge {:?} -> {:?} port={} label={:?}", edge.source, edge.target, edge.port, edge.label);
+    }
+
+    // ---- Evaluate through Rust pipeline ----
+    let mut reg_r = std::collections::BTreeMap::new();
+    for (_, frag, _) in &rust_result.fragments {
+        reg_r.insert(frag.id, frag.graph.clone());
+    }
+    let rust_val = iris_bootstrap::evaluate_with_registry(
+        &rust_graph, &[], 50_000_000, &reg_r,
+    ).unwrap();
+    eprintln!("Rust eval result: {:?}", rust_val);
+
+    // ---- Compile through IRIS pipeline and get graph back ----
+    // Use compile_source_json then pull graph via module_eval returning Program
+    let get_graph_src = r#"let test src = let m = compile_source_json src in let mid = m.0 in module_eval mid 0 ()"#;
+    let get_result = iris_bootstrap::syntax::compile(get_graph_src);
+    let mut reg = std::collections::BTreeMap::new();
+    for (_, frag, _) in &get_result.fragments {
+        reg.insert(frag.id, frag.graph.clone());
+    }
+    let get_graph = get_result.fragments.last().unwrap().1.graph.clone();
+
+    // Compile and evaluate fold 42 (\x -> x) 0 through IRIS
+    let iris_val = iris_bootstrap::evaluate_with_registry(
+        &get_graph,
+        &[Value::String(r"let f = fold 42 (\x -> x) 0".to_string())],
+        50_000_000, &reg,
+    ).unwrap();
+    eprintln!("IRIS eval result: {:?}", iris_val);
+
+    // Also try: get the graph before evaluation by not evaluating it
+    // Use a wrapper that returns the program itself (compile but don't eval)
+    let get_prog_src = r#"let test src = compile_source_json src"#;
+    let gp_result = iris_bootstrap::syntax::compile(get_prog_src);
+    let mut reg2 = std::collections::BTreeMap::new();
+    for (_, frag, _) in &gp_result.fragments {
+        reg2.insert(frag.id, frag.graph.clone());
+    }
+    let gp_graph = gp_result.fragments.last().unwrap().1.graph.clone();
+    let csj_result = iris_bootstrap::evaluate_with_registry(
+        &gp_graph,
+        &[Value::String(r"let f = fold 42 (\x -> x) 0".to_string())],
+        50_000_000, &reg2,
+    ).unwrap();
+
+    // csj_result is (module_id, entries). Extract module_id then use module_eval
+    // to get the Program graph. But module_eval evaluates it.
+    // Instead, let me try to get the graph by using a helper that loads but doesn't eval.
+    eprintln!("compile_source_json result: {:?}", match &csj_result {
+        Value::Tuple(t) => format!("Tuple({}): [{:?}, ...]", t.len(), t.get(0)),
+        other => format!("{:?}", other),
+    });
+
+    // The module_eval evaluates the graph. To inspect the graph itself,
+    // I need to expose the module cache or use a different approach.
+    // Let me add a Rust-level test that calls compile_source_json directly.
+    // Use the prim directly:
+    let lowerer_graph = iris_bootstrap::load_graph("bootstrap/lowerer.json").unwrap();
+    let tokenizer_graph = iris_bootstrap::load_graph("bootstrap/tokenizer.json").unwrap();
+    let parser_graph = iris_bootstrap::load_graph("bootstrap/parser.json").unwrap();
+    let empty_reg = std::collections::BTreeMap::new();
+
+    let source = r"let f = fold 42 (\x -> x) 0";
+
+    // Step 1: Tokenize
+    let tokens = iris_bootstrap::evaluate_with_registry(
+        &tokenizer_graph,
+        &[Value::String(source.to_string())],
+        5_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("\n=== Tokens ===");
+    if let Value::Tuple(t) = &tokens {
+        eprintln!("token count: {}", t.len());
+        for (i, tok) in t.iter().take(20).enumerate() {
+            eprintln!("  [{i}] {:?}", tok);
+        }
+    }
+
+    // Step 2: Parse
+    let ast = iris_bootstrap::evaluate_with_registry(
+        &parser_graph,
+        &[tokens, Value::String(source.to_string())],
+        50_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("\n=== AST ===");
+    fn dump_ast(val: &Value, depth: usize, max_depth: usize) {
+        if depth > max_depth { return; }
+        let indent = "  ".repeat(depth);
+        match val {
+            Value::Tuple(fields) => {
+                eprintln!("{indent}Tuple({}):", fields.len());
+                for (i, f) in fields.iter().enumerate() {
+                    eprint!("{indent}  [{i}] ");
+                    dump_ast(f, depth + 1, max_depth);
+                }
+            }
+            other => eprintln!("{other:?}"),
+        }
+    }
+    dump_ast(&ast, 0, 8);
+
+    // Step 3: Lower
+    let program = iris_bootstrap::evaluate_with_registry(
+        &lowerer_graph,
+        &[ast, Value::String(source.to_string())],
+        50_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("\n=== IRIS Lowered Graph ===");
+    let iris_graph = match &program {
+        Value::Program(g) => g.as_ref().clone(),
+        Value::Tuple(fields) if !fields.is_empty() => {
+            match &fields[0] {
+                Value::Program(g) => {
+                    eprintln!("(extracted from tuple)");
+                    g.as_ref().clone()
+                }
+                other => { eprintln!("Unexpected: {:?}", other); return; }
+            }
+        }
+        other => { eprintln!("Unexpected result: {:?}", other); return; }
+    };
+    eprintln!("root: {:?}", iris_graph.root);
+    for (nid, node) in &iris_graph.nodes {
+        eprintln!("  node {:?}: kind={:?} payload={:?}", nid, node.kind, node.payload);
+    }
+    for edge in &iris_graph.edges {
+        eprintln!("  edge {:?} -> {:?} port={} label={:?}", edge.source, edge.target, edge.port, edge.label);
+    }
+
+    // Evaluate the IRIS-lowered graph
+    let iris_eval = iris_bootstrap::evaluate_with_registry(
+        &iris_graph, &[], 50_000_000, &std::collections::BTreeMap::new(),
+    ).unwrap();
+    eprintln!("\nIRIS graph eval: {:?} (should be 42)", iris_eval);
+
+    // ---- Also test: fold 0 add 5 (WORKING case) ----
+    eprintln!("\n=== WORKING CASE: fold 0 add 5 ===");
+    let source2 = "let f = fold 0 add 5";
+    let tokens2 = iris_bootstrap::evaluate_with_registry(
+        &tokenizer_graph,
+        &[Value::String(source2.to_string())],
+        5_000_000, &empty_reg,
+    ).unwrap();
+    let ast2 = iris_bootstrap::evaluate_with_registry(
+        &parser_graph,
+        &[tokens2, Value::String(source2.to_string())],
+        50_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("AST for '{source2}':");
+    dump_ast(&ast2, 0, 8);
+
+    // ---- Test simpler cases to narrow down the bug ----
+    // Test 1: Just a lambda applied to a value
+    let simple_src = r"let f = (\x -> x) 42";
+    let simple_tokens = iris_bootstrap::evaluate_with_registry(
+        &tokenizer_graph, &[Value::String(simple_src.to_string())], 5_000_000, &empty_reg,
+    ).unwrap();
+    let simple_ast = iris_bootstrap::evaluate_with_registry(
+        &parser_graph, &[simple_tokens, Value::String(simple_src.to_string())], 50_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("\n=== AST for '(\\x -> x) 42' ===");
+    dump_ast(&simple_ast, 0, 8);
+    let simple_prog = iris_bootstrap::evaluate_with_registry(
+        &lowerer_graph, &[simple_ast, Value::String(simple_src.to_string())], 50_000_000, &empty_reg,
+    ).unwrap();
+    let simple_graph = match &simple_prog {
+        Value::Program(g) => g.as_ref().clone(),
+        Value::Tuple(fields) => match &fields[0] { Value::Program(g) => g.as_ref().clone(), _ => panic!("unexpected") },
+        _ => panic!("unexpected"),
+    };
+    eprintln!("Graph for '(\\x -> x) 42':");
+    for (nid, node) in &simple_graph.nodes {
+        eprintln!("  node {:?}: kind={:?} payload={:?}", nid, node.kind, node.payload);
+    }
+    let simple_val = iris_bootstrap::evaluate_with_registry(
+        &simple_graph, &[], 50_000_000, &std::collections::BTreeMap::new(),
+    ).unwrap();
+    eprintln!("(\\x -> x) 42 = {:?} (should be 42)", simple_val);
+
+    // Test 2: Standalone lambda (no application)
+    let lam_src = r"let f x = (\y -> y) x";
+    let lam_tokens = iris_bootstrap::evaluate_with_registry(
+        &tokenizer_graph, &[Value::String(lam_src.to_string())], 5_000_000, &empty_reg,
+    ).unwrap();
+    let lam_ast = iris_bootstrap::evaluate_with_registry(
+        &parser_graph, &[lam_tokens, Value::String(lam_src.to_string())], 50_000_000, &empty_reg,
+    ).unwrap();
+    eprintln!("\n=== AST for '(\\y -> y) x' ===");
+    dump_ast(&lam_ast, 0, 6);
+
+    // Test 3: fold without lambda (baseline)
+    let fold_src = "let f = fold 0 add 5";
+    let fold_tokens = iris_bootstrap::evaluate_with_registry(
+        &tokenizer_graph, &[Value::String(fold_src.to_string())], 5_000_000, &empty_reg,
+    ).unwrap();
+    let fold_ast = iris_bootstrap::evaluate_with_registry(
+        &parser_graph, &[fold_tokens, Value::String(fold_src.to_string())], 50_000_000, &empty_reg,
+    ).unwrap();
+    let fold_prog = iris_bootstrap::evaluate_with_registry(
+        &lowerer_graph, &[fold_ast, Value::String(fold_src.to_string())], 50_000_000, &empty_reg,
+    ).unwrap();
+    let fold_graph = match &fold_prog {
+        Value::Program(g) => g.as_ref().clone(),
+        Value::Tuple(fields) => match &fields[0] { Value::Program(g) => g.as_ref().clone(), _ => panic!("unexpected") },
+        _ => panic!("unexpected"),
+    };
+    eprintln!("\n=== Graph for 'fold 0 add 5' ===");
+    for (nid, node) in &fold_graph.nodes {
+        eprintln!("  node {:?}: kind={:?} payload={:?}", nid, node.kind, node.payload);
+    }
+    for edge in &fold_graph.edges {
+        eprintln!("  edge {:?} -> {:?} port={} label={:?}", edge.source, edge.target, edge.port, edge.label);
+    }
+    let fold_val = iris_bootstrap::evaluate_with_registry(
+        &fold_graph, &[], 50_000_000, &std::collections::BTreeMap::new(),
+    ).unwrap();
+    eprintln!("fold 0 add 5 = {:?} (should be 10)", fold_val);
+
+    // ---- Test: standalone lambda (no application) ----
+    eprintln!("\n=== STANDALONE LAMBDA TESTS ===");
+    let test_cases = vec![
+        ("let f = \\x -> 42", "lambda returning constant"),
+        ("let f = \\x -> x", "identity lambda"),
+        ("let f = (42)", "paren integer (baseline)"),
+        ("let f = (\\x -> 42)", "paren lambda"),
+        ("let f = (\\x -> x) 42", "applied paren lambda"),
+    ];
+    for (src, desc) in &test_cases {
+        let toks = iris_bootstrap::evaluate_with_registry(
+            &tokenizer_graph, &[Value::String(src.to_string())], 5_000_000, &empty_reg,
+        ).unwrap();
+        if let Value::Tuple(t) = &toks {
+            eprint!("  tokens for '{}': [", src);
+            for tok in t.iter().take(15) {
+                if let Value::Tuple(tt) = tok {
+                    eprint!("({:?}, {:?}), ", tt[0], tt[1]);
+                }
+            }
+            eprintln!("]");
+        }
+        let ast_r = iris_bootstrap::evaluate_with_registry(
+            &parser_graph, &[toks, Value::String(src.to_string())], 50_000_000, &empty_reg,
+        ).unwrap();
+        // Extract body_node
+        if let Value::Tuple(outer) = &ast_r {
+            if let Value::Tuple(items) = &outer[2] {
+                if let Value::Tuple(decl) = &items[0] {
+                    if let Value::Tuple(payload) = &decl[2] {
+                        let body = &payload[1];
+                        eprintln!("  '{}': body kind = {:?} ({})", src,
+                            if let Value::Tuple(bt) = body { format!("{:?}", bt[0]) } else { format!("{:?}", body) },
+                            desc);
+                        if let Value::Tuple(bt) = body {
+                            dump_ast(body, 2, 4);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

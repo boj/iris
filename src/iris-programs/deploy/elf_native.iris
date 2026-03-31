@@ -84,12 +84,12 @@ let build_ident : (Int, Int, Int, Int, Int, Int, Int, Int) [cost: Const(1)] =
   (127, 69, 76, 70, 2, 1, 1, 0)
 
 -- Validate an ELF e_ident.
-let validate_ident magic0 magic1 magic2 magic3 class data version : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
+let validate_ident magic0 magic1 magic2 magic3 cls data version : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int [cost: Const(4)] =
   let m0 = if magic0 == 127 then 1 else 0 in
   let m1 = if magic1 == 69 then 1 else 0 in
   let m2 = if magic2 == 76 then 1 else 0 in
   let m3 = if magic3 == 70 then 1 else 0 in
-  let c = if class == 2 then 1 else 0 in
+  let c = if cls == 2 then 1 else 0 in
   let d = if data == 1 then 1 else 0 in
   let v = if version == 1 then 1 else 0 in
   m0 * m1 * m2 * m3 * c * d * v

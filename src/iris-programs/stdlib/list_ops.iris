@@ -64,18 +64,18 @@ let list_product xs = fold 1 (*) xs
 let list_bind xs f = fold () (\acc x -> list_concat acc (f x)) xs
 
 -- Wrap a value in a singleton list (monadic return).
-let list_return val = (val,)
+let list_return v = (v,)
 
 -- Replace element at index i with val. Returns new list.
 -- Out-of-bounds index returns the list unchanged.
-let list_set xs i val =
+let list_set xs i v =
   let n = list_len xs in
   if i < 0 then xs
   else if i >= n then xs
   else
     let prefix = list_take xs i in
     let suffix = list_drop xs (i + 1) in
-    list_concat (list_append prefix val) suffix
+    list_concat (list_append prefix v) suffix
 
 -- Fold collecting all intermediate accumulator values.
 -- scan_left init f (e0, e1, ...) = (init, f(init,e0), f(f(init,e0),e1), ...)

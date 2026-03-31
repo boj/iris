@@ -9,6 +9,9 @@
 -- Usage: evaluate this with (target_program, arg_count) as inputs.
 -- Returns: Bytes (complete ELF binary).
 
+import "src/iris-programs/compiler/aot_compile.iris" as AotCompile
+import "src/iris-programs/compiler/elf_wrapper.iris" as ElfWrapper
+
 let native_compile target n_args =
   -- Step 1: Generate machine code for the program
   let code = aot_compile target in

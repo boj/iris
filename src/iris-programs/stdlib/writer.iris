@@ -7,7 +7,7 @@
 -- alongside a computation without threading an explicit log parameter.
 
 -- Wrap a value with an empty log.
-let writer_return val = (val, ())
+let writer_return v = (v, ())
 
 -- Chain two writer computations, concatenating their logs.
 -- f receives the result of wa and returns a new (result, log) pair.

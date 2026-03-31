@@ -2,7 +2,7 @@
 -- Verifies that import declarations correctly resolve Option functions
 -- (Some, None, unwrap_or, option_map, and_then, option_filter, etc.)
 -- into scope.
-import "stdlib/option.iris" as Option
+import "src/iris-programs/stdlib/option.iris" as Option
 
 let test_unwrap_some : Int =
   let x = Some(42) in

@@ -359,21 +359,11 @@ let lower ast src =
             (p3, (step2.1, rns), nsp - 1, rws, nwsp, sc)
 
           -- Lambda combine (63): pop body, create Lambda node with binder
+          -- item.2 carries the binder_idx directly (set by the Lambda handler)
           else if k == 63 then
             let body_id = ns.0 in
             let rns = ns.1 in
-            let param_hash = item.1 in
-            -- Look up param in scope to get its binder index
-            let nsc = list_len sc in
-            let pidx = fold (0, 128)
-              (\ps _j ->
-                if ps.0 >= nsc then ps
-                else
-                  let e = list_nth sc ps.0 in
-                  if e.0 == param_hash then (nsc, e.1 + 128)
-                  else (ps.0 + 1, ps.1))
-              nsc in
-            let binder_idx = pidx.1 in
+            let binder_idx = item.2 in
             let binder_id = 4294901760 + binder_idx in
             -- Create Lambda node (kind 2) and set its binder
             let step = graph_add_node_rt pg 2 in
@@ -1022,7 +1012,7 @@ let lower ast src =
             if param2 == 0 then
               -- Single param lambda: add param hash to scope
               let new_sc = list_append sc (ph, binder_idx, 0) in
-              (pg, ns, nsp, (ba, ((63, ph, mt), rws)), nwsp + 2, new_sc)
+              (pg, ns, nsp, (ba, ((63, ph, binder_idx), rws)), nwsp + 2, new_sc)
             else
               -- Multi-param lambda: create InputRef + Project nodes
               let ir_step = graph_add_node_rt pg 5 in
@@ -1038,7 +1028,7 @@ let lower ast src =
               let p1_c = graph_connect (p1.0) (p1.1) ir_id 0 in
               -- Add both params to scope (tag 1 = node binding, value = node_id)
               let new_sc = list_append (list_append sc (ph, p0.1, 1)) (param2, p1.1, 1) in
-              (p1_c, ns, nsp, (ba, ((63, ph, mt), rws)), nwsp + 2, new_sc)
+              (p1_c, ns, nsp, (ba, ((63, ph, binder_idx), rws)), nwsp + 2, new_sc)
 
           -- Let/in (14)
           else if k == 14 then

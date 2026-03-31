@@ -7,7 +7,7 @@
 -- that needs access to a shared context without explicit parameter passing.
 
 -- Wrap a value, ignoring the environment.
-let reader_return val env = val
+let reader_return v env = v
 
 -- Read the environment itself.
 let reader_ask env = env
