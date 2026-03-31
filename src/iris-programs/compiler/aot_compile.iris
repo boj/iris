@@ -101,6 +101,24 @@ let emit_store_rbp src disp8 =
   let modrm = bitand (69 + bitand src 7 * 8) 255 in
   bytes_from_ints (rex, 0x89, modrm, bitand disp8 255)
 
+-- MOV dst_reg, [rbp + disp32]  (load from deep stack)
+-- Encoding: REX.W 0x8B ModRM(10, dst, 101=rbp) disp32LE
+let emit_load_rbp32 dst disp32 =
+  let d_hi = reg_hi dst in
+  let rex = bitand (72 + d_hi * 4) 255 in
+  let modrm = bitand (133 + bitand dst 7 * 8) 255 in
+  let d = encode_i32 disp32 in
+  bytes_from_ints (rex, 0x8b, modrm, d.0, d.1, d.2, d.3)
+
+-- MOV [rbp + disp32], src_reg  (store to deep stack)
+-- Encoding: REX.W 0x89 ModRM(10, src, 101=rbp) disp32LE
+let emit_store_rbp32 src disp32 =
+  let s_hi = reg_hi src in
+  let rex = bitand (72 + s_hi * 4) 255 in
+  let modrm = bitand (133 + bitand src 7 * 8) 255 in
+  let d = encode_i32 disp32 in
+  bytes_from_ints (rex, 0x89, modrm, d.0, d.1, d.2, d.3)
+
 -- MOV dst_reg, imm64
 -- Encoding: REX.W (0xB8 + dst&7) imm64_le
 let emit_mov_imm64 dst imm =
@@ -388,10 +406,12 @@ let aot_compile_node program node_id next_reg default_type =
       else if lit_val == 3 then (emit_load_rbp out_reg 0xb8, out_reg, next_reg + 1)
       else if lit_val == 4 then (emit_load_rbp out_reg 0xb0, out_reg, next_reg + 1)
       else if lit_val == 5 then (emit_load_rbp out_reg 0xa8, out_reg, next_reg + 1)
-      -- Lambda param (0x80 = 128): fold lambda parameter.
-      -- No-op: Project on InputRef(128) reads directly from fold slots.
-      else if lit_val == 128 then
-        (bytes_from_ints (), out_reg, next_reg + 1)
+      -- Lambda param (0x80 = 128+): fold or Apply-bound lambda parameter.
+      -- Each binder gets a stack slot: [rbp - (256 + (lit_val - 128) * 8)]
+      -- Uses disp32 encoding since these are beyond disp8 range.
+      else if lit_val >= 128 then
+        let binder_disp = 0 - (256 + (lit_val - 128) * 8) in
+        (emit_load_rbp32 out_reg binder_disp, out_reg, next_reg + 1)
       else (emit_xor_rr out_reg, out_reg, next_reg + 1)
     -- Float64 constant (type_tag 2): convert to bits, then mov imm64
     else if type_tag == 2 then
@@ -673,6 +693,51 @@ let aot_compile_node program node_id next_reg default_type =
     let nfr_body = r_body.2 in
     (bytes_concat binding_code body_code, body_reg, nfr_body)
 
+  -- Apply (kind 1): function application.
+  -- If child0 is a Lambda, this is beta-reduction: compile arg, store to
+  -- binder's stack slot, then compile the Lambda body.
+  -- For curried Apply(Apply(Lambda(a, Lambda(b, body)), x), y): outer Apply
+  -- stores x to binder_a, inner Apply stores y to binder_b, body uses both.
+  else if kind == 1 then
+    let children = graph_outgoing program node_id in
+    let func_id = list_nth children 0 in
+    let arg_id = list_nth children 1 in
+    let func_kind = graph_get_kind program func_id in
+    let me = self_graph in
+    if func_kind == 2 then
+      -- Lambda function: beta-reduce. Compile arg, store to binder slot.
+      let lambda_children = graph_outgoing program func_id in
+      let lambda_body_id = list_nth lambda_children 0 in
+      let binder_id = graph_get_binder program func_id in
+      -- binder_id is 0xFFFF0000 + binder_idx. Extract binder_idx.
+      let binder_idx = bitand binder_id 255 in
+      let binder_disp = 0 - (256 + (binder_idx - 128) * 8) in
+      -- Compile argument
+      let r_arg = graph_eval me (program, arg_id, next_reg, default_type) in
+      let arg_code = r_arg.0 in
+      let arg_reg = r_arg.1 in
+      -- Store arg to binder's stack slot
+      let store = emit_store_rbp32 arg_reg binder_disp in
+      -- Compile lambda body
+      let r_body = graph_eval me (program, lambda_body_id, next_reg, default_type) in
+      let body_code = r_body.0 in
+      let body_reg = r_body.1 in
+      (bytes_concat (bytes_concat arg_code store) body_code, body_reg, next_reg + 1)
+    else
+      -- Non-lambda function: fall through to zero (unsupported).
+      -- TODO: handle Ref-to-Lambda (cross-fragment calls)
+      (emit_xor_rr out_reg, out_reg, next_reg + 1)
+
+  -- Lambda (kind 2): standalone closure outside fold.
+  -- If the root is a Lambda, treat it as a function: the first InputRef
+  -- in the body maps to function arg 0.
+  else if kind == 2 then
+    let lambda_children = graph_outgoing program node_id in
+    let body_id = list_nth lambda_children 0 in
+    let me = self_graph in
+    -- Compile the body; InputRef(binder) will load from the binder stack slot
+    graph_eval me (program, body_id, next_reg, default_type)
+
   -- Guard (kind 17): conditional branch (if-then-else)
   -- Both branches must put their result in the SAME register (next_reg)
   else if kind == 17 then
@@ -913,14 +978,27 @@ let aot_compile_node program node_id next_reg default_type =
         (bytes_concat base_code fold_body, base_reg, next_reg + 1)
 
       -- Strategy (b): Lambda step -> native x86 counted loop
-      -- Project on InputRef(128) reads directly from fold slots:
-      --   [rbp-96]  = acc (or acc.0 for tuple acc)
-      --   [rbp-104] = fold element/index
-      --   [rbp-128] = acc.1 (for tuple acc)
+      -- For curried lambdas \acc -> \elem -> body, the step_id is the outer Lambda.
+      -- We unwrap to find the innermost body and store acc/elem to binder slots.
       else if step_kind == 2 then
         let lambda_children = graph_outgoing program step_id in
         let body_id = list_nth lambda_children 0 in
-        let r_body = graph_eval me (program, body_id, next_reg, default_type) in
+        -- Get the outer binder (for acc)
+        let outer_binder = graph_get_binder program step_id in
+        let outer_idx = bitand outer_binder 255 in
+        -- Check if body is a curried inner Lambda
+        let inner_kind = graph_get_kind program body_id in
+        let actual_body = if inner_kind == 2 then
+          -- Curried: \acc -> \elem -> real_body. Get inner binder (for elem).
+          let inner_children = graph_outgoing program body_id in
+          let inner_binder = graph_get_binder program body_id in
+          let inner_idx = bitand inner_binder 255 in
+          list_nth inner_children 0
+        else body_id in
+        let inner_binder_idx = if inner_kind == 2 then
+          bitand (graph_get_binder program body_id) 255
+        else 0 in
+        let r_body = graph_eval me (program, actual_body, next_reg, default_type) in
         let body_code = r_body.0 in
         let body_reg = r_body.1 in
         let body_len = bytes_len body_code in
@@ -998,24 +1076,35 @@ let aot_compile_node program node_id next_reg default_type =
             0x49, 0x89, 0xc4  -- mov r12, rax
           )) in
 
+          -- Build load_elem first (needed for fwd_disp calculation)
+          -- Store counter to fold elem slot AND binder stack slots
+          let load_fold_elem = bytes_from_ints (
+            0x48, 0x89, 0x5d, 0x98      -- mov [rbp-104], rbx (elem = i)
+          ) in
+          let acc_binder_disp = 0 - (256 + (outer_idx - 128) * 8) in
+          let store_acc_binder = bytes_concat
+            (emit_load_rbp 0 0xa0)      -- mov rax, [rbp-96] (load acc from fold slot)
+            (emit_store_rbp32 0 acc_binder_disp) in
+          let elem_binder_store = if inner_kind == 2 then
+            let elem_binder_disp = 0 - (256 + (inner_binder_idx - 128) * 8) in
+            bytes_concat (bytes_from_ints (0x48, 0x89, 0xd8))
+              (emit_store_rbp32 0 elem_binder_disp)
+          else bytes_from_ints () in
+          let load_elem = bytes_concat (bytes_concat load_fold_elem store_acc_binder) elem_binder_store in
+          let load_elem_len = bytes_len load_elem in
+
           -- Loop header: cmp rbx, r12; jge .done
-          -- forward jump skips: load_elem(4) + body + body_save + loop_tail(3) + loop_jmp(5)
-          let fwd_disp = 4 + body_len + body_save_len + 3 + 5 in
+          let fwd_disp = load_elem_len + body_len + body_save_len + 3 + 5 in
           let fwd = encode_i32 fwd_disp in
           let loop_header = bytes_from_ints (
             0x4c, 0x39, 0xe3,           -- cmp rbx, r12 (REX.WR for r12)
             0x0f, 0x8d, list_nth fwd 0, list_nth fwd 1, list_nth fwd 2, list_nth fwd 3
           ) in
 
-          -- Load element: elem = counter (rbx) for Int range
-          let load_elem = bytes_from_ints (
-            0x48, 0x89, 0x5d, 0x98      -- mov [rbp-104], rbx (elem = i)
-          ) in
-
           let loop_tail = bytes_from_ints (
             0x48, 0xff, 0xc3            -- inc rbx
           ) in
-          let back_dist = body_len + body_save_len + 4 + 3 + 5 + 9 in
+          let back_dist = body_len + body_save_len + load_elem_len + 3 + 5 + 9 in
           let back_neg = 0 - back_dist in
           let back = encode_i32 back_neg in
           let loop_jmp = bytes_from_ints (
@@ -1152,7 +1241,8 @@ let is_aot_compilable program =
       let kind = graph_get_kind program n in
       let dbg = debug_print (n, kind) in
       if kind == 0 then 1        -- Prim
-      else if kind == 2 then 1   -- Lambda (compiled inline in Fold)
+      else if kind == 1 then 1   -- Apply
+      else if kind == 2 then 1   -- Lambda
       else if kind == 3 then 1   -- Let
       else if kind == 5 then 1   -- Lit
       else if kind == 8 then 1   -- Fold
@@ -1198,7 +1288,7 @@ let aot_compile program =
     0x41, 0x54,                   -- push r12
     0x41, 0x55,                   -- push r13
     0x41, 0x56,                   -- push r14
-    0x48, 0x83, 0xec, 112,        -- sub rsp, 112 (fold + tuple acc slots)
+    0x48, 0x81, 0xec, 0x00, 0x02, 0x00, 0x00, -- sub rsp, 512 (fold + tuple + lambda binder slots)
     0x48, 0x89, 0x7d, 0xd0,       -- mov [rbp-48], rdi  (arg0)
     0x48, 0x89, 0x75, 0xc8,       -- mov [rbp-56], rsi  (arg1)
     0x48, 0x89, 0x55, 0xc0,       -- mov [rbp-64], rdx  (arg2)

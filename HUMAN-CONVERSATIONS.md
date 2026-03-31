@@ -88,3 +88,39 @@
 
 **Assistant:** All tasks complete. Here's the final status:
 
+
+---
+
+**2026-03-31 12:32**
+
+**Human:** Investigate it
+
+**Assistant:** All limitations fixed:
+
+
+---
+
+**2026-03-31 13:29**
+
+**Human:** Investigate it
+
+**Assistant:** Done. All 10 Benchmarks Game programs measured with full timing data:
+
+
+---
+
+**2026-03-31 13:30**
+
+**Human:** Investigate it
+
+**Assistant:** Background benchmark run confirmed complete — all results already captured and published in the previous commit. No action needed.
+
+
+---
+
+**2026-03-31 13:37**
+
+**Human:** Investigate it
+
+**Assistant:** Here's the honest picture:
+
