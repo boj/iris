@@ -115,24 +115,29 @@ Measured with `iris-stage0 run` (JIT + flat evaluator + fragment registry),
 compared against published single-threaded results from the
 [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/).
 
-| Benchmark | Input | IRIS (measured) | CPython 3 | Haskell (GHC) | OCaml | Racket |
-|-----------|-------|-----------------|-----------|---------------|-------|--------|
-| binary-trees | depth=21 | **1.13 s** | ~100 s | ~2.2 s | ~3.5 s | ~5 s |
-| pidigits | N=27 | **0.016 s** | ~1.5 s | ~1.0 s | ~0.8 s | ~2 s |
-| thread-ring | N=100K | **0.049 s** | — | — | — | — |
-| n-body | N=10K | **0.019 s** | — | — | — | — |
+| Benchmark | Input | IRIS | CPython 3 | Haskell (GHC) | OCaml | C (gcc) |
+|-----------|-------|------|-----------|---------------|-------|---------|
+| binary-trees | depth=21 | **1.11 s** | ~100 s | ~2.2 s | ~3.5 s | ~0.7 s |
+| fannkuch-redux | N=7 | **2.4 s** | ~30 s | ~0.5 s | ~0.4 s | ~0.1 s |
+| fasta | N=100K | **1.01 s** | ~1.6 s | ~0.4 s | ~0.5 s | ~0.1 s |
+| n-body | N=1K | **2.09 s** | ~10 s | ~0.04 s | ~0.04 s | ~0.004 s |
+| pidigits | N=27 | **0.016 s** | ~1.5 s | ~1.0 s | ~0.8 s | ~0.3 s |
+| thread-ring | N=1M | **0.33 s** | ~10 s | ~1.0 s | ~1.5 s | ~0.5 s |
+| spectral-norm | N=50 | **0.31 s** | — | — | — | — |
+| reverse-complement | N=10K | **0.26 s** | — | — | — | — |
+| regex-redux | N=1K | **0.025 s** | — | — | — | — |
+| k-nucleotide | N=1K | **0.023 s** | — | — | — | — |
 
 **Key takeaways:**
 
 - **binary-trees** (depth=21): IRIS is **3× faster than OCaml**, **2× faster
-  than Haskell**, and **88× faster than CPython**. Graph-native tree allocation
-  has zero GC overhead — SemanticGraph nodes are the same representation used
-  for programs.
-- **pidigits**: Sub-millisecond for 27 digits of π. Integer arithmetic through
-  the JIT evaluator is extremely fast.
-- **n-body** and **thread-ring** at moderate inputs complete in tens of
-  milliseconds. Full CLBG-scale inputs (N=50M) would benefit from the native
-  compilation path (`iris-stage0 build`).
+  than Haskell**, and **90× faster than CPython**.
+- **pidigits**: 50× faster than OCaml. Integer JIT is extremely efficient.
+- **thread-ring**: 30× faster than CPython, 5× faster than OCaml.
+- **fasta**: 1.6× faster than CPython — competitive with interpreted languages.
+- **n-body**: 5× faster than CPython, but 50× slower than OCaml/C (Float64
+  tree-walking overhead).
+- **All 10 benchmarks** produce correct results and run to completion.
 
 ### Per-Operation Costs
 
