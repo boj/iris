@@ -349,6 +349,30 @@ let lower ast src =
             let p3 = graph_connect p2 (step2.1) arg2_id 1 in
             (p3, (step2.1, rns), nsp - 1, rws, nwsp, sc)
 
+          -- Lambda combine (63): pop body, create Lambda node with binder
+          else if k == 63 then
+            let body_id = ns.0 in
+            let rns = ns.1 in
+            let param_hash = item.1 in
+            -- Look up param in scope to get its binder index
+            let nsc = list_len sc in
+            let pidx = fold (0, 128)
+              (\ps _j ->
+                if ps.0 >= nsc then ps
+                else
+                  let e = list_nth sc ps.0 in
+                  if e.0 == param_hash then (nsc, e.1 + 128)
+                  else (ps.0 + 1, ps.1))
+              nsc in
+            let binder_idx = pidx.1 in
+            let binder_id = 4294901760 + binder_idx in
+            -- Create Lambda node (kind 2) and set its binder
+            let step = graph_add_node_rt pg 2 in
+            let step2 = graph_set_binder (step.0) (step.1) binder_id in
+            -- Connect body via Continuation edge (label 3, port 0)
+            let p2 = graph_connect_labeled (step2.0) (step2.1) body_id 0 3 in
+            (p2, (step2.1, rns), nsp, rws, nwsp, sc)
+
           -- ==========================================================
           -- AST expression nodes
           -- ==========================================================
@@ -960,10 +984,12 @@ let lower ast src =
               else
                 (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
 
-          -- Lambda (13)
+          -- Lambda (13): push body + Lambda combine (63) to work stack
           else if k == 13 then
             let ph = item.1 in
             let ba = list_nth (item.2) 0 in
+            -- param2: second parameter hash (0 if single-param lambda)
+            let param2 = if tuple_len item > 3 then item.3 else 0 in
             let nsc = list_len sc in
             let pc = fold 0
               (\c2 _j ->
@@ -972,8 +998,32 @@ let lower ast src =
                   let e = list_nth sc _j in
                   if e.2 == 0 then c2 + 1 else c2)
               nsc in
-            let new_sc = list_append sc (ph, pc, 0) in
-            (pg, ns, nsp, (ba, rws), nwsp + 1, new_sc)
+            -- For multi-param lambdas, create InputRef + Project nodes
+            -- The lambda parameter is a tuple (acc, i). We need:
+            --   InputRef(128+pc) for the tuple
+            --   Project(0) on InputRef for param1
+            --   Project(1) on InputRef for param2
+            let binder_idx = 128 + pc in
+            if param2 == 0 then
+              -- Single param lambda: add param hash to scope
+              let new_sc = list_append sc (ph, binder_idx, 0) in
+              (pg, ns, nsp, (ba, ((63, ph, mt), rws)), nwsp + 2, new_sc)
+            else
+              -- Multi-param lambda: create InputRef + Project nodes
+              let ir_step = graph_add_node_rt pg 5 in
+              let ir = graph_set_lit_value (ir_step.0) (ir_step.1) 255 binder_idx in
+              let ir_id = ir.1 in
+              -- Project 0 for first param
+              let p0_step = graph_add_node_rt (ir.0) 13 in
+              let p0 = graph_set_field_index (p0_step.0) (p0_step.1) 0 in
+              let p0_c = graph_connect (p0.0) (p0.1) ir_id 0 in
+              -- Project 1 for second param
+              let p1_step = graph_add_node_rt p0_c 13 in
+              let p1 = graph_set_field_index (p1_step.0) (p1_step.1) 1 in
+              let p1_c = graph_connect (p1.0) (p1.1) ir_id 0 in
+              -- Add both params to scope (tag 1 = node binding, value = node_id)
+              let new_sc = list_append (list_append sc (ph, p0.1, 1)) (param2, p1.1, 1) in
+              (p1_c, ns, nsp, (ba, ((63, ph, mt), rws)), nwsp + 2, new_sc)
 
           -- Let/in (14)
           else if k == 14 then

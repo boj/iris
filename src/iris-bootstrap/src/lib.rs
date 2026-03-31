@@ -3890,6 +3890,40 @@ impl<'a> BootstrapCtx<'a> {
             0xA1 => self.prim_perform_effect(args)?,
             0xA2 => return self.prim_graph_eval_ref(args),
             0xA3 => self.prim_compile_source_json(args)?,
+            0xA5 => { // graph_connect_labeled(program, source, target, port, label) -> program
+                if args.len() != 5 { return Err(BootstrapError::TypeError("graph_connect_labeled: 5 args".into())); }
+                let mut graph = Self::extract_program(&args[0]).ok_or_else(|| BootstrapError::TypeError("expected Program".into()))?;
+                let source = NodeId(match &args[1] { Value::Int(n) => *n as u64, _ => return Err(BootstrapError::TypeError("expected Int".into())) });
+                let target = NodeId(match &args[2] { Value::Int(n) => *n as u64, _ => return Err(BootstrapError::TypeError("expected Int".into())) });
+                let port = match &args[3] { Value::Int(n) => *n as u8, _ => return Err(BootstrapError::TypeError("expected Int".into())) };
+                let label = match &args[4] { Value::Int(0) => EdgeLabel::Argument, Value::Int(2) => EdgeLabel::Binding, Value::Int(3) => EdgeLabel::Continuation, _ => EdgeLabel::Argument };
+                graph.edges.push(Edge { source, target, port, label });
+                Value::Program(Rc::new(graph))
+            },
+            0xA4 => { // graph_set_binder(program, node_id, binder_id) -> (program, new_node_id)
+                if args.len() != 3 { return Err(BootstrapError::TypeError("graph_set_binder: 3 args".into())); }
+                let mut graph = Self::extract_program(&args[0]).ok_or_else(|| BootstrapError::TypeError("expected Program".into()))?;
+                let node_id = NodeId(match &args[1] { Value::Int(n) => *n as u64, _ => return Err(BootstrapError::TypeError("expected Int".into())) });
+                let binder_val = match &args[2] { Value::Int(n) => *n as u32, _ => return Err(BootstrapError::TypeError("expected Int".into())) };
+                let new_binder = BinderId(binder_val);
+                if let Some(mut node) = graph.nodes.remove(&node_id) {
+                    let old_id = node.id;
+                    match &mut node.payload {
+                        NodePayload::Lambda { binder, .. } => *binder = new_binder,
+                        NodePayload::LetRec { binder, .. } => *binder = new_binder,
+                        _ => {}
+                    }
+                    node.id = compute_node_id(&node);
+                    let new_id = node.id;
+                    graph.nodes.insert(new_id, node);
+                    for edge in &mut graph.edges {
+                        if edge.source == old_id { edge.source = new_id; }
+                        if edge.target == old_id { edge.target = new_id; }
+                    }
+                    if graph.root == old_id { graph.root = new_id; }
+                    Value::tuple(vec![Value::Program(Rc::new(graph)), Value::Int(new_id.0 as i64)])
+                } else { Value::tuple(vec![Value::Program(Rc::new(graph)), Value::Int(node_id.0 as i64)]) }
+            },
             0xED => self.prim_graph_new(args)?,
             0xEE => self.prim_graph_set_root(args)?,
             0xEF => self.prim_graph_set_lit_value(args)?,
@@ -7357,9 +7391,9 @@ impl<'a> BootstrapCtx<'a> {
     }
 
     fn prim_graph_connect(&self, args: &[Value]) -> Result<Value, BootstrapError> {
-        if args.len() != 4 {
+        if args.len() < 4 {
             return Err(BootstrapError::TypeError(
-                "graph_connect: expected 4 args".into(),
+                "graph_connect: expected 4-5 args (program, source, target, port [, label])".into(),
             ));
         }
         let mut graph = Self::extract_program(&args[0]).ok_or_else(|| {
@@ -7378,12 +7412,14 @@ impl<'a> BootstrapCtx<'a> {
             _ => return Err(BootstrapError::TypeError("expected Int".into())),
         };
 
-        graph.edges.push(Edge {
-            source,
-            target,
-            port,
-            label: EdgeLabel::Argument,
-        });
+        let label = match args.get(4) {
+            Some(Value::Int(0)) => EdgeLabel::Argument,
+            Some(Value::Int(1)) => EdgeLabel::Scrutinee,
+            Some(Value::Int(2)) => EdgeLabel::Binding,
+            Some(Value::Int(3)) => EdgeLabel::Continuation,
+            _ => EdgeLabel::Argument, // default
+        };
+        graph.edges.push(Edge { source, target, port, label });
 
         Ok(Value::Program(Rc::new(graph)))
     }

@@ -453,8 +453,44 @@ impl<'a> Ctx<'a> {
                 let source = NodeId(match &b { Value::Int(n) => *n as u64, _ => return Err(EvalError::TypeError("expected Int".into())) });
                 let target = NodeId(match &c { Value::Int(n) => *n as u64, _ => return Err(EvalError::TypeError("expected Int".into())) });
                 let port = match args.get(3) { Some(Value::Int(n)) => *n as u8, _ => 0 };
-                graph.edges.push(Edge { source, target, port, label: EdgeLabel::Argument });
+                let label = match args.get(4) {
+                    Some(Value::Int(3)) => EdgeLabel::Continuation,
+                    Some(Value::Int(2)) => EdgeLabel::Binding,
+                    _ => EdgeLabel::Argument,
+                };
+                graph.edges.push(Edge { source, target, port, label });
                 Ok(Value::Program(Rc::new(graph)))
+            }
+            // graph_connect_labeled(program, source, target, port, label) -> program
+            0xA5 => {
+                let mut graph = match &a { Value::Program(g) => g.as_ref().clone(), _ => return Err(EvalError::TypeError("expected Program".into())) };
+                let source = NodeId(match &b { Value::Int(n) => *n as u64, _ => return Err(EvalError::TypeError("expected Int".into())) });
+                let target = NodeId(match &c { Value::Int(n) => *n as u64, _ => return Err(EvalError::TypeError("expected Int".into())) });
+                let port = match args.get(3) { Some(Value::Int(n)) => *n as u8, _ => 0 };
+                let label = match args.get(4) { Some(Value::Int(3)) => EdgeLabel::Continuation, Some(Value::Int(2)) => EdgeLabel::Binding, _ => EdgeLabel::Argument };
+                graph.edges.push(Edge { source, target, port, label });
+                Ok(Value::Program(Rc::new(graph)))
+            }
+            // graph_set_binder(program, node_id, binder_id) -> (program, new_node_id)
+            0xA4 => {
+                use iris_types::hash::compute_node_id;
+                let mut graph = match &a { Value::Program(g) => g.as_ref().clone(), _ => return Err(EvalError::TypeError("expected Program".into())) };
+                let node_id = NodeId(match &b { Value::Int(n) => *n as u64, _ => return Err(EvalError::TypeError("expected Int".into())) });
+                let binder_val = match &c { Value::Int(n) => *n as u32, _ => return Err(EvalError::TypeError("expected Int".into())) };
+                let mut new_id = node_id;
+                if let Some(mut node) = graph.nodes.remove(&node_id) {
+                    let old_id = node.id;
+                    match &mut node.payload {
+                        NodePayload::Lambda { binder, .. } => *binder = BinderId(binder_val),
+                        _ => {}
+                    }
+                    node.id = compute_node_id(&node);
+                    new_id = node.id;
+                    graph.nodes.insert(new_id, node);
+                    for edge in &mut graph.edges { if edge.source == old_id { edge.source = new_id; } if edge.target == old_id { edge.target = new_id; } }
+                    if graph.root == old_id { graph.root = new_id; }
+                }
+                Ok(Value::tuple(vec![Value::Program(Rc::new(graph)), Value::Int(new_id.0 as i64)]))
             }
             // graph_set_prim_op(program, node_id, opcode) -> (program, new_node_id)
             0x84 => {
