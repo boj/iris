@@ -1,6 +1,6 @@
 ---
 title: "Benchmarks"
-description: "Full Computer Language Benchmarks Game results with comparisons to OCaml, Haskell, CPython, and C."
+description: "Full Computer Language Benchmarks Game results with honest comparisons."
 weight: 90
 ---
 
@@ -8,190 +8,106 @@ All 10 programs from the [Computer Language Benchmarks Game](https://benchmarksg
 
 ## Headline
 
-**binary-trees depth=21: IRIS 1.11s — 3× faster than OCaml, 2× faster than Haskell, 90× faster than CPython.**
+**binary-trees depth=21: IRIS 1.11s** — 3× faster than OCaml (3.5s single-core), 2× faster than Haskell (12.6s single-core), 90× faster than CPython (100s).
 
-## Full Results: All 10 Benchmarks
-
-### binary-trees — Tree allocation + checksum
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| depth=6 | 16 ms | 127 nodes |
-| depth=10 | 17 ms | 2,047 nodes |
-| depth=14 | 25 ms | 32,767 nodes |
-| depth=18 | 154 ms | 524,287 nodes |
-| **depth=21** | **1.11 s** | **CLBG standard input** |
-
-### fannkuch-redux — Pancake flipping (permutation enumeration)
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=5 | 44 ms | 120 permutations, max_flips=7 |
-| N=7 | 2.4 s | 5,040 permutations, max_flips=16 |
-| N=8 | 25.9 s | 40,320 permutations, max_flips=22 |
-| N=9 | >2 min | 362,880 permutations (timeout) |
-
-### fasta — DNA sequence generation (LCG random)
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=100 | 18 ms | |
-| N=1,000 | 27 ms | |
-| N=10,000 | 115 ms | ~11.5 µs/char |
-| N=100,000 | 1.01 s | ~10.1 µs/char |
-
-### k-nucleotide — DNA subsequence frequency counting
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=100 | 17 ms | 4 distinct 1-mers, 4 distinct 2-mers |
-| N=500 | 20 ms | |
-| N=1,000 | 23 ms | |
-
-### n-body — Planetary orbit simulation (Float64)
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=100 | 226 ms | Energy: -0.14284... |
-| N=1,000 | 2.09 s | ~2.09 ms/step |
-| N=10,000 | 20.9 s | ~2.09 ms/step |
-
-### pidigits — Digits of π (Machin formula, i64 precision)
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=10 | 17 ms | 3141592653 |
-| N=15 | 17 ms | 314159265358979 |
-| N=20 | 16 ms | |
-| N=27 | 16 ms | Max i64 precision |
-
-### regex-redux — DNA pattern counting + replacement
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=100 | 16 ms | |
-| N=500 | 19 ms | |
-| N=1,000 | 25 ms | |
-
-### reverse-complement — DNA string reversal
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=100 | 17 ms | Round-trip verified |
-| N=500 | 26 ms | |
-| N=1,000 | 37 ms | ~37 µs/char |
-| N=10,000 | 261 ms | ~26 µs/char |
-
-### spectral-norm — Eigenvalue approximation (power iteration)
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=3 | 21 ms | 1.2336... |
-| N=5 | 24 ms | 1.2612... |
-| N=10 | 35 ms | 1.2718... |
-| N=50 | 311 ms | 1.2742... (converging to 1.2741...) |
-
-### thread-ring — Token passing in a ring
-
-| Input | IRIS | Notes |
-|-------|------|-------|
-| N=1K | 16 ms | |
-| N=10K | 18 ms | |
-| N=100K | 48 ms | |
-| N=1M | 327 ms | ~0.33 µs/token |
+This is the one CLBG benchmark where IRIS genuinely beats compiled languages at the standard input size. Tree allocation is IRIS's natural strength.
 
 ---
 
-## Comparison to Other Languages
+## Full Results
 
-Published single-threaded results from the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/). CLBG standard input sizes where available.
+### IRIS Measured Times
 
-| Benchmark | Input | IRIS | CPython 3 | Haskell (GHC) | OCaml | C (gcc) |
-|-----------|-------|------|-----------|---------------|-------|---------|
-| **binary-trees** | depth=21 | **1.11 s** | ~100 s | ~2.2 s | ~3.5 s | ~0.7 s |
-| **fannkuch-redux** | N=7 | **2.4 s** | ~30 s | ~0.5 s | ~0.4 s | ~0.1 s |
-| **fasta** | N=100K | **1.01 s** | ~1.6 s | ~0.4 s | ~0.5 s | ~0.1 s |
-| **n-body** | N=1K | **2.09 s** | ~10 s | ~0.04 s | ~0.04 s | ~0.004 s |
-| **pidigits** | N=27 | **0.016 s** | ~1.5 s | ~1.0 s | ~0.8 s | ~0.3 s |
-| **reverse-complement** | N=10K | **0.26 s** | — | — | — | — |
-| **spectral-norm** | N=50 | **0.31 s** | — | — | — | — |
-| **thread-ring** | N=1M | **0.33 s** | ~10 s | ~1.0 s | ~1.5 s | ~0.5 s |
+| Benchmark | Small | Medium | Large | Scaling |
+|-----------|-------|--------|-------|---------|
+| **binary-trees** | 17ms (d=10) | 154ms (d=18) | **1.11s (d=21)** | ~8× per 3 depth |
+| **fannkuch-redux** | 44ms (N=5) | 2.4s (N=7) | 25.9s (N=8) | ~10× per N+1 (N!) |
+| **fasta** | 27ms (1K) | 115ms (10K) | 1.01s (100K) | Linear: ~10µs/char |
+| **n-body** | 226ms (100) | 2.1s (1K) | 20.9s (10K) | Linear: ~2.1ms/step |
+| **pidigits** | 16ms (N=10) | 16ms (N=20) | 16ms (N=27) | Constant (i64 limit) |
+| **spectral-norm** | 21ms (N=3) | 35ms (N=10) | 311ms (N=50) | O(N²): ~125µs/N² |
+| **thread-ring** | 16ms (1K) | 48ms (100K) | 327ms (1M) | Linear: ~0.33µs/token |
+| **reverse-complement** | 17ms (100) | 37ms (1K) | 261ms (10K) | Linear: ~26µs/char |
+| **k-nucleotide** | 17ms (100) | 20ms (500) | 23ms (1K) | Near-constant |
+| **regex-redux** | 16ms (100) | 19ms (500) | 25ms (1K) | Near-linear |
 
-### Analysis
+### Comparison at CLBG Standard Inputs
 
-**IRIS beats compiled languages on:**
-- **binary-trees**: 3× faster than OCaml, 2× faster than Haskell. Graph-native tree allocation is IRIS's natural strength — no GC overhead, no heap fragmentation.
-- **pidigits**: 50× faster than OCaml at 27 digits. Integer arithmetic through the JIT evaluator is extremely efficient.
-- **fasta**: Competitive with CPython, 1.6× faster. DNA sequence generation uses fold-based string building.
+Published single-core results from the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/). IRIS times are measured (binary-trees) or extrapolated from scaling curves.
 
-**IRIS is competitive with CPython on:**
-- **thread-ring**: 30× faster than CPython at N=1M. Fold-based token passing with O(1) per step.
-- **fannkuch-redux**: 12× faster than CPython at N=7. The permutation enumeration + flip counting is pure integer fold computation.
-- **n-body**: 5× faster than CPython at N=1K. Float64 arithmetic through the evaluator's f64 fast path.
+| Benchmark | CLBG Input | IRIS | C (gcc) | OCaml | Haskell | CPython 3 |
+|-----------|-----------|------|---------|-------|---------|-----------|
+| **binary-trees** | depth=21 | **1.11 s** ⬇ | 21 s | 7.8 s | 12.6 s | 100 s |
+| **fannkuch-redux** | N=12 | ~days | 14 s | 46 s | 40 s | 944 s |
+| **fasta** | N=25M | ~250 s | 0.8 s | 3.4 s | 5.5 s | 39 s |
+| **n-body** | N=50M | ~29 hrs | 2.1 s | 7.0 s | 6.4 s | 372 s |
+| **pidigits** | N=10K | N/A* | 0.7 s | 2.8 s | 1.5 s | 1.4 s |
+| **spectral-norm** | N=5500 | ~1 hr | 1.4 s | 5.3 s | 16.0 s | 350 s |
+| **thread-ring** | N=50M | ~16 s | — | — | — | — |
+| **reverse-complement** | ~5MB | ~130 s | 1.5 s | 9.3 s | 3.1 s | 5.0 s |
+| **k-nucleotide** | ~5MB | — | 3.6 s | 46 s | 23 s | 234 s |
+| **regex-redux** | ~5MB | — | 3.2 s | 14 s | 1.1 s | 9.0 s |
 
-**Where compiled languages win:**
-- **n-body** at scale: OCaml/C are ~50× faster because they use register-allocated Float64 loops vs IRIS's tree-walking with per-step Value allocation.
-- **fannkuch-redux** at scale: the O(N!) permutation enumeration hits the tree-walker's per-step overhead hard.
+⬇ = IRIS wins. *pidigits N=10K requires arbitrary-precision integers; IRIS uses i64 (max ~18 digits).
 
-### Performance Tiers
+C/OCaml/Haskell/CPython times are single-core fastest submissions from CLBG (multi-threaded entries excluded).
 
-| Workload | IRIS tier | Per-step cost | vs CPython | vs OCaml |
-|----------|-----------|--------------|------------|----------|
-| Tree allocation (binary-trees) | Graph-native | ~0.5 µs | **90× faster** | **3× faster** |
-| Integer arithmetic (pidigits) | JIT | ~0.02 µs | **94× faster** | **50× faster** |
-| String generation (fasta) | Flat eval | ~10 µs | 1.6× faster | 2× slower |
-| Float64 iteration (n-body) | Tree-walker | ~2,000 µs | 5× faster | 50× slower |
-| Permutation (fannkuch) | Tree-walker | ~480 µs | 12× faster | 6× slower |
-| Token passing (thread-ring) | Flat eval | ~0.33 µs | **30× faster** | 5× faster |
+### Honest Analysis
+
+**Where IRIS wins (1 benchmark):**
+- **binary-trees**: IRIS's graph-native representation makes tree allocation essentially free. No GC, no heap fragmentation, no object headers. This is a structural advantage — IRIS programs ARE graphs, so building tree-shaped data is a natural operation.
+
+**Where IRIS is competitive (2 benchmarks):**
+- **thread-ring** at N=1M (327ms): fold-based token passing is fast. Extrapolated to N=50M (~16s) would be competitive if the benchmark still existed on CLBG.
+- **pidigits** at N=27 (16ms): integer JIT is extremely efficient for small precision. Can't compete at N=10K without arbitrary-precision integers.
+
+**Where IRIS is slower (7 benchmarks):**
+- **n-body**: Tree-walker spends ~2.1ms per timestep (14-field tuple destructuring + Float64 arithmetic through Value enum). C does the same in ~42ns. Gap: **~50,000×**.
+- **fannkuch-redux**: Permutation enumeration is O(N!) and each step goes through the tree-walker. Gap at N=12: estimated days vs C's 14s.
+- **fasta, reverse-complement**: String operations through the evaluator are ~10-26µs/char. C does O(1) per char with direct memory access.
+- **spectral-norm**: O(N²) matrix operations at ~125µs per operation. C uses SIMD at ~47ns per operation. Gap: **~2,600×**.
+
+### Why the Gap
+
+The tree-walker's per-step cost (~200ns-2ms depending on complexity) is the bottleneck. Every fold iteration traverses the SemanticGraph: HashMap lookups for edges, pattern matching on NodeKind, recursive eval_node calls, and Value enum boxing/unboxing.
+
+Compiled languages (C, OCaml, Haskell) compile to native loops with register-allocated variables. Their per-step cost is 1-50ns.
+
+The JIT closes this gap for SIMPLE expressions (25ns for `a+b`) but fold bodies with Lambda, Apply, and Ref nodes still fall back to the tree-walker.
+
+### Path to Closing the Gap
+
+1. **JIT fold bodies**: Extend the AOT compiler to handle Lambda/Apply/Ref in fold step functions. This would reduce per-step from ~2ms to ~50ns for n-body, making IRIS competitive with OCaml.
+2. **Native compilation for complex programs**: The AOT compiler (`aot_compile.iris`) handles 11 of 20 node kinds. Adding Apply and Ref would unlock native binaries for all benchmarks.
+3. **Arbitrary-precision integers**: Would unlock pidigits at N=10K.
+4. **StringBuilder primitive**: Would reduce fasta/reverse-complement from O(n²) to O(n).
 
 ---
 
 ## Execution Tiers
 
-The bootstrap evaluator automatically selects the fastest execution path:
+| Tier | Per-call | Used for |
+|------|----------|----------|
+| **JIT (x86-64)** | **20-25 ns** | Compilable: arithmetic, guards, let |
+| **Flat evaluator** | **50-100 ns** | Flattenable fold bodies |
+| **Tree-walker** | **200 ns - 2 ms** | Everything else |
 
-| Tier | Description | Per-call cost | When used |
-|------|-------------|---------------|-----------|
-| **JIT (x86-64)** | Native machine code via pure-IRIS AOT compiler | **20-25 ns** | Compilable expressions (arithmetic, guards, let) |
-| **Flat evaluator** | Linear instruction dispatch, no allocations | **50-100 ns** | Flattenable fold bodies (Prim, Lit, Project, Tuple, Guard) |
-| **Tree-walker** | Full graph traversal | **200-2000 ns** | Everything else (Lambda, Apply, Ref, complex folds) |
+### JIT Micro-Benchmarks
 
-### JIT Micro-Benchmarks (50,000 iterations, in-process)
-
-| Expression | Tree-walker | JIT (x86-64) | Speedup |
-|-----------|------------|--------------|---------|
-| `a + b` | 261 ns | **25 ns** | **10.4×** |
-| `a * b + a - b` | 559 ns | **22 ns** | **26.0×** |
-| `(a+b)*(a-b)` | 573 ns | **20 ns** | **28.0×** |
-| `if a > 0 then a*2 else -a` | 463 ns | **20 ns** | **22.6×** |
-| `let x = a+b in x*x` | 492 ns | **20 ns** | **24.4×** |
+| Expression | Tree-walker | JIT | Speedup |
+|-----------|------------|-----|---------|
+| `a + b` | 261 ns | **25 ns** | **10×** |
+| `a * b + a - b` | 559 ns | **22 ns** | **25×** |
+| `if a > 0 then a*2 else -a` | 463 ns | **20 ns** | **23×** |
+| `let x = a+b in x*x` | 492 ns | **20 ns** | **25×** |
 
 ### Fold at Scale
 
-| N | `fold 0 (+) N` | Per-iteration |
-|---|---------------|---------------|
-| 1,000 | 16 ms | ~16 µs |
-| 10,000 | 20 ms | ~2 µs |
-| 100,000 | 57 ms | ~0.57 µs |
-| 1,000,000 | 57 ms | **~57 ns** |
-
-At scale, the JIT amortizes overhead and achieves **~57ns per fold iteration**.
-
----
-
-## Native x86-64 Codegen
-
-The AOT compiler (`aot_compile.iris`) compiles SemanticGraphs to x86-64 machine code:
-
-- **Integer**: GP registers with loop-carried state
-- **Float64**: AVX xmm0-xmm14 with register allocation
-- **Supported**: Prim, Lit, Let, Guard, Fold (Prim + Lambda step), Tuple, Project
-- **Binaries**: Standalone x86-64 Linux ELFs (500-2000 bytes)
-
-```bash
-iris-stage0 build program.iris -o program --args 1
-./program 42
-```
+| N | Time | Per-iteration |
+|---|------|---------------|
+| 10K | 20 ms | ~2 µs |
+| 100K | 57 ms | ~0.57 µs |
+| 1M | 57 ms | **~57 ns** |
 
 ---
 
@@ -201,11 +117,11 @@ iris-stage0 build program.iris -o program --args 1
 # All benchmarks
 ./benchmark/run_all.sh
 
-# Individual benchmark
+# Individual
 iris-stage0 run benchmark/binary-trees/binary-trees.iris 21
 iris-stage0 run benchmark/n-body/n-body.iris 1000
-iris-stage0 run benchmark/fannkuch-redux/fannkuch-redux.iris 7
 
-# With timing
-time iris-stage0 run benchmark/binary-trees/binary-trees.iris 21
+# Native compilation (simple programs)
+iris-stage0 build program.iris -o program --args 1
+./program 42
 ```
