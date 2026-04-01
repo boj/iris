@@ -127,14 +127,19 @@ let parse tokens src =
           (list_append it.0 type_node, it.1 + 1, it.2)
 
         -- ========== import declaration ==========
-        -- import 0xHASH as name
-        -- We emit: (32, name_hash, mt) with hash info
+        -- import "path" as name  OR  import 0xHASH as name
+        -- For string path: (32, name_hash, (path_start, path_len))
+        -- For hex hash:    (32, name_hash, mt)
         else if item_kind == 15 then
-          -- Expect hex hash at dstart+1, 'as' at dstart+2, name at dstart+3
-          let hash_tok = list_nth tokens (dstart + 1) in
+          let path_tok = list_nth tokens (dstart + 1) in
           -- Skip 'as' token (kind 16)
           let name_tok = list_nth tokens (dstart + 3) in
-          let import_node = (32, name_tok.1, mt) in
+          let import_node = if path_tok.0 == 4 then
+            -- String path import: store path position in source
+            (32, name_tok.1, (path_tok.2, path_tok.3))
+          else
+            -- Hex hash import
+            (32, name_tok.1, mt) in
           (list_append it.0 import_node, it.1 + 1, it.2)
 
         -- ========== allow / deny declaration ==========
@@ -938,9 +943,17 @@ let parse tokens src =
                 if pos + 1 < dend then
                   let ix = list_nth tokens (pos + 1) in
                   if ix.0 == 1 then
+                    -- Integer field access: x.0, x.1, etc.
                     let base = vs.0 in
                     let rest = vs.1 in
                     (pos + 2, ((18, ix.1, list_append mt base), rest), vsp, os, osp, 1, mbp, 0)
+                  else if ix.0 == 2 then
+                    -- Named field access: Foo.bar — used for qualified imports
+                    -- Emits TupleAccess with negative hash to distinguish from int index
+                    let base = vs.0 in
+                    let rest = vs.1 in
+                    let neg_hash = 0 - ix.1 in
+                    (pos + 2, ((18, neg_hash, list_append mt base), rest), vsp, os, osp, 1, mbp, 0)
                   else (pos, vs, vsp, os, osp, 2, mbp, 0)
                 else (pos, vs, vsp, os, osp, 2, mbp, 0)
 

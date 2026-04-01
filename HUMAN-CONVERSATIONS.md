@@ -169,3 +169,39 @@
 
 **Assistant:** Pushed. Multi-function AOT now works for the common case. Here's where we are:
 
+
+---
+
+**2026-03-31 15:39**
+
+**Human:** Investigate it
+
+**Assistant:** All fixes applied, verified, committed, and pushed as `fdc3cc9`. Every test passes:
+
+
+---
+
+**2026-03-31 15:41**
+
+**Human:** Investigate it
+
+**Assistant:** Yes — this should be done in IRIS. Here's the situation:
+
+
+---
+
+**2026-03-31 15:43**
+
+**Human:** Investigate it
+
+**Assistant:** **Everything returns 0.** The IRIS pipeline (compile_source_json) doesn't have ANY of our fixes. The changes we made were all in the Rust compiler (lower.rs, lib.rs), not in the IRIS programs (iris_lowerer.iris, iris_parser.iris).
+
+
+---
+
+**2026-03-31 15:44**
+
+**Human:** Investigate it
+
+**Assistant:** Saved. Now the priority is clear: port all compiler fixes into the IRIS programs so the IRIS pipeline matches the Rust compiler's capabilities. That means working through:
+
