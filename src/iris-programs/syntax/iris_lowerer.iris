@@ -58,43 +58,35 @@ let lower ast src =
               -- Compile as a trampoline fold instead of a recursive Lambda.
               -- The fold state is (done_flag, arg_tuple). Each iteration either
               -- returns (1, result) [done] or (0, new_args) [continue].
-              -- TCO transformation for tail-recursive functions.
-              -- Detect: let rec f args = if cond then base else f(new_args)
-              -- Emit: let f args = trampoline_fold(args, body_step, 1000000)
-              -- where body_step replaces f(x) with (0,x) and base with (1,result)
+              -- TCO: generic tail-call detection for any number of args.
+              -- Detect: let rec f args = if cond then base else f(new_args...)
+              -- The else branch is a chain of Apply nodes ending at Var(f).
+              -- Unwrap the Apply chain to find the function and collect new args.
               let is_tail_rec =
-                if is_rec == 1 then
-                  if n_pp == 1 then
-                    -- Single arg: check if body is If/Then/Else (kind 15)
-                    if prior_body.0 == 15 then
-                      -- Check if else branch (item.2).2 is Apply(Var(f), ...)
-                      let else_br = (prior_body.2).2 in
-                      if else_br.0 == 12 then
-                        -- Apply: check if function is Var(clean_name)
-                        let app_fn = (else_br.2).0 in
-                        if app_fn.0 == 4 then
-                          if app_fn.1 == clean_name then 1 else 0
-                        else 0
-                      else 0
-                    else 0
-                  else if n_pp == 2 then
-                    -- Two args: check if body is If/Then/Else
-                    if prior_body.0 == 15 then
-                      let else_br = (prior_body.2).2 in
-                      -- else branch should be Apply(Apply(Var(f), arg1), arg2)
-                      if else_br.0 == 12 then
-                        let inner_app = (else_br.2).0 in
-                        if inner_app.0 == 12 then
-                          let app_fn = (inner_app.2).0 in
-                          if app_fn.0 == 4 then
-                            if app_fn.1 == clean_name then 1 else 0
-                          else 0
-                        else 0
-                      else 0
-                    else 0
-                  else 0
-                else 0 in
+                if is_rec == 0 then 0
+                else if prior_body.0 != 15 then 0  -- must be If/Then/Else
+                else
+                  -- Walk the else branch's Apply chain to find the tail call
+                  let else_br = (prior_body.2).2 in
+                  -- Unwrap Apply chain: Apply(Apply(Var(f), a), b) → Var(f) with args [a, b]
+                  let unwrap = fold (else_br, 0, 0)
+                    (\uw _i ->
+                      if uw.2 == 1 then uw  -- found
+                      else
+                        let node = uw.0 in
+                        if node.0 == 4 then
+                          -- Var: check if it's the recursive function
+                          if node.1 == clean_name then (node, uw.1, 1) else (node, uw.1, 0)
+                        else if node.0 == 12 then
+                          -- Apply: unwrap function (go deeper)
+                          ((node.2).0, uw.1 + 1, 0)
+                        else (node, uw.1, 0))
+                    20 in  -- max 20 levels of nesting
+                  unwrap.2 in  -- 1 if tail call found, 0 otherwise
               let value_ast = if is_tail_rec == 1 then
+                -- Tail-call trampoline: 1-arg and 2-arg have specific paths.
+                -- Generic N-arg detection works but transformation needs
+                -- specific code per arg count for now.
                 if n_pp == 1 then
                   -- Single-arg tail recursion: let rec f n = if cond then base else f(step(n))
                   -- Transform to: \n -> (fold (0, n) (\acc _i -> if acc.0 == 1 then acc else
