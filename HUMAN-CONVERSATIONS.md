@@ -277,3 +277,12 @@
 
 **Assistant:** Right, TODO.md is gitignored. That's by design. Let me summarize where we are:
 
+
+---
+
+**2026-03-31 22:09**
+
+**Human:** Investigate it
+
+**Assistant:** OK. The path forward for `let rec` through IRIS pipeline is clear:
+
