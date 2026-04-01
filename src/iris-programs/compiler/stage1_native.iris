@@ -26,67 +26,43 @@ let le64 v =
   let n7 = shr n6 8 in let b7 = bitand n7 255 in
   bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
 
--- ELF64 header (64 bytes)
+-- ELF64 header (64 bytes) — single bytes_from_ints to avoid trailing-zero bug
 let elf_header file_size mem_size entry_offset =
-  bytes_concat (bytes_from_ints (
-    0x7f, 0x45, 0x4c, 0x46,  -- magic
-    0x02,                     -- 64-bit
-    0x01,                     -- little endian
-    0x01,                     -- ELF version
-    0x00,                     -- OS/ABI
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  -- padding
-    0x02, 0x00,               -- ET_EXEC
-    0x3e, 0x00                -- x86-64
-  )) (bytes_concat (le32 1) (bytes_concat  -- ELF version
-    (le64 (4194304 + entry_offset))        -- e_entry (vaddr)
-    (bytes_concat (le64 64)                -- e_phoff
-      (bytes_concat (le64 0)               -- e_shoff
-        (bytes_concat (le32 0)             -- e_flags
-          (bytes_concat (bytes_from_ints (0x40, 0x00))  -- e_ehsize=64
-            (bytes_concat (bytes_from_ints (0x38, 0x00))  -- e_phentsize=56
-              (bytes_concat (bytes_from_ints (0x01, 0x00))  -- e_phnum=1
-                (bytes_from_ints (0x00, 0x00, 0x00, 0x00, 0x00, 0x00))))))))))
+  let entry = 4194304 + entry_offset in
+  bytes_from_ints (
+    0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 0, 0x3e, 0, 1, 0, 0, 0,
+    bitand entry 255, bitand (shr entry 8) 255, bitand (shr entry 16) 255, bitand (shr entry 24) 255, 0, 0, 0, 0,
+    0x40, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 1
+  )
 
--- Program header (56 bytes): single PT_LOAD
+-- Program header (56 bytes)
 let prog_header file_size mem_size =
-  bytes_concat (le32 1) (bytes_concat (le32 5) (bytes_concat  -- PT_LOAD, PF_R|PF_X
-    (le64 0) (bytes_concat                                     -- p_offset
-      (le64 4194304) (bytes_concat                             -- p_vaddr
-        (le64 4194304) (bytes_concat                           -- p_paddr
-          (le64 file_size) (bytes_concat                       -- p_filesz
-            (le64 mem_size)                                    -- p_memsz
-            (le64 4096)))))))                                  -- p_align
+  let fs0 = bitand file_size 255 in let fs1 = bitand (shr file_size 8) 255 in
+  let fs2 = bitand (shr file_size 16) 255 in let fs3 = bitand (shr file_size 24) 255 in
+  let ms0 = bitand mem_size 255 in let ms1 = bitand (shr mem_size 8) 255 in
+  let ms2 = bitand (shr mem_size 16) 255 in let ms3 = bitand (shr mem_size 24) 255 in
+  bytes_from_ints (
+    1, 0, 0, 0, 5, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    fs0, fs1, fs2, fs3, 0, 0, 0, 0,
+    ms0, ms1, ms2, ms3, 0, 0, 0, 0,
+    0, 0x10, 0, 0, 0, 0, 0, 1
+  )
 
--- Inline atoi: parse decimal from null-terminated string at [rdi]
--- Returns result in rax. Handles negative numbers.
-let emit_atoi = bytes_from_ints (
-  -- xor rax, rax (result = 0)
-  0x48, 0x31, 0xc0,
-  -- xor rcx, rcx (sign = 0)
-  0x48, 0x31, 0xc9,
-  -- check leading '-'
-  0x80, 0x3f, 0x2d,       -- cmp byte [rdi], '-'
-  0x75, 0x04,              -- jne .digits
-  0x48, 0xff, 0xc1,       -- inc rcx (sign = 1)
-  0x48, 0xff, 0xc7,       -- inc rdi
-  -- .digits:
-  0x0f, 0xb6, 0x17,       -- movzx edx, byte [rdi]
-  0x80, 0xfa, 0x30,       -- cmp dl, '0'
-  0x72, 0x10,              -- jb .done
-  0x80, 0xfa, 0x39,       -- cmp dl, '9'
-  0x77, 0x0b,              -- ja .done
-  0x48, 0x6b, 0xc0, 0x0a, -- imul rax, 10
-  0x80, 0xea, 0x30,       -- sub dl, '0'
-  0x48, 0x0f, 0xb6, 0xd2, -- movzx rdx, dl
-  0x48, 0x01, 0xd0,       -- add rax, rdx
-  0x48, 0xff, 0xc7,       -- inc rdi
-  0xeb, 0xe2,              -- jmp .digits
-  -- .done:
-  0x48, 0x85, 0xc9,       -- test rcx, rcx
-  0x74, 0x03,              -- jz .positive
-  0x48, 0xf7, 0xd8,       -- neg rax
-  0xc3                      -- ret
-)
+-- Use the proven components from elf_wrapper.iris
+let elf_module x =
+  let src = file_read "src/iris-programs/compiler/elf_wrapper.iris" in
+  compile_source src
+
+-- emit_inline_atoi = binding 8, emit_print_result_and_exit = binding 9
+let emit_atoi = module_eval (elf_module 0).0 8 ()
+let emit_print_and_exit = module_eval (elf_module 0).0 9 ()
 
 -- Print i64 in rax as decimal + newline to stdout
 let emit_print_int = bytes_from_ints (
@@ -175,24 +151,21 @@ let build_stub vm_offset bytecode_offset =
   --        = vm_offset - 120 - stub_so_far - 5
   let call_rel = vm_offset - 120 - stub_so_far - 5 in
   let call_vm = bytes_concat (bytes_from_ints (0xe8)) (le32 call_rel) in
-  -- Print result (rax) and exit
-  -- Call print_int (inline — it follows)
-  -- Then: xor edi, edi; mov eax, 231; syscall (sys_exit_group)
-  let print_call = emit_print_int in
-  let exit_code = bytes_from_ints (
-    0x31, 0xff,                 -- xor edi, edi
-    0xb8, 0xe7, 0x00, 0x00, 0x00, -- mov eax, 231 (sys_exit_group)
-    0x0f, 0x05                  -- syscall
-  ) in
+  -- After VM returns, rax has result. Print and exit.
+  -- emit_print_and_exit: saves rax to r12, converts to decimal, writes, exits
+  let post_call = bytes_concat
+    (bytes_from_ints (0x49, 0x89, 0xc4, 0x48, 0x83, 0xec, 0x20))  -- mov r12,rax; sub rsp,32
+    emit_print_and_exit in
   bytes_concat stub (bytes_concat atoi_call (bytes_concat setup_vm
-    (bytes_concat load_bc_ptr (bytes_concat call_vm
-      (bytes_concat print_call exit_code)))))
+    (bytes_concat load_bc_ptr (bytes_concat call_vm post_call))))
 
--- Load the hand-assembled native VM
+-- Minimal test function: f(n) = n + 1
+-- Convention: rdi = bytecode ptr (unused), rsi = input value
 let load_vm_bytes x =
-  let vm_src = file_read "src/iris-programs/compiler/native_vm.iris" in
-  let vm_m = compile_source_json vm_src in
-  module_eval (vm_m.0) 0 ()
+  bytes_from_ints (
+    0x48, 0x8d, 0x46, 0x01,           -- lea rax, [rsi+1]
+    0xc3                              -- ret
+  )
 
 -- Emit bytecode data as raw bytes in memory (tuple format)
 let emit_bc_data bc =
@@ -242,6 +215,6 @@ let main output_path arg =
   let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub2
     (bytes_concat vm_code bc_data))) in
 
-  -- Write
-  let r = file_write_bytes output_path binary in
-  debug_print (str_concat "stage1: " (str_concat (int_to_string (bytes_len binary)) " bytes"))
+  -- Return binary as Bytes value — pipe through Python to write:
+  -- iris-stage0 run stage1_native.iris out 0 | python3 -c "import sys,ast; d=sys.stdin.read().strip(); sys.stdout.buffer.write(bytes(ast.literal_eval(d.replace('Bytes(','').rstrip(')'))))" > stage1
+  binary
