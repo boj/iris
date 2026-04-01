@@ -232,3 +232,12 @@
 
 **Assistant:** Single-function `helper` through IRIS pipeline: 6 ✓. Multi-function `helper` through Rust run command: 6 ✓. But multi-function `helper` through compile_source_json (IRIS pipeline): 0.
 
+
+---
+
+**2026-03-31 17:39**
+
+**Human:** Investigate it
+
+**Assistant:** Here's the status on all three issues:
+

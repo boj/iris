@@ -1,0 +1,56 @@
+-- Tail-call optimization helpers for IRIS.
+--
+-- Since IRIS doesn't have native TCO, recursive functions that loop
+-- deeply will stack-overflow. Use these fold-based alternatives instead.
+--
+-- Pattern: replace
+--   let rec f state = if done then state else f (step state)
+-- with:
+--   let f state = loop_while (\s -> not done) step state max_iters
+
+-- loop_while: repeatedly apply step while predicate holds.
+-- Returns the final state when predicate returns false or max iterations reached.
+-- Equivalent to: while (pred state) { state = step(state) }
+let loop_while pred step init max_iters =
+  let result = fold (0, init) (\acc _i ->
+    if acc.0 == 1 then acc
+    else
+      let st = acc.1 in
+      let cont = pred st in
+      if cont == true then (0, step st)
+      else if cont == 1 then (0, step st)
+      else (1, st)
+  ) max_iters in
+  result.1
+
+-- loop_n: apply step exactly n times. No predicate needed.
+-- Equivalent to: for i in 0..n { state = step(state, i) }
+let loop_n step init n =
+  fold init step n
+
+-- loop_until: apply step until predicate returns true.
+-- Equivalent to: do { state = step(state) } while (!pred(state))
+let loop_until pred step init max_iters =
+  let result = fold (0, init) (\acc _i ->
+    if acc.0 == 1 then acc
+    else
+      let new_st = step (acc.1) in
+      let done = pred new_st in
+      if done == true then (1, new_st)
+      else if done == 1 then (1, new_st)
+      else (0, new_st)
+  ) max_iters in
+  result.1
+
+-- trampoline: evaluate a function that returns either a final value
+-- or a continuation (next_state). Uses a tag convention:
+--   (0, value)     = done, return value
+--   (1, new_state) = continue with new_state
+let trampoline step init max_iters =
+  let result = fold (1, init) (\acc _i ->
+    if acc.0 == 0 then acc
+    else
+      let r = step (acc.1) in
+      r
+  ) max_iters in
+  result.1

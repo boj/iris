@@ -51,9 +51,21 @@ let lower ast src =
               let prior_params = (prior.2).0 in
               let prior_body = (prior.2).1 in
               let n_pp = list_len prior_params in
-              let value_ast = if n_pp == 0 then prior_body
-                else
-                  -- Wrap body in curried lambdas: \p1 -> \p2 -> ... -> body
+              let is_rec = if prior_name >= 2147483648 then 1 else 0 in
+              let clean_name = if is_rec == 1 then prior_name - 2147483648 else prior_name in
+              -- TCO: for tail-recursive functions with pattern
+              --   let rec f args = if cond then base else f new_args
+              -- Compile as a trampoline fold instead of a recursive Lambda.
+              -- The fold state is (done_flag, arg_tuple). Each iteration either
+              -- returns (1, result) [done] or (0, new_args) [continue].
+              let value_ast = if is_rec == 1 then
+                if n_pp >= 1 then
+                  -- Build trampoline: fold (0, arg0, arg1, ...) step 1000000
+                  -- Step function checks the body, returns (1, result) or (0, new_args)
+                  -- For now, wrap as a curried lambda that uses fold internally.
+                  -- The recursive call f(x) becomes updating the accumulator.
+                  -- This is complex AST surgery; for now use the simple lambda approach
+                  -- and rely on the stdlib/tco.iris helpers for deep recursion.
                   fold prior_body
                     (\inner j ->
                       let rj = n_pp - 1 - j in
@@ -61,8 +73,19 @@ let lower ast src =
                       else
                         let ph = (list_nth prior_params rj).1 in
                         (13, ph, list_append mt inner, 0))
-                    n_pp in
-              (14, prior_name, (value_ast, wrapped)))
+                    n_pp
+                else prior_body
+              else if n_pp == 0 then prior_body
+              else
+                fold prior_body
+                  (\inner j ->
+                    let rj = n_pp - 1 - j in
+                    if rj < 0 then inner
+                    else
+                      let ph = (list_nth prior_params rj).1 in
+                      (13, ph, list_append mt inner, 0))
+                  n_pp in
+              (14, clean_name, (value_ast, wrapped)))
         (n_items - 1) in
 
     -- Gap 3: Scan imports and build scope entries.
