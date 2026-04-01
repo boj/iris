@@ -150,7 +150,32 @@ let lower ast src =
                   let fold_call = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_tuple)), step_lambda)), (0, 1000000, mt))) in
                   -- result.1: TupleAccess(1, fold_call)
                   let extract = (18, 1, list_append mt fold_call) in
-                  -- Wrap in \param -> extract
+                  -- Trampoline: \n -> (fold (0, n) (\st _i -> step_body) 1000000).1
+                  -- step_body: if st.0 == 1 then st else let <param> = st.1 in
+                  --   if <cond> then (1, <base>) else (0, <rec_arg>)
+                  let st_h = 295 in  -- hash for 'st' (acc in fold)
+                  let st_0 = (18, 0, list_append mt (4, st_h, mt)) in
+                  let st_1 = (18, 1, list_append mt (4, st_h, mt)) in
+                  -- done check: st.0 == 1
+                  let done_ck = (10, 5, (st_0, (0, 1, mt))) in
+                  -- done result: (1, <base>)
+                  let done_r = (17, 0, list_append (list_append mt (0, 1, mt)) base_ast) in
+                  -- continue result: (0, <rec_arg>)
+                  let cont_r = (17, 0, list_append (list_append mt (0, 0, mt)) rec_arg_ast) in
+                  -- inner if: if <cond> then (1, base) else (0, rec_arg)
+                  let inner_cond = (15, 0, (cond_ast, done_r, cont_r)) in
+                  -- let <param> = st.1 in inner_cond
+                  let let_p = (14, param_hash, (st_1, inner_cond)) in
+                  -- outer if: if st.0 == 1 then st else let_p
+                  let step_body = (15, 0, (done_ck, (4, st_h, mt), let_p)) in
+                  -- fold step: \st _i -> step_body (multi-param Lambda)
+                  let step_fn = (13, st_h, list_append mt step_body, 232) in
+                  -- init: (0, n)
+                  let init_t = (17, 0, list_append (list_append mt (0, 0, mt)) (4, param_hash, mt)) in
+                  -- fold (0,n) step 1000000
+                  let fold_a = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_t)), step_fn)), (0, 1000000, mt))) in
+                  -- result.1
+                  let extract = (18, 1, list_append mt fold_a) in
                   (13, param_hash, list_append mt extract, 0)
                 else
                   -- Multi-param tail rec: fall through to simple lambda for now
