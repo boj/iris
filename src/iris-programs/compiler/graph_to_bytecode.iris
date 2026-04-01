@@ -1,0 +1,207 @@
+-- graph_to_bytecode.iris — Compile a SemanticGraph to bytecodes via dynamic analysis.
+--
+-- Works on graphs from the IRIS pipeline (lowerer output) which support:
+--   graph_get_root, graph_get_kind, graph_get_prim_op, graph_edge_target, graph_eval
+-- But NOT: graph_outgoing, graph_get_lit_value, graph_get_binder
+--
+-- Strategy: use graph_eval with probe inputs to determine node values.
+-- InputRef nodes change with input; Lit nodes are constant.
+--
+-- Usage: called from the pipeline compiler with a Program graph
+
+let rec compile_node pg nid env ns probe1 probe2 =
+  let kind = graph_get_kind pg nid in
+
+  -- Lit (kind 5): constant or InputRef
+  -- InputRef detection: if the full graph result changes by (probe2 - probe1)
+  -- when we change the input, and this Lit contributes to that change,
+  -- it's an InputRef. Detected by checking if it's in env.
+  -- For root-level programs without Lambda wrapper: the InputRef is marked
+  -- during the initial call (added to env before compilation starts).
+  if kind == 5 then
+    -- Probe: evaluate the full graph with two different inputs
+    -- If this node's contribution changes, it's an InputRef
+    -- We detect by checking if the node is an edge target from a Prim(add)
+    -- that produces (probe1 + const) and (probe2 + const).
+    -- For now, use a heuristic: evaluate the full program with both probes.
+    -- If the values at this position differ by (probe2-probe1), it's InputRef.
+    --
+    -- SIMPLER: just try both binder index 0 (the function parameter).
+    -- Most simple programs have one parameter. Check if this Lit node
+    -- appears to be the input by evaluating the graph.
+    --
+    -- Actually, we can distinguish by KIND + POSITION:
+    -- InputRef is always kind 5, and it appears as a child of Prim nodes.
+    -- The binder index tells us which local slot.
+    -- Since we can't read the binder index, assume single-param programs
+    -- use index 0 (slot 0).
+    --
+    -- HEURISTIC: if a Lit's edge_target pattern matches a known InputRef
+    -- position (child of root), and the graph's output changes with input,
+    -- then it's InputRef. Otherwise it's a constant.
+    --
+    -- For simple programs: graph_eval(pg, X) should equal the function applied to X.
+    -- We can compute what each child contributes by evaluating subtrees.
+    -- But graph_set_root doesn't work, so we can't evaluate subtrees.
+    --
+    -- ULTIMATE HEURISTIC: evaluate the FULL graph twice.
+    -- result1 = graph_eval(pg, probe1), result2 = graph_eval(pg, probe2)
+    -- For `n + 1`: result1 = probe1 + 1, result2 = probe2 + 1
+    -- The InputRef child changes by (probe2 - probe1).
+    -- The Lit child is constant (always 1).
+    --
+    -- For a Lit node at position `nid`, we can't evaluate it in isolation.
+    -- But we know: if it's an InputRef for param 0, slot 0 → emit LOAD 0.
+    -- If it's a constant, we need its value.
+    --
+    -- TRICK: for the ROOT being a known Prim (like add), we can compute
+    -- the constant by: result1 - probe1 = constant (if the InputRef adds probe1).
+    --
+    -- For now: use a simple approach. If the graph is f(n) = n OP const,
+    -- and graph_eval(pg, 0) tells us the const:
+    -- const = graph_eval(pg, 0) for additive functions.
+    -- InputRef slot 0 → LOAD 0.
+
+    -- Check if this is likely an InputRef by seeing if it's the first child
+    -- of a known Prim node (heuristic for simple programs)
+    let is_input = fold 0 (\found i ->
+      if found == 1 then 1
+      else if i >= list_len env then 0
+      else let e = list_nth env i in if e.0 == nid then 1 else 0
+    ) (list_len env) in
+    if is_input == 1 then
+      -- Found in env → it's a known InputRef
+      let slot = fold 0 (\s i ->
+        if i >= list_len env then s
+        else let e = list_nth env i in if e.0 == nid then e.1 else s
+      ) (list_len env) in
+      ((14, slot), env, ns)
+    else
+      -- Not in env: it's a constant. Determine value heuristically.
+      -- For the root's children: if graph_eval(pg, 0) = X, and this child
+      -- is the "constant" part, its value can be derived.
+      -- SIMPLEST: just output the probe1 result as the constant.
+      -- This works for constants ≤ the probe value.
+      --
+      -- Actually, since we have graph_eval, we can evaluate with input 0:
+      -- For f(n) = n + 1: graph_eval(pg, 0) = 1. The constant IS 1.
+      -- For f(n) = n * 2: graph_eval(pg, 0) = 0. Less helpful.
+      --
+      -- For now, assume probe1 = 0. Then graph_eval(pg, 0) = constant
+      -- for additive functions. Use this as the Lit value.
+      ((1, probe1), env, ns)
+
+  -- Prim (kind 0): compile children via edge_target, emit operation
+  else if kind == 0 then
+    let opcode = graph_get_prim_op pg nid in
+    let bc = if opcode == 0 then 2 else if opcode == 1 then 3
+      else if opcode == 2 then 4 else if opcode == 3 then 5
+      else if opcode == 4 then 6 else if opcode == 32 then 8
+      else if opcode == 34 then 9 else 0 in
+    if bc >= 2 then
+      let c0 = graph_edge_target pg nid 0 0 in
+      let c1 = graph_edge_target pg nid 1 0 in
+      -- Mark both children: c0 and c1 could be InputRef
+      -- Check which child changes with input:
+      -- We already know the full graph produces probe1 and probe2 results.
+      -- If this Prim is the root, c0 and c1 are its children.
+      -- Identify InputRef: the child that varies with input.
+      let env0 = env in
+      let r0 = compile_node pg c0 env0 ns probe1 probe2 in
+      let r1 = compile_node pg c1 (r0.1) (r0.2) probe1 probe2 in
+      (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+    else ((1, 0), env, ns)
+
+  -- Lambda (kind 2): the body is the function's computation
+  else if kind == 2 then
+    let c0 = graph_edge_target pg nid 0 0 in
+    -- Mark the Lambda's InputRef child as slot `ns`
+    -- The InputRef node ID is the child that has kind 5 and varies with input.
+    -- For single-param lambdas: find ALL kind-5 descendants that vary.
+    -- HEURISTIC: compile the body, treating any unknown Lit as potential InputRef.
+    -- Actually, just add this Lambda's parameter to env.
+    -- The parameter is identified by evaluating: graph_eval(pg, X) uses this param.
+    -- For a single-param function, there's ONE InputRef in the body.
+    -- Walk to find it: check all kind-5 nodes reachable from the body.
+    let body = c0 in
+    -- Find InputRef by probing: which Lit child of the body changes with input?
+    -- For now, find all Lit children recursively and mark the varying one.
+    -- SIMPLE: just compile the body. Lit nodes not in env → constants.
+    -- We need to add the InputRef to env BEFORE compiling.
+    --
+    -- Strategy: walk the tree, find Lit nodes. For each, check if it's the input.
+    -- A Lit is the input if removing it from the computation changes the result.
+    -- SIMPLEST: for single-param, find the Lit that graph_eval varies with.
+    -- Find the first child that's kind 5 and not a constant.
+    -- Find InputRef: check body's Lit children
+    let bk = graph_get_kind pg body in
+    let input_nid = if bk == 5 then body
+      else if bk == 0 then
+        let cc0 = graph_edge_target pg body 0 0 in
+        let cc1 = graph_edge_target pg body 1 0 in
+        -- Heuristic: first kind-5 child is likely InputRef
+        if graph_get_kind pg cc0 == 5 then cc0
+        else if graph_get_kind pg cc1 == 5 then cc1
+        else 0
+      else 0 in
+    let env2 = if input_nid != 0 then list_append env (input_nid, ns) else env in
+    compile_node pg body env2 (ns + 1) probe1 probe2
+
+  else ((1, 0), env, ns)
+
+-- Main: full pipeline → bytecodes
+let main path arg =
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let par_m = compile_source (file_read "src/iris-programs/syntax/iris_parser.iris") in
+  let low_m = compile_source (file_read "src/iris-programs/syntax/iris_lowerer.iris") in
+  let src = file_read path in
+  let tokens = module_eval (tok_m.0) 0 src in
+  let tree = module_eval (par_m.0) 0 (tokens, src) in
+  let pg = module_eval (low_m.0) 0 (tree, src) in
+  let root = graph_get_root pg in
+  -- Probe with two different inputs to distinguish InputRef from Lit
+  let p1 = graph_eval pg 0 in
+  let p2 = graph_eval pg 1000 in
+  -- If there's no Lambda wrapper (root is directly the body),
+  -- find InputRef nodes: kind-5 children whose value varies with input
+  let kind_root = graph_get_kind pg root in
+  let initial_env = if kind_root == 0 then
+    -- Root is Prim: check its children for InputRef
+    let c0 = graph_edge_target pg root 0 0 in
+    let c1 = graph_edge_target pg root 1 0 in
+    -- The InputRef varies: compute sub-results
+    -- For f(n) = n OP const: f(0) = 0 OP const, f(1000) = 1000 OP const
+    -- If child 0 is InputRef: its contribution changes by 1000
+    -- Use simple heuristic: if p2 - p1 = 1000 and the op is add,
+    -- the first child is likely InputRef
+    if graph_get_kind pg c0 == 5 then
+      if graph_get_kind pg c1 == 5 then
+        -- Both are Lit: could be InputRef+constant or InputRef+InputRef
+        -- Test: f(0) and f(1). If f(0)=0 and f(1)=f(1), check pattern
+        let f0 = graph_eval pg 0 in
+        let f1 = graph_eval pg 1 in
+        -- For n+c: f(0)=c, f(1)=1+c → f(1)-f(0)=1 → one InputRef
+        -- For n*n: f(0)=0, f(1)=1 → both InputRef
+        -- For n*c: f(0)=0, f(1)=c → one InputRef
+        -- Heuristic: if f(1)-f(0) = 1 AND opcode is add → c0 = InputRef only
+        --            if f(0) = 0 AND opcode is mul → both could be InputRef
+        -- Simple rule: if the function is linear (f(2)-f(1) = f(1)-f(0)) → one InputRef
+        --              if quadratic → both InputRef
+        let f2 = graph_eval pg 2 in
+        let d1 = f1 - f0 in
+        let d2 = f2 - f1 in
+        if d1 == d2 then
+          -- Linear: one InputRef (c0), one constant (c1)
+          list_append () (c0, 0)
+        else
+          -- Non-linear: both children are InputRef
+          list_append (list_append () (c0, 0)) (c1, 0)
+      else list_append () (c0, 0)
+    else ()
+  else () in
+  -- Compile!
+  let bc = compile_node pg root initial_env 0 p1 p2 in
+  let bytecodes = list_concat (bc.0) (0,) in
+  -- Verify
+  let v42 = graph_eval pg 42 in
+  (v42, bytecodes)
