@@ -1,16 +1,31 @@
--- iris_run.iris — Run an IRIS program through the Frozen IRIS Evaluator.
+-- iris_run.iris — Run an IRIS program through the IRIS pipeline.
 --
 -- Usage: iris-stage0 run iris_run.iris <source_path> [args...]
 --
--- Compiles the source via compile_source_json, then evaluates through
--- module_eval. For programs that need the IRIS evaluator's features
--- (higher-order dispatch, LetRec closures), the compile_source_json
--- output should route through iris_eval instead.
---
--- For now this is a thin wrapper. The real win comes when we can
--- extract the Program from module_eval and pipe it through iris_eval.
+-- Preprocesses ADT constructors before compilation:
+--   Some expr  → value_make_tagged 0 expr
+--   None       → value_make_tagged 1 0
+--   Left expr  → value_make_tagged 0 expr
+--   Right expr → value_make_tagged 1 expr
+--   Ok expr    → value_make_tagged 0 expr
+--   Err expr   → value_make_tagged 1 expr
+-- Pattern matching on tagged values:
+--   value_get_tag v     → tag integer (0 for Some/Left/Ok, 1 for None/Right/Err)
+--   value_get_payload v → inner value
 
 let main path arg =
   let src = file_read path in
-  let m = compile_source_json src in
+  -- Preprocess ADT constructors to value_make_tagged calls
+  -- Unary constructors: "Name " → "value_make_tagged TAG "
+  let s1 = str_replace src "Some " "value_make_tagged 0 " in
+  let s2 = str_replace s1 "Left " "value_make_tagged 0 " in
+  let s3 = str_replace s2 "Right " "value_make_tagged 1 " in
+  let s4 = str_replace s3 "Ok " "value_make_tagged 0 " in
+  let s5 = str_replace s4 "Err " "value_make_tagged 1 " in
+  -- Nullary: replace " None " in various contexts
+  let s6 = str_replace s5 " None " " (value_make_tagged 1 0) " in
+  -- compile_source_json uses the IRIS pipeline (bootstrap JSONs)
+  -- which now supports value_make_tagged, value_get_tag, value_get_payload,
+  -- N-arg TCO, and ADT constructors
+  let m = compile_source_json s6 in
   module_eval (m.0) 0 (arg,)

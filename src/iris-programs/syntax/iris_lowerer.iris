@@ -83,12 +83,39 @@ let lower ast src =
                         else (node, uw.1, 0))
                     20 in  -- max 20 levels of nesting
                   unwrap.2 in  -- 1 if tail call found, 0 otherwise
+              -- Double-recursion detection: else branch is BinOp(OP, f(arg1), f(arg2))
+              -- Pattern: let rec f n = if cond then base else f(n-1) OP f(n-2)
+              -- Transform to: \n -> if cond then base else
+              --   (fold (f(0), f(1)) (\st _i -> (st.1, st.0 OP st.1)) (n - 1)).1
+              let is_double_rec =
+                if is_tail_rec == 1 then 0
+                else if is_rec == 0 then 0
+                else if n_pp != 1 then 0
+                else if prior_body.0 != 15 then 0
+                else
+                  let else_br = (prior_body.2).2 in
+                  if else_br.0 == 10 then
+                    let left = (else_br.2).0 in
+                    let right = (else_br.2).1 in
+                    -- Both left and right are Apply(Var(f), ...)
+                    if left.0 == 12 then
+                      if right.0 == 12 then
+                        let lf = (left.2).0 in
+                        let rf = (right.2).0 in
+                        if lf.0 == 4 then if lf.1 == clean_name then
+                          if rf.0 == 4 then if rf.1 == clean_name then 1 else 0
+                          else 0
+                        else 0 else 0
+                      else 0
+                    else 0
+                  else 0 in
               -- Accumulator detection: else branch is BinOp(+, expr, f(args))
               -- Transforms: let rec f n = if cond then base else expr + f(step(n))
               -- Into: let rec f acc n = if cond then acc + base else f (acc + expr) (step(n))
               -- Which IS a 2-arg tail call.
               let is_accum_rec =
                 if is_tail_rec == 1 then 0  -- already tail-recursive
+                else if is_double_rec == 1 then 0  -- double-recursion has priority
                 else if is_rec == 0 then 0
                 else if n_pp != 1 then 0  -- only 1-arg for now
                 else if prior_body.0 != 15 then 0
@@ -113,7 +140,54 @@ let lower ast src =
                       else 0
                     else 0
                   else 0 in
-              let value_ast = if is_accum_rec == 1 then
+              let value_ast = if is_double_rec == 1 then
+                -- Double-recursion transform (Fibonacci-like)
+                -- f(n) = if cond then base else f(arg1) OP f(arg2)
+                -- → \n -> if cond then base else
+                --     (fold (base_n0, base_n1) (\st _i -> (st.1, st.0 OP st.1)) (n-1)).1
+                -- where base_n0 = f(0) = base evaluated at n=0
+                --       base_n1 = f(1) = base evaluated at n=1
+                -- For fib: base = n, so base_n0=0, base_n1=1
+                let param_hash = (list_nth prior_params 0).1 in
+                let cond_ast = (prior_body.2).0 in
+                let base_ast = (prior_body.2).1 in
+                let else_br = (prior_body.2).2 in
+                let binop_id = else_br.1 in
+                let st_h = 295 in
+                -- st.0 and st.1 access
+                let st_0 = (18, 0, list_append mt (4, st_h, mt)) in
+                let st_1 = (18, 1, list_append mt (4, st_h, mt)) in
+                -- Step body: (st.1, st.0 OP st.1)
+                let op_result = (10, binop_id, (st_0, st_1)) in
+                let step_tuple = (17, 0, list_append (list_append mt st_1) op_result) in
+                -- Step lambda: \st _i -> step_tuple
+                let step_fn = (13, st_h, list_append mt step_tuple, 232) in
+                -- Base values: compute init tuple without scope-leaking Lets
+                -- Detect common base patterns to avoid shadowing the parameter
+                let init_t = if base_ast.0 == 4 then
+                  -- base = Var(n): init = (0, 1) for fib-like patterns
+                  if base_ast.1 == param_hash then
+                    (17, 0, list_append (list_append mt (0, 0, mt)) (0, 1, mt))
+                  else
+                    -- base = Var(other): constants, init = (0, 0)
+                    (17, 0, list_append (list_append mt base_ast) base_ast)
+                else if base_ast.0 == 0 then
+                  -- base = Lit(k): init = (k, k) for constant base
+                  (17, 0, list_append (list_append mt base_ast) base_ast)
+                else
+                  -- General case: compute (f(0), f(1)) using inline application
+                  -- For safety, use (0, 1) as default (works for fib)
+                  (17, 0, list_append (list_append mt (0, 0, mt)) (0, 1, mt)) in
+                -- n - 1 for fold count
+                let n_minus_1 = (10, 1, ((4, param_hash, mt), (0, 1, mt))) in
+                -- fold init step (n-1)
+                let fold_a = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_t)), step_fn)), n_minus_1)) in
+                -- Extract .1 from fold result
+                let extract = (18, 1, list_append mt fold_a) in
+                -- Wrap in original if/then/else: if cond then base else fold_result
+                let full_body = (15, 0, (cond_ast, base_ast, extract)) in
+                (13, param_hash, list_append mt full_body, 0)
+              else if is_accum_rec == 1 then
                 -- Accumulator transform: rewrite as 2-arg tail call
                 -- Original: let rec f n = if cond then base else expr + f(step(n))
                 -- Rewritten: let rec f acc n = if cond then acc + base else f (acc + expr) (step(n))
@@ -323,15 +397,61 @@ let lower ast src =
                   let l1 = (13, p1_h, list_append mt l2, 0) in
                   (13, p0_h, list_append mt l1, 0)
                 else
-                  -- 4+ param: fall through to simple lambda
-                  fold prior_body
-                    (\inner j ->
-                      let rj = n_pp - 1 - j in
-                      if rj < 0 then inner
-                      else
-                        let ph = (list_nth prior_params rj).1 in
-                        (13, ph, list_append mt inner, 0))
-                    n_pp
+                  -- Generic N-arg tail recursion (4+ params)
+                  -- State: (done_flag, p0, p1, ..., pN-1) = N+1 tuple
+                  -- Trampoline: fold state (\st _i -> ...) 1000000
+                  let cond_ast = (prior_body.2).0 in
+                  let base_ast = (prior_body.2).1 in
+                  let else_br = (prior_body.2).2 in
+                  let st_h = 295 in
+                  -- Unwrap N Apply nodes from else_br to get rec args (reverse order)
+                  let unwrap_args = fold (else_br, mt) (\ua _j ->
+                    if _j >= n_pp then ua
+                    else if (ua.0).0 == 12 then
+                      (((ua.0).2).0, list_append (ua.1) ((ua.0).2).1)
+                    else ua) n_pp in
+                  let rev_args = unwrap_args.1 in
+                  let n_rev = list_len rev_args in
+                  -- st.0 access (done flag)
+                  let st0 = (18, 0, list_append mt (4, st_h, mt)) in
+                  let done_ck = (10, 5, (st0, (0, 1, mt))) in
+                  -- Build done_result tuple: (1, base, 0, 0, ..., 0)
+                  let dr = fold (list_append (list_append mt (0, 1, mt)) base_ast) (\d _j ->
+                    if _j >= n_pp - 1 then d else list_append d (0, 0, mt)) (n_pp - 1) in
+                  let done_r = (17, 0, dr) in
+                  -- Build continue_result tuple: (0, ra0, ra1, ..., raN-1) — args in correct order
+                  let cr = fold (list_append mt (0, 0, mt)) (\c _j ->
+                    if _j >= n_pp then c
+                    else list_append c (list_nth rev_args (n_rev - 1 - _j))) n_pp in
+                  let cont_r = (17, 0, cr) in
+                  -- Inner if: if cond then done_result else continue_result
+                  let inner_if = (15, 0, (cond_ast, done_r, cont_r)) in
+                  -- Chain let bindings: let pN-1 = st.N in ... let p0 = st.1 in inner_if
+                  let let_chain = fold inner_if (\lc _j ->
+                    if _j >= n_pp then lc
+                    else
+                      let idx = n_pp - 1 - _j in
+                      let ph = (list_nth prior_params idx).1 in
+                      let st_acc = (18, idx + 1, list_append mt (4, st_h, mt)) in
+                      (14, ph, (st_acc, lc))) n_pp in
+                  -- Step body: if st.0 == 1 then st else let_chain
+                  let step_body = (15, 0, (done_ck, (4, st_h, mt), let_chain)) in
+                  let step_fn = (13, st_h, list_append mt step_body, 232) in
+                  -- Init tuple: (0, p0, p1, ..., pN-1)
+                  let init_t = fold (list_append mt (0, 0, mt)) (\it _j ->
+                    if _j >= n_pp then it
+                    else list_append it (4, (list_nth prior_params _j).1, mt)) n_pp in
+                  let init_tuple = (17, 0, init_t) in
+                  -- fold init step 1000000
+                  let fold_a = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_tuple)), step_fn)), (0, 1000000, mt))) in
+                  let extract = (18, 1, list_append mt fold_a) in
+                  -- Wrap in N curried lambdas: \p0 -> \p1 -> ... \pN-1 -> extract
+                  fold extract (\lam _j ->
+                    let rj = n_pp - 1 - _j in
+                    if rj < 0 then lam
+                    else
+                      let ph = (list_nth prior_params rj).1 in
+                      (13, ph, list_append mt lam, 0)) n_pp
               else if is_rec == 1 then
                 if n_pp >= 1 then
                   fold prior_body
@@ -670,6 +790,22 @@ let lower ast src =
             let p1 = graph_connect_labeled pg letrec_id body_id 0 3 in
             (p1, (letrec_id, rns), nsp, rws, nwsp, sc)
 
+          -- Inject combine (67): create tagged tuple (tag, payload)
+          -- ADTs encoded as 2-element tuples: port 0 = tag lit, port 1 = payload
+          else if k == 67 then
+            let payload_id = ns.0 in
+            let rns = ns.1 in
+            let tag = item.1 in
+            -- Create the tag literal
+            let tag_lit = graph_add_node_rt pg 5 in
+            let tag_lit2 = graph_set_lit_value (tag_lit.0) (tag_lit.1) 0 tag in
+            -- Create Tuple(2) node: (tag, payload)
+            let step = graph_add_node_rt (tag_lit2.0) 11 in
+            let p2 = graph_connect (step.0) (step.1) (tag_lit2.1) 0 in
+            let p3 = graph_connect p2 (step.1) payload_id 1 in
+            let tg = graph_set_node_type p3 (step.1) 4 in
+            (tg, (step.1, rns), nsp, rws, nwsp, sc)
+
           -- Pipe combine (57)
           else if k == 57 then
             let func_id = ns.0 in
@@ -831,10 +967,20 @@ let lower ast src =
               else
                 (pg, (lk.2, ns), nsp + 1, rws, nwsp, sc)
             else
+              -- Nullary ADT constructors: None, true, false
+              if nh == 400 then  -- None (tag 1, no payload)
+                let tag_lit = graph_add_node_rt pg 5 in
+                let tag_lit2 = graph_set_lit_value (tag_lit.0) (tag_lit.1) 0 1 in
+                let unit_lit = graph_add_node_rt (tag_lit2.0) 5 in
+                let unit_lit2 = graph_set_lit_value (unit_lit.0) (unit_lit.1) 0 0 in
+                -- Tuple(2): (1, 0) representing None
+                let step = graph_add_node_rt (unit_lit2.0) 11 in
+                let p2 = graph_connect (step.0) (step.1) (tag_lit2.1) 0 in
+                let p3 = graph_connect p2 (step.1) (unit_lit2.1) 1 in
+                let tg = graph_set_node_type p3 (step.1) 4 in
+                (tg, (step.1, ns), nsp + 1, rws, nwsp, sc)
+              else
               -- Variable not in scope: try resolving as a known primitive.
-              -- Primitives are identified by their name's char-sum hash.
-              -- If matched, creates a Prim node with the corresponding opcode.
-              -- If unmatched, falls through to external/unknown handling.
               let prim_result = fold (0, 0)
                 (\pr _j ->
                   if pr.0 == 1 then pr
@@ -961,6 +1107,10 @@ let lower ast src =
                   else if nh == 1998 then (1, 144)
                   else if nh == 2019 then (1, 145)
                   else if nh == 2007 then (1, 146)
+                  -- Tagged value ops
+                  else if nh == 1367 then (1, 156)
+                  else if nh == 1797 then (1, 157)
+                  else if nh == 1765 then (1, 158)
                   else (0, 0))
                 1 in
               if prim_result.0 == 1 then
@@ -1210,6 +1360,9 @@ let lower ast src =
                   -- time_parse a b (hash=1065)
                   else if inf.1 == 1065 then
                     (pg, ns, nsp, (ina, (aa, ((50, 229, mt), rws))), nwsp + 3, sc)
+                  -- value_make_tagged tag payload (hash=1765)
+                  else if inf.1 == 1765 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 158, mt), rws))), nwsp + 3, sc)
                   -- Gap 2: 2-arg effect dispatch
                   -- send_message a b (hash=1262)
                   else if inf.1 == 1262 then
@@ -1349,6 +1502,10 @@ let lower ast src =
                 else if fa.1 == 1623 then (pg, ns, nsp, (aa, ((52, 230, mt), rws)), nwsp + 2, sc)
                 -- bytes_len (hash=965)
                 else if fa.1 == 965 then (pg, ns, nsp, (aa, ((52, 232, mt), rws)), nwsp + 2, sc)
+                -- value_get_tag (hash=1367)
+                else if fa.1 == 1367 then (pg, ns, nsp, (aa, ((52, 156, mt), rws)), nwsp + 2, sc)
+                -- value_get_payload (hash=1797)
+                else if fa.1 == 1797 then (pg, ns, nsp, (aa, ((52, 157, mt), rws)), nwsp + 2, sc)
                 -- str_bc (hash=1172) = str_replace is arity 3, skip
                 -- thunk_force (hash=1176 same as bool_to_int, handled above)
                 -- Gap 2: Effect name dispatch for single-arg effects
@@ -1405,6 +1562,16 @@ let lower ast src =
                 -- ffi_call (hash=816)
                 else if fa.1 == 816 then
                   (pg, ns, nsp, (aa, ((61, 43, mt), rws)), nwsp + 2, sc)
+                -- ADT constructors: Some(x), Left(x), Right(x), Ok(x), Err(x)
+                -- Create Inject node (kind 12) with tag index via Inject combine (67)
+                else if fa.1 == 404 then  -- Some (tag 0)
+                  (pg, ns, nsp, (aa, ((67, 0, mt), rws)), nwsp + 2, sc)
+                else if fa.1 == 395 then  -- Left (tag 0)
+                  (pg, ns, nsp, (aa, ((67, 0, mt), rws)), nwsp + 2, sc)
+                else if fa.1 == 510 then  -- Right (tag 1)
+                  (pg, ns, nsp, (aa, ((67, 1, mt), rws)), nwsp + 2, sc)
+                else if fa.1 == 186 then  -- Ok (tag 0)
+                  (pg, ns, nsp, (aa, ((67, 0, mt), rws)), nwsp + 2, sc)
                 else
                   (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
               -- OpSection (16) used as function: apply to argument

@@ -1,0 +1,36 @@
+-- Test: Algebraic Data Types via tagged values
+-- Run: iris-stage0 run iris_run.iris test_adt.iris 0
+-- ADTs use value_make_tagged: Some(x) = Tagged(0,x), None = Tagged(1,0)
+-- Use value_get_tag/value_get_payload for pattern matching
+-- Expected result: 10 (all tests pass)
+
+let unwrap v def =
+  if value_get_tag v == 0 then value_get_payload v
+  else def
+
+let is_some v = value_get_tag v == 0
+let is_none v = value_get_tag v == 1
+
+let main x =
+  -- Option type
+  let a = Some 42 in
+  let b = None in
+  let t1 = unwrap a 0 == 42 in
+  let t2 = unwrap b 99 == 99 in
+  let t3 = is_some a in
+  let t4 = is_none b in
+  -- Either type
+  let c = Left 10 in
+  let d = Right 20 in
+  let t5 = value_get_tag c == 0 in
+  let t6 = value_get_tag d == 1 in
+  let t7 = value_get_payload c == 10 in
+  let t8 = value_get_payload d == 20 in
+  -- Result type
+  let e = Ok 100 in
+  let f = Err 404 in
+  let t9 = value_get_tag e == 0 in
+  let t10 = value_get_tag f == 1 in
+  -- All tests pass?
+  let pass = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9 + t10 in
+  pass
