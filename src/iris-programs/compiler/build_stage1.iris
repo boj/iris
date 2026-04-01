@@ -1,0 +1,161 @@
+-- build_stage1.iris — Build a native stage1 binary from IRIS components.
+--
+-- Stage1 architecture:
+--   1. Native VM (bytecode interpreter compiled to x86-64)
+--   2. Embedded pipeline (tokenizer/parser/lowerer as bytecoded modules)
+--   3. Syscall stubs (file read, stdout write, heap alloc)
+--
+-- The stage1 binary can:
+--   - Read an IRIS source file
+--   - Compile it through the IRIS pipeline
+--   - Execute the result
+--   - Print the output
+--
+-- Usage: iris-stage0 run build_stage1.iris -o stage1
+--
+-- This is the bootstrap: stage0 builds stage1, then stage1 replaces stage0.
+
+-- Step 1: Compile the bytecode VM to native via AOT
+-- The VM is a fold loop — exactly what AOT handles well.
+-- For now, we build a proof-of-concept native binary that runs
+-- hardcoded bytecodes for simple programs.
+
+-- Step 2: The actual pipeline
+-- To compile "let f n = n + 1", stage1 does:
+--   a. file_read("input.iris") → source string
+--   b. compile_source_json(source) → module
+--   c. module_eval(module, 0, arg) → result
+--   d. print(result)
+--
+-- For the native binary, steps b-c are the IRIS pipeline:
+--   tokenizer(source) → tokens
+--   parser(tokens) → parse_tree
+--   lowerer(parse_tree) → semantic_graph
+--   bytecode_compiler(semantic_graph) → bytecodes
+--   vm_run(bytecodes, arg) → result
+
+-- For the proof of concept: compile a specific program to bytecodes,
+-- then AOT compile the VM with those bytecodes embedded.
+
+let compile_node program node_id env next_slot =
+  let kind = graph_get_kind program node_id in
+  let children = graph_outgoing program node_id in
+  let nc = list_len children in
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag program node_id in
+    let lv = graph_get_lit_value program node_id in
+    if tt == 255 then
+      let slot = fold 0 (\s i ->
+        if i >= list_len env then s
+        else let e = list_nth env i in if e.0 == lv then e.1 else s
+      ) (list_len env) in
+      ((14, slot), env, next_slot)
+    else ((1, lv), env, next_slot)
+  else if kind == 0 then
+    let opcode = graph_get_prim_op program node_id in
+    let bc_op = if opcode == 0 then 2 else if opcode == 1 then 3
+      else if opcode == 2 then 4 else if opcode == 3 then 5
+      else if opcode == 4 then 6 else if opcode == 32 then 8
+      else if opcode == 34 then 9 else if opcode == 35 then 10
+      else if opcode == 36 then 12 else 0 in
+    if bc_op >= 2 then
+      if nc == 2 then
+        let r0 = compile_node program (list_nth children 0) env next_slot in
+        let r1 = compile_node program (list_nth children 1) (r0.1) (r0.2) in
+        (list_concat (list_concat (r0.0) (r1.0)) (bc_op,), r1.1, r1.2)
+      else ((1, 0), env, next_slot)
+    else ((1, 0), env, next_slot)
+  else if kind == 17 then
+    let rc = compile_node program (list_nth children 0) env next_slot in
+    let rt = compile_node program (list_nth children 1) (rc.1) (rc.2) in
+    let re = compile_node program (list_nth children 2) (rt.1) (rt.2) in
+    let cl = list_len (rc.0) in
+    let tl = list_len (rt.0) in
+    let full = list_concat (rc.0) (17, cl + 2 + tl + 2) in
+    let full2 = list_concat (list_concat full (rt.0)) (16, cl + 2 + tl + 2 + list_len (re.0)) in
+    (list_concat full2 (re.0), re.1, re.2)
+  else if kind == 8 then
+    let rb = compile_node program (list_nth children 0) env next_slot in
+    let rl = compile_node program (list_nth children 2) (rb.1) (rb.2) in
+    let step_id = list_nth children 1 in
+    if graph_get_kind program step_id == 2 then
+      let ob = graph_get_binder program step_id in
+      let oi = bitand ob 255 in
+      let sc = graph_outgoing program step_id in
+      let bid = list_nth sc 0 in
+      let ik = graph_get_kind program bid in
+      let as2 = rl.2 in
+      let is2 = as2 + 1 in
+      let abid = if ik == 2 then list_nth (graph_outgoing program bid) 0 else bid in
+      let ibi = if ik == 2 then bitand (graph_get_binder program bid) 255 else 0 in
+      let e2 = list_append (rl.1) (oi, as2) in
+      let e3 = if ik == 2 then list_append e2 (ibi, is2) else e2 in
+      let rbd = compile_node program abid e3 (is2 + 1) in
+      let bl = list_len (rbd.0) in
+      let c = list_concat (list_concat (rb.0) (rl.0)) (25, bl + 6) in
+      let c2 = list_concat (list_concat (list_concat c (15, is2)) (15, as2)) (14, as2) in
+      (list_concat (list_concat c2 (rbd.0)) (26,), rl.1, rbd.2)
+    else (rb.0, rb.1, rb.2)
+  else if kind == 2 then
+    let bc = graph_outgoing program node_id in
+    let b = graph_get_binder program node_id in
+    let bi = bitand b 255 in
+    compile_node program (list_nth bc 0) (list_append env (bi, next_slot)) (next_slot + 1)
+  else if kind == 3 then
+    let vid = list_nth children 0 in
+    let bdid = list_nth children 1 in
+    let b = graph_get_binder program node_id in
+    let bi = bitand b 255 in
+    let sl = next_slot in
+    let rv = compile_node program vid env next_slot in
+    let e2 = list_append (rv.1) (bi, sl) in
+    let rbd = compile_node program bdid e2 (sl + 1) in
+    (list_concat (list_concat (rv.0) (15, sl)) (rbd.0), rbd.1, rbd.2)
+  else ((1, 0), env, next_slot)
+
+-- Build a self-contained native binary that evaluates a source program
+-- Pipeline: source → compile_source → graph → bytecodes → AOT(VM) → ELF
+let main source_path output_path n_args =
+  let src = file_read source_path in
+  -- Compile source to get the SemanticGraph
+  let m = compile_source src in
+  let n_bindings = list_len (m.1) in
+
+  -- For the proof of concept, evaluate through both paths and compare
+  let expected = module_eval (m.0) (n_bindings - 1) 0 in
+
+  -- The graph isn't directly accessible from module_eval.
+  -- For stage1, we need to either:
+  -- (a) Use the IRIS pipeline (tokenizer.json → parser.json → lowerer.json)
+  --     to get a raw graph that we CAN inspect, or
+  -- (b) Pre-compile to bytecodes at build time using compile_source_json
+  --
+  -- For now: use compile_source_json to get the module, compile a test
+  -- program to bytecodes, and AOT-compile the VM to run those bytecodes.
+
+  -- Compile target to AOT (uses the frozen AOT compiler for the fold+dispatch VM)
+  let aot_src = file_read "src/iris-programs/compiler/aot_compile.iris" in
+  let aot_m = compile_source_json aot_src in
+
+  -- Compile ELF wrapper
+  let elf_src = file_read "src/iris-programs/compiler/elf_wrapper.iris" in
+  let elf_m = compile_source_json elf_src in
+
+  -- Compile native runtime
+  let rt_src = file_read "src/iris-programs/compiler/native_runtime.iris" in
+  let rt_m = compile_source_json rt_src in
+
+  let runtime_bytes = module_eval (rt_m.0) 0 () in
+
+  -- For the proof of concept: build a simple fold program natively
+  -- and package it as stage1
+  let target_graph = module_eval (m.0) (n_bindings - 1) () in
+
+  -- AOT compile the target
+  let code = module_eval (aot_m.0) 0 (target_graph,) in
+
+  -- Wrap in ELF with runtime
+  let binary = module_eval (elf_m.0) 0 (code, n_args) in
+
+  -- Write binary
+  file_write_bytes output_path binary
