@@ -924,6 +924,15 @@ let lower ast src =
               else
                 -- Double application: inf ina aa
                 if inf.0 == 4 then
+                  -- Check scope first
+                  let da_nsc = list_len sc in
+                  let da_in_scope = fold 0 (\found _j ->
+                    if found == 1 then 1
+                    else if _j >= da_nsc then 0
+                    else let e = list_nth sc (da_nsc - 1 - _j) in if e.0 == inf.1 then 1 else 0) da_nsc in
+                  if da_in_scope == 1 then
+                    (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+                  else
                   -- max a b (hash=326)
                   if inf.1 == 326 then
                     (pg, ns, nsp, (ina, (aa, ((50, 8, mt), rws))), nwsp + 3, sc)
@@ -1137,7 +1146,19 @@ let lower ast src =
             else
               -- Single application: fa aa
               if fa.0 == 4 then
-                -- Gap 8: Full unary prim dispatch
+                -- Check scope first: if the name is bound, use Apply, not prim
+                let sa_nsc = list_len sc in
+                let sa_in_scope = fold 0 (\found _j ->
+                  if found == 1 then 1
+                  else if _j >= sa_nsc then 0
+                  else
+                    let e = list_nth sc (sa_nsc - 1 - _j) in
+                    if e.0 == fa.1 then 1 else 0) sa_nsc in
+                if sa_in_scope == 1 then
+                  -- Name is in scope: emit as generic Apply (func, arg)
+                  (pg, ns, nsp, (fa, (aa, ((55, 0, mt), rws))), nwsp + 3, sc)
+                else
+                -- Unary prim dispatch (only when name is NOT in scope)
                 -- neg x (hash=314)
                 if fa.1 == 314 then (pg, ns, nsp, (aa, ((52, 5, mt), rws)), nwsp + 2, sc)
                 -- abs x (hash=310)
