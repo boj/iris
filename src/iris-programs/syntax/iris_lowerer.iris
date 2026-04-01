@@ -452,14 +452,34 @@ let lower ast src =
             let arg_id = ns.0 in
             let func_id = (ns.1).0 in
             let rns = (ns.1).1 in
-            -- Check if func is a Fold node (kind 8) — special handling
             let func_kind = graph_get_kind pg func_id in
             if func_kind == 8 then
               -- Fold application: connect arg to next available port
-              -- Count existing argument edges to determine port number
               let existing = graph_edge_count pg func_id in
               let p2 = graph_connect pg func_id arg_id existing in
               (p2, (func_id, rns), nsp - 1, rws, nwsp, sc)
+            else if func_kind == 17 then
+              -- Guard-as-function: push Apply THROUGH the Guard branches.
+              -- (if cond then f1 else f2) arg → if cond then (f1 arg) else (f2 arg)
+              -- This avoids returning closures from Guards (frozen evaluator can't handle it).
+              let guard_children = graph_outgoing pg func_id in
+              let cond_id = list_nth guard_children 0 in
+              let then_id = list_nth guard_children 1 in
+              let else_id = list_nth guard_children 2 in
+              -- Apply(then_branch, arg)
+              let app_then = graph_add_node_rt pg 1 in
+              let at1 = graph_connect (app_then.0) (app_then.1) then_id 0 in
+              let at2 = graph_connect at1 (app_then.1) arg_id 1 in
+              -- Apply(else_branch, arg)
+              let app_else = graph_add_node_rt at2 1 in
+              let ae1 = graph_connect (app_else.0) (app_else.1) else_id 0 in
+              let ae2 = graph_connect ae1 (app_else.1) arg_id 1 in
+              -- New Guard(cond, apply_then, apply_else)
+              let new_guard = graph_add_node_rt ae2 17 in
+              let ng1 = graph_connect (new_guard.0) (new_guard.1) cond_id 0 in
+              let ng2 = graph_connect ng1 (new_guard.1) (app_then.1) 1 in
+              let ng3 = graph_connect ng2 (new_guard.1) (app_else.1) 2 in
+              (ng3, (new_guard.1, rns), nsp - 1, rws, nwsp, sc)
             else
             let step = graph_add_node_rt pg 1 in
             let p2 = graph_connect (step.0) (step.1) func_id 0 in
