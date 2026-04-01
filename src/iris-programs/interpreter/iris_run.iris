@@ -1,0 +1,16 @@
+-- iris_run.iris — Run an IRIS program through the Frozen IRIS Evaluator.
+--
+-- Usage: iris-stage0 run iris_run.iris <source_path> [args...]
+--
+-- Compiles the source via compile_source_json, then evaluates through
+-- module_eval. For programs that need the IRIS evaluator's features
+-- (higher-order dispatch, LetRec closures), the compile_source_json
+-- output should route through iris_eval instead.
+--
+-- For now this is a thin wrapper. The real win comes when we can
+-- extract the Program from module_eval and pipe it through iris_eval.
+
+let main path arg =
+  let src = file_read path in
+  let m = compile_source_json src in
+  module_eval (m.0) 0 (arg,)
