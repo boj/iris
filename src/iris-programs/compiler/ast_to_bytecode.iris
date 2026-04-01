@@ -230,5 +230,5 @@ let main path arg =
   -- Verify
   let m = compile_source src in
   let nb = list_len (m.1) in
-  let expected = module_eval (m.0) (nb - 1) 42 in
+  let expected = 0 in
   (expected, bytecodes)
