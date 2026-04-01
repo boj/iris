@@ -83,7 +83,97 @@ let lower ast src =
                         else (node, uw.1, 0))
                     20 in  -- max 20 levels of nesting
                   unwrap.2 in  -- 1 if tail call found, 0 otherwise
-              let value_ast = if is_tail_rec == 1 then
+              -- Accumulator detection: else branch is BinOp(+, expr, f(args))
+              -- Transforms: let rec f n = if cond then base else expr + f(step(n))
+              -- Into: let rec f acc n = if cond then acc + base else f (acc + expr) (step(n))
+              -- Which IS a 2-arg tail call.
+              let is_accum_rec =
+                if is_tail_rec == 1 then 0  -- already tail-recursive
+                else if is_rec == 0 then 0
+                else if n_pp != 1 then 0  -- only 1-arg for now
+                else if prior_body.0 != 15 then 0
+                else
+                  let else_br = (prior_body.2).2 in
+                  -- Check: else_br is BinOp(+, something, Apply(Var(f), args))
+                  if else_br.0 == 10 then
+                    let binop = else_br.1 in
+                    if binop == 0 then  -- addition
+                      let right = (else_br.2).1 in
+                      if right.0 == 12 then
+                        let rfn = (right.2).0 in
+                        if rfn.0 == 4 then if rfn.1 == clean_name then 1 else 0
+                        else 0
+                      else 0
+                    else if binop == 2 then  -- multiplication
+                      let right = (else_br.2).1 in
+                      if right.0 == 12 then
+                        let rfn = (right.2).0 in
+                        if rfn.0 == 4 then if rfn.1 == clean_name then 1 else 0
+                        else 0
+                      else 0
+                    else 0
+                  else 0 in
+              let value_ast = if is_accum_rec == 1 then
+                -- Accumulator transform: rewrite as 2-arg tail call
+                -- Original: let rec f n = if cond then base else expr + f(step(n))
+                -- Rewritten: let rec f acc n = if cond then acc + base else f (acc + expr) (step(n))
+                let param_hash = (list_nth prior_params 0).1 in
+                let cond_ast = (prior_body.2).0 in
+                let base_ast = (prior_body.2).1 in
+                let else_br = (prior_body.2).2 in
+                let add_expr = (else_br.2).0 in  -- the expr being added
+                let rec_call = (else_br.2).1 in  -- Apply(Var(f), step(n))
+                let rec_arg = (rec_call.2).1 in  -- step(n)
+                -- acc hash: use 295 ("acc")
+                let acc_h = 295 in
+                -- New base: acc + base
+                let new_base = (10, 0, ((4, acc_h, mt), base_ast)) in
+                -- New add_expr: acc + expr
+                let new_expr = (10, 0, ((4, acc_h, mt), add_expr)) in
+                -- New body: if cond then (acc + base) else f (acc + expr) (step(n))
+                -- This is a 2-arg tail call: f(new_expr)(rec_arg)
+                let new_call = (12, 0, ((12, 0, ((4, clean_name, mt), new_expr)), rec_arg)) in
+                let new_body = (15, 0, (cond_ast, new_base, new_call)) in
+                -- Create 2-param function: \acc n -> new_body
+                -- The multi-function chaining will process this as let rec f = \acc -> \n -> body
+                -- with clean_name having the rec bit
+                let inner_lam = (13, param_hash, list_append mt new_body, 0) in
+                let outer_lam = (13, acc_h, list_append mt inner_lam, 0) in
+                -- Wrap in an outer function that calls f(0, n):
+                -- \n -> f 0 n = \n -> Apply(Apply(Var(f), 0), Var(n))
+                let call_with_acc = (12, 0, ((12, 0, ((4, clean_name, mt), (0, 0, mt))), (4, param_hash, mt))) in
+                -- But wait: this creates a non-recursive wrapper that calls the rec function.
+                -- The rec function IS f with 2 args. The wrapper just adds acc=0.
+                -- Problem: the wrapper uses Var(f) which should resolve to the let binding.
+                -- This is a let-in: let f = \acc \n -> body in \n -> f 0 n
+                -- But the name f has rec bit, and the body references f.
+                -- The 2-arg TCO transformation handles this already!
+                -- So: emit the 2-arg function with rec bit, and a wrapper.
+                -- Actually simpler: just use the existing 2-arg TCO path.
+                -- Set n_pp = 2, prior_params = [acc, n], prior_body = new_body.
+                -- But I can't change n_pp here. Instead, build the trampoline directly.
+
+                -- Direct trampoline: \n -> (fold (0, 0, n) (\st _i -> ...) 1000000).1
+                -- State: (done, acc, n)
+                let st_h = 295 in
+                let st_0 = (18, 0, list_append mt (4, st_h, mt)) in
+                let st_1 = (18, 1, list_append mt (4, st_h, mt)) in
+                let st_2 = (18, 2, list_append mt (4, st_h, mt)) in
+                let done_ck = (10, 5, (st_0, (0, 1, mt))) in
+                -- done result: (1, acc + base, 0)
+                let done_r = (17, 0, list_append (list_append (list_append mt (0, 1, mt)) (10, else_br.1, (st_1, base_ast))) (0, 0, mt)) in
+                -- continue result: (0, acc + expr, step(n))
+                let cont_r = (17, 0, list_append (list_append (list_append mt (0, 0, mt)) (10, else_br.1, (st_1, add_expr))) rec_arg) in
+                let inner_if = (15, 0, (cond_ast, done_r, cont_r)) in
+                let let_n = (14, param_hash, (st_2, inner_if)) in
+                let step_body = (15, 0, (done_ck, (4, st_h, mt), let_n)) in
+                let step_fn = (13, st_h, list_append mt step_body, 232) in
+                let acc_init = if else_br.1 == 2 then 1 else 0 in
+                let init_t = (17, 0, list_append (list_append (list_append mt (0, 0, mt)) (0, acc_init, mt)) (4, param_hash, mt)) in
+                let fold_a = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_t)), step_fn)), (0, 1000000, mt))) in
+                let extract = (18, 1, list_append mt fold_a) in
+                (13, param_hash, list_append mt extract, 0)
+              else if is_tail_rec == 1 then
                 -- Tail-call trampoline: 1-arg and 2-arg have specific paths.
                 -- Generic N-arg detection works but transformation needs
                 -- specific code per arg count for now.
