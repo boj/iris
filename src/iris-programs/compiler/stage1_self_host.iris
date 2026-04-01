@@ -1,0 +1,65 @@
+-- stage1_self_host.iris — Build a fully self-hosting stage1 binary.
+--
+-- This program uses stage0 to:
+-- 1. Compile the IRIS pipeline (tokenizer, parser, lowerer) to bytecodes
+-- 2. Compile the bytecode compiler itself to bytecodes
+-- 3. Embed everything in a native binary with the VM
+--
+-- The resulting stage1 binary can:
+-- A. Read an IRIS source file
+-- B. Tokenize it (using pre-compiled tokenizer bytecodes)
+-- C. Parse it (using pre-compiled parser bytecodes)
+-- D. Lower it (using pre-compiled lowerer bytecodes)
+-- E. Compile to bytecodes (using pre-compiled compiler bytecodes)
+-- F. Execute the bytecodes (using the native VM)
+-- G. Print the result
+--
+-- This is the FULL bootstrap: stage0 → stage1, then stage1 replaces stage0.
+--
+-- Usage: iris-stage0 run stage1_self_host.iris
+
+-- Step 1: Compile each pipeline module to bytecodes using graph_to_bytecode
+-- The graph_to_bytecode compiler uses the manual pipeline (tokenizer→parser→lowerer)
+-- to get an inspectable graph, then compiles it to bytecodes.
+
+-- For the self-hosting loop, we need these bytecoded modules:
+-- 1. tokenizer: string → tokens (tuple of token tuples)
+-- 2. parser: (tokens, source) → parse tree (tuple of items)
+-- 3. lowerer: (tree, source) → graph (Program)
+-- 4. bytecode_compiler: graph → bytecodes (tuple of ints)
+
+-- Each module is compiled by running graph_to_bytecode on its source.
+-- The bytecodes are then embedded in the stage1 binary.
+
+-- For now: compile simple test programs and verify the pipeline works.
+-- The full pipeline compilation requires the extended bytecode compiler
+-- (which handles fold, strings, tuples, etc.)
+
+let main x =
+  -- Step 1: Compile the pipeline modules from source
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let par_m = compile_source (file_read "src/iris-programs/syntax/iris_parser.iris") in
+  let low_m = compile_source (file_read "src/iris-programs/syntax/iris_lowerer.iris") in
+
+  -- Step 2: Run the pipeline on a test program to get a graph
+  let test_src = "let f n = fold 0 (\\acc i -> acc + i) n" in
+  let tokens = module_eval (tok_m.0) 0 test_src in
+  let tree = module_eval (par_m.0) 0 (tokens, test_src) in
+  let pg = module_eval (low_m.0) 0 (tree, test_src) in
+
+  -- Step 3: Verify the graph works
+  let v10 = graph_eval pg 10 in
+  let v100 = graph_eval pg 100 in
+
+  -- Step 4: Walk the graph to understand its structure
+  let root = graph_get_root pg in
+  let root_kind = graph_get_kind pg root in
+
+  -- Explore the graph
+  let c0 = graph_edge_target pg root 0 0 in
+  let c1 = graph_edge_target pg root 1 0 in
+  let c2 = graph_edge_target pg root 2 0 in
+  let k0 = if c0 != 0 then graph_get_kind pg c0 else 99 in
+  let k1 = if c1 != 0 then graph_get_kind pg c1 else 99 in
+  let k2 = if c2 != 0 then graph_get_kind pg c2 else 99 in
+  (v10, v100, root_kind, k0, k1, k2)
