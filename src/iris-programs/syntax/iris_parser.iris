@@ -623,51 +623,83 @@ let parse tokens src =
                     -- Arm format: 3 tokens (| PAT ->) + 1+ body tokens
                     let p = pos + 3 in
                     -- Arm 0: | pat -> body (body = single token before next | or end)
+                    -- Helper: parse arm body (1 or 2 tokens before next | or end)
+                    -- Returns (body_ast, token_count)
+                    let parse_body = \bpos ->
+                      if bpos >= dend then ((0, 0, mt), 0)
+                      else
+                        let bt = list_nth tokens bpos in
+                        let bt_ast = if bt.0 == 1 then (0, bt.1, mt) else if bt.0 == 2 then (4, bt.1, mt) else (0, 0, mt) in
+                        -- Check if next token is | or end (single-token body)
+                        let next_is_end = if bpos + 1 >= dend then 1
+                          else if (list_nth tokens (bpos + 1)).0 == 62 then 1 else 0 in
+                        if next_is_end == 1 then (bt_ast, 1)
+                        else
+                          -- 2+ tokens: check for Apply (func arg) or BinOp (a op b)
+                          let nt = list_nth tokens (bpos + 1) in
+                          if nt.0 == 1 then ((12, 0, (bt_ast, (0, nt.1, mt))), 2)
+                          else if nt.0 == 2 then ((12, 0, (bt_ast, (4, nt.1, mt))), 2)
+                          else if nt.0 == 30 then
+                            if bpos + 2 < dend then
+                              let nt2 = list_nth tokens (bpos + 2) in
+                              let r_ast = if nt2.0 == 1 then (0, nt2.1, mt) else (4, nt2.1, mt) in
+                              ((10, 0, (bt_ast, r_ast)), 3)
+                            else (bt_ast, 1)
+                          else if nt.0 == 31 then
+                            if bpos + 2 < dend then
+                              let nt2 = list_nth tokens (bpos + 2) in
+                              let r_ast = if nt2.0 == 1 then (0, nt2.1, mt) else (4, nt2.1, mt) in
+                              ((10, 1, (bt_ast, r_ast)), 3)
+                            else (bt_ast, 1)
+                          else if nt.0 == 32 then
+                            if bpos + 2 < dend then
+                              let nt2 = list_nth tokens (bpos + 2) in
+                              let r_ast = if nt2.0 == 1 then (0, nt2.1, mt) else (4, nt2.1, mt) in
+                              ((10, 2, (bt_ast, r_ast)), 3)
+                            else (bt_ast, 1)
+                          else (bt_ast, 1) in
                     let has_a0 = if p < dend then if (list_nth tokens p).0 == 62 then 1 else 0 else 0 in
                     if has_a0 == 1 then
                       let a0_pat = list_nth tokens (p + 1) in
                       let a0_body_pos = p + 3 in  -- after | PAT ->
-                      let a0_body_tok = list_nth tokens a0_body_pos in
-                      let a0_body = if a0_body_tok.0 == 1 then (0, a0_body_tok.1, mt)
-                        else if a0_body_tok.0 == 2 then (4, a0_body_tok.1, mt)
-                        else (0, 0, mt) in
+                      let a0_parsed = parse_body a0_body_pos in
+                      let a0_body = a0_parsed.0 in
+                      let a0_len = a0_parsed.1 in
                       let a0 = (0, a0_pat.1, a0_body) in
                       -- Check for arm 1
-                      let p1 = a0_body_pos + 1 in
+                      let p1 = a0_body_pos + a0_len in
                       let has_a1 = if p1 < dend then if (list_nth tokens p1).0 == 62 then 1 else 0 else 0 in
                       if has_a1 == 1 then
                         let a1_pat = list_nth tokens (p1 + 1) in
                         let a1_body_pos = p1 + 3 in
-                        let a1_body_tok = list_nth tokens a1_body_pos in
-                        let a1_body = if a1_body_tok.0 == 1 then (0, a1_body_tok.1, mt)
-                          else if a1_body_tok.0 == 2 then (4, a1_body_tok.1, mt)
-                          else (0, 0, mt) in
+                        let a1_parsed = parse_body a1_body_pos in
+                        let a1_body = a1_parsed.0 in
+                        let a1_len = a1_parsed.1 in
                         -- Check for arm 2
-                        let p2 = a1_body_pos + 1 in
+                        let p2 = a1_body_pos + a1_len in
                         let has_a2 = if p2 < dend then if (list_nth tokens p2).0 == 62 then 1 else 0 else 0 in
                         if has_a2 == 1 then
                           let a2_pat = list_nth tokens (p2 + 1) in
                           let a2_body_pos = p2 + 3 in
-                          let a2_body_tok = list_nth tokens a2_body_pos in
-                          let a2_body = if a2_body_tok.0 == 1 then (0, a2_body_tok.1, mt)
-                            else if a2_body_tok.0 == 2 then (4, a2_body_tok.1, mt)
-                            else (0, 0, mt) in
+                          let a2_parsed = parse_body a2_body_pos in
+                          let a2_body = a2_parsed.0 in
+                          let a2_len = a2_parsed.1 in
                           -- 3 arms: desugar to if/then/else chain
                           -- if scr == pat0 then body0 else if scr == pat1 then body1 else body2
                           let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
                           let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
                           let inner = (15, 0, (eq1, a1_body, a2_body)) in
                           let outer = (15, 0, (eq0, a0_body, inner)) in
-                          (a2_body_pos + 1, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
+                          (a2_body_pos + a2_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
                         else
                           -- 2 arms: if scr == pat0 then body0 else body1
                           let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
                           let result = (15, 0, (eq0, a0_body, a1_body)) in
-                          (a1_body_pos + 1, (result, vs), vsp + 1, os, osp, 1, mbp, 0)
+                          (a1_body_pos + a1_len, (result, vs), vsp + 1, os, osp, 1, mbp, 0)
                       else
                         -- Single arm
                         let arms = list_append () a0 in
-                        (a0_body_pos + 1, ((20, 0, (scrutinee, arms)), vs), vsp + 1, os, osp, 1, mbp, 0)
+                        (a0_body_pos + a0_len, ((20, 0, (scrutinee, arms)), vs), vsp + 1, os, osp, 1, mbp, 0)
                     else (pos, vs, vsp, os, osp, 2, mbp, 1)
                   else (pos, vs, vsp, os, osp, 2, mbp, 1)
                 else (pos, vs, vsp, os, osp, 2, mbp, 1)
