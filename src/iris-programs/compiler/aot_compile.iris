@@ -669,6 +669,38 @@ let aot_compile_node program node_id next_reg default_type =
         else if opcode == 177 then emit_mov_rr left left
         -- str_contains (0xB3 = 179): placeholder
         else if opcode == 179 then emit_mov_rr left left
+        -- tuple_get (210): dynamic index access
+        -- left = tuple (tagged ptr), right = index
+        -- Emits: and left,~1; mov left,[left + right*8 + 8]
+        else if opcode == 210 then
+          let l_lo = bitand left 7 in
+          let r_lo = bitand right 7 in
+          let lh = reg_hi left in
+          let rh = reg_hi right in
+          -- untag: and left, 0xFFFFFFFFFFFFFFFE
+          let untag = bytes_from_ints (bitand (0x48 + lh) 255, 0x83, bitand (0xe0 + l_lo) 255, 0xfe) in
+          -- mov left, [left + right*8 + 8]
+          -- REX.W=1, REX.R=lh, REX.X=rh, REX.B=lh
+          let rex = bitand (0x48 + lh * 5 + rh * 2) 255 in
+          -- ModR/M: mod=01(disp8), reg=l_lo, rm=100(SIB)
+          let modrm = bitand (0x44 + l_lo * 8) 255 in
+          -- SIB: scale=11(x8), index=r_lo, base=l_lo
+          let sib = bitand (0xc0 + r_lo * 8 + l_lo) 255 in
+          bytes_concat untag (bytes_from_ints (rex, 0x8b, modrm, sib, 0x08))
+        -- tuple_len (214): get length from tagged tuple header
+        -- Emits: and left,~1; mov left,[left]; shr left,8
+        else if opcode == 214 then
+          let l_lo = bitand left 7 in
+          let lh = reg_hi left in
+          let rex1 = bitand (0x48 + lh) 255 in
+          -- untag
+          let untag = bytes_from_ints (rex1, 0x83, bitand (0xe0 + l_lo) 255, 0xfe) in
+          -- mov left, [left] (load header)
+          let rex2 = bitand (0x48 + lh * 5) 255 in
+          let load = bytes_from_ints (rex2, 0x8b, bitand (l_lo * 9) 255) in
+          -- shr left, 8 (extract length from header)
+          let shift = bytes_from_ints (rex1, 0xc1, bitand (0xe8 + l_lo) 255, 0x08) in
+          bytes_concat untag (bytes_concat load shift)
         -- default: unknown binary op, return left operand
         else emit_mov_rr left left in
 

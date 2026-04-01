@@ -12,19 +12,19 @@
 --   tag_and_len: low 8 bits = type tag, high 24 bits = length
 --   Tags: 0=Tuple, 1=String, 6=Unit
 --
--- Runtime function table (offsets from runtime base):
---   0x00: rt_init         — init heap via sys_brk, set r15
---   0x20: rt_alloc         — alloc(rdi=bytes) -> rax=ptr, bumps r15
---   0x30: rt_tuple_new     — tuple_new(rdi=count) -> rax=tagged_ptr (uninitialized)
---   0x50: rt_tuple_set     — tuple_set(rdi=tuple, rsi=index, rdx=value)
---   0x68: rt_tuple_get     — tuple_get(rdi=tuple, rsi=index) -> rax=value
---   0x80: rt_tuple_len     — tuple_len(rdi=tuple) -> rax=len (raw int, not tagged)
---   0xA0: rt_write_stdout  — write_stdout(rdi=buf, rsi=len) -> rax=bytes_written
---   0xC0: rt_read_file     — read_file(rdi=path) -> rax=tagged tuple (str_ptr, len)
---   0x120: rt_print_int    — print_int(rdi=value) -> writes decimal to stdout
---   0x180: rt_str_new      — str_new(rdi=length) -> rax=tagged string ptr
---   0x1A0: rt_str_len      — str_len(rdi=tagged_str) -> rax=length
---   0x1C0: rt_char_at      — char_at(rdi=tagged_str, rsi=index) -> rax=byte
+-- Runtime function table (byte offsets from runtime base):
+--   0x000 (  0): rt_init         — init heap via sys_brk, set r15
+--   0x024 ( 36): rt_alloc         — alloc(rdi=bytes) -> rax=ptr, bumps r15
+--   0x034 ( 52): rt_tuple_new     — tuple_new(rdi=count) -> rax=tagged_ptr (uninitialized)
+--   0x054 ( 84): rt_tuple_set     — tuple_set(rdi=tuple, rsi=index, rdx=value)
+--   0x06C (108): rt_tuple_get     — tuple_get(rdi=tuple, rsi=index) -> rax=value
+--   0x084 (132): rt_tuple_len     — tuple_len(rdi=tuple) -> rax=len (raw int, not tagged)
+--   0x0A4 (164): rt_write_stdout  — write_stdout(rdi=buf, rsi=len) -> rax=bytes_written
+--   0x0C4 (196): rt_read_file     — read_file(rdi=path) -> rax=tagged tuple (str_ptr, len)
+--   0x154 (340): rt_print_int     — print_int(rdi=value) -> writes decimal to stdout
+--   0x1C4 (452): rt_str_new       — str_new(rdi=length) -> rax=tagged string ptr
+--   0x1F4 (500): rt_str_len       — str_len(rdi=tagged_str) -> rax=length
+--   0x204 (516): rt_char_at       — char_at(rdi=tagged_str, rsi=index) -> rax=byte
 
 let emit_runtime =
   -- === rt_init (0x00): sys_brk(0), extend +64MB, store in r15 ===
@@ -99,7 +99,7 @@ let emit_runtime =
 
   -- === rt_tuple_len (0x80): get tuple length ===
   -- rdi = tagged tuple ptr -> rax = length (RAW int, not tagged)
-  -- 25 bytes of code, pad to 32 (0xA0 - 0x80 = 0x20)
+  -- 25 bytes of code + 7 pad = 32 bytes (0xA0 - 0x80 = 0x20)
   let rt_tuple_len = bytes_from_ints (
     0x48, 0xf7, 0xc7, 0x01, 0x00, 0x00, 0x00, -- test rdi, 1
     0x74, 0x08,                        -- jz .zero
@@ -117,11 +117,11 @@ let emit_runtime =
   -- === rt_write_stdout (0xA0): sys_write(1, buf, len) ===
   -- rdi = buffer address, rsi = length
   -- Returns bytes written in rax
-  -- 19 bytes of code, pad to 32 (0xC0 - 0xA0 = 0x20)
+  -- 19 bytes of code + 13 pad = 32 bytes (0xC0 - 0xA0 = 0x20)
   let rt_write_stdout = bytes_from_ints (
     0x48, 0x89, 0xf2,                 -- mov rdx, rsi  (len -> arg3)
     0x48, 0x89, 0xfe,                 -- mov rsi, rdi  (buf -> arg2)
-    0xbf, 0x01, 0x00, 0x00, 0x00,     -- mov edi, 1    (stdout -> arg1)
+    0xbf, 0x01, 0x00, 0x00, 0x00,     -- mov edi, 1    (stdout fd)
     0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1    (SYS_write)
     0x0f, 0x05,                        -- syscall
     0xc3,                              -- ret
@@ -130,71 +130,185 @@ let emit_runtime =
     0x90, 0x90, 0x90, 0x90, 0x90, 0x90
   ) in
 
-  -- === rt_read_file (0xC0): open + read + close, return (tagged_str, tagged_len) ===
+  -- === rt_read_file (0xC0): open + read + close, return tuple(string, length) ===
   -- rdi = null-terminated path string address
-  -- Returns: tagged pointer to a 2-tuple: (tagged_string_ptr, tagged_int_len)
-  -- Uses r15 bump allocator for buffer and objects.
-  -- 96 bytes of code (0x60), pad to 0x60 (0x120 - 0xC0 = 0x60)
+  -- Returns: tagged pointer to 2-tuple: (tagged_string_ptr, tagged_int_len)
+  -- Uses r15 bump allocator. Allocates a 64KB temp buffer, reads into it,
+  -- then builds a properly-sized string object and a result tuple.
+  -- Register plan: rbx=fd, r12=str_obj_addr, r13=bytes_read (all callee-saved)
+  -- 139 bytes of code + 5 pad = 144 bytes (0x150 - 0xC0 = 0x90)
   let rt_read_file = bytes_from_ints (
     -- Save callee-saved registers
-    0x53,                              -- push rbx
-    0x41, 0x54,                        -- push r12
-    0x41, 0x55,                        -- push r13
+    0x53,                              -- push rbx                     [1]
+    0x41, 0x54,                        -- push r12                     [2]
+    0x41, 0x55,                        -- push r13                     [2]
 
     -- sys_open(rdi=path, rsi=O_RDONLY=0, rdx=mode=0)
-    -- rdi already has path
-    0x31, 0xf6,                        -- xor esi, esi       (O_RDONLY)
-    0x31, 0xd2,                        -- xor edx, edx       (mode 0)
-    0xb8, 0x02, 0x00, 0x00, 0x00,     -- mov eax, 2         (SYS_open)
-    0x0f, 0x05,                        -- syscall
-    0x89, 0xc3,                        -- mov ebx, eax       (fd -> ebx)
+    0x31, 0xf6,                        -- xor esi, esi                 [2]
+    0x31, 0xd2,                        -- xor edx, edx                 [2]
+    0xb8, 0x02, 0x00, 0x00, 0x00,     -- mov eax, 2 (SYS_open)       [5]
+    0x0f, 0x05,                        -- syscall                      [2]
+    0x89, 0xc3,                        -- mov ebx, eax (fd -> ebx)     [2]
+                                        -- subtotal: 18
 
-    -- Allocate read buffer on heap (64KB)
-    0x4c, 0x89, 0xfd,                 -- mov rbp, r15       (save buf_start... wait, rbp is frame ptr)
-    -- Actually use r12 for buf addr
-    0x4d, 0x89, 0xfc,                 -- mov r12, r15       (buf_addr in r12)
-    0x49, 0x81, 0xc7, 0x00, 0x00, 0x01, 0x00, -- add r15, 65536 (bump 64KB)
+    -- Allocate 64KB temp buffer on heap
+    0x4d, 0x89, 0xfc,                 -- mov r12, r15 (temp_buf)      [3]
+    0x49, 0x81, 0xc7, 0x00, 0x00, 0x01, 0x00, -- add r15, 0x10000    [7]
 
     -- sys_read(fd=ebx, buf=r12, count=65536)
-    0x89, 0xdf,                        -- mov edi, ebx       (fd)
-    0x4c, 0x89, 0xe6,                 -- mov rsi, r12       (buf)
-    0xba, 0x00, 0x00, 0x01, 0x00,     -- mov edx, 65536     (count)
-    0x31, 0xc0,                        -- xor eax, eax       (SYS_read = 0)
-    0x0f, 0x05,                        -- syscall
-    0x49, 0x89, 0xc5,                 -- mov r13, rax       (bytes_read -> r13)
+    0x89, 0xdf,                        -- mov edi, ebx                 [2]
+    0x4c, 0x89, 0xe6,                 -- mov rsi, r12                 [3]
+    0xba, 0x00, 0x00, 0x01, 0x00,     -- mov edx, 0x10000             [5]
+    0x31, 0xc0,                        -- xor eax, eax (SYS_read=0)   [2]
+    0x0f, 0x05,                        -- syscall                      [2]
+    0x49, 0x89, 0xc5,                 -- mov r13, rax (bytes_read)    [3]
+                                        -- subtotal: 27, running: 45
 
     -- sys_close(fd=ebx)
-    0x89, 0xdf,                        -- mov edi, ebx
-    0xb8, 0x03, 0x00, 0x00, 0x00,     -- mov eax, 3         (SYS_close)
-    0x0f, 0x05,                        -- syscall
+    0x89, 0xdf,                        -- mov edi, ebx                 [2]
+    0xb8, 0x03, 0x00, 0x00, 0x00,     -- mov eax, 3 (SYS_close)      [5]
+    0x0f, 0x05,                        -- syscall                      [2]
+                                        -- subtotal: 9, running: 54
 
-    -- Build a string object at r15: [header: (len<<8)|1, bytes...]
-    -- Header = (bytes_read << 8) | 1
-    0x4c, 0x89, 0xf0,                 -- mov rax, r15       (str_obj addr)
-    0x4c, 0x89, 0xe9,                 -- mov rcx, r13       (bytes_read)
-    0x48, 0xc1, 0xe1, 0x08,           -- shl rcx, 8
-    0x48, 0x83, 0xc9, 0x01,           -- or rcx, 1          (tag=1=String)
-    0x48, 0x89, 0x08,                 -- mov [rax], rcx     (write header)
-    -- Copy bytes from r12 to rax+8 (r13 bytes)
-    -- Use rsi=src, rdi=dst, rcx=count, rep movsb
-    0x4c, 0x89, 0xe6,                 -- mov rsi, r12       (src = read buf)
-    0x48, 0x8d, 0x78, 0x08,           -- lea rdi, [rax+8]   (dst = after header)
-    0x4c, 0x89, 0xe9,                 -- mov rcx, r13       (count)
-    0xf3, 0xa4,                        -- rep movsb
-    -- Bump r15 past string object: r15 += 8 + bytes_read, aligned to 8
-    0x4d, 0x8d, 0x7d, 0x0f,           -- lea r15, [r13+15]  (bytes_read+15... but we need r15 + 8 + r13)
-    -- Actually: new r15 = rax + 8 + r13, align up to 8
-    0x4c, 0x01, 0xe8,                 -- add rax, r13       (rax = str_obj + bytes_read)
-    0x48, 0x83, 0xc0, 0x0f,           -- add rax, 15        (rax + 8 header + 7 for align)
-    0x48, 0x83, 0xe0, 0xf8,           -- and rax, ~7        (align to 8)
-    0x49, 0x89, 0xc7,                 -- mov r15, rax       (update heap ptr)
+    -- Build string object at r15: [header: (len<<8)|1, bytes...]
+    0x4c, 0x89, 0xf8,                 -- mov rax, r15 (str_obj addr)  [3]
+    0x4c, 0x89, 0xe9,                 -- mov rcx, r13 (bytes_read)    [3]
+    0x48, 0xc1, 0xe1, 0x08,           -- shl rcx, 8                   [4]
+    0x48, 0x83, 0xc9, 0x01,           -- or rcx, 1 (tag=String)       [4]
+    0x48, 0x89, 0x08,                 -- mov [rax], rcx (header)       [3]
 
-    -- Tag string pointer (set bit 0)
-    0x4c, 0x89, 0xf0,                 -- mov rax, r15       -- wait, we overwrote rax. Need the str_obj addr back.
-    -- Hmm, I lost the string object address. Let me redo this more carefully.
-    -- Actually, I still have r15 pointing past the string. The str_obj was at old r15.
-    -- I need to save the str_obj addr. Let me rethink...
-    -- After rep movsb: rax still has the str_obj addr? No, I did add rax, r13 above.
-    -- I need to restructure. Let me use a different register.
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90  -- PLACEHOLDER - will be rewritten
+    -- Copy bytes: src=r12(temp), dst=rax+8, count=r13
+    0x4c, 0x89, 0xe6,                 -- mov rsi, r12                 [3]
+    0x48, 0x8d, 0x78, 0x08,           -- lea rdi, [rax+8]             [4]
+    0x4c, 0x89, 0xe9,                 -- mov rcx, r13                 [3]
+    0xf3, 0xa4,                        -- rep movsb                    [2]
+                                        -- subtotal: 29, running: 83
+
+    -- Save str_obj addr in r12 (temp_buf no longer needed)
+    0x49, 0x89, 0xc4,                 -- mov r12, rax                 [3]
+
+    -- Update r15 = str_obj + bytes_read + 8(header) + 7, aligned to 8
+    0x4c, 0x01, 0xe8,                 -- add rax, r13                 [3]
+    0x48, 0x83, 0xc0, 0x0f,           -- add rax, 15                  [4]
+    0x48, 0x83, 0xe0, 0xf8,           -- and rax, -8 (align)          [4]
+    0x49, 0x89, 0xc7,                 -- mov r15, rax                 [3]
+
+    -- Tag string pointer
+    0x49, 0x83, 0xcc, 0x01,           -- or r12, 1                    [4]
+                                        -- subtotal: 21, running: 104
+
+    -- Build 2-tuple at r15: [header(8), slot0(8), slot1(8)] = 24 bytes
+    0x4c, 0x89, 0xf8,                 -- mov rax, r15 (tuple addr)    [3]
+    0x49, 0x83, 0xc7, 0x18,           -- add r15, 24 (bump)           [4]
+    0x48, 0xc7, 0x00, 0x00, 0x02, 0x00, 0x00, -- mov qword [rax], 0x200 (len=2, tag=0=Tuple) [7]
+    0x4c, 0x89, 0x60, 0x08,           -- mov [rax+8], r12 (string)    [4]
+    0x49, 0xd1, 0xe5,                 -- shl r13, 1 (tag as int)      [3]
+    0x4c, 0x89, 0x68, 0x10,           -- mov [rax+16], r13 (length)   [4]
+
+    -- Tag tuple and return
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1                    [4]
+    0x41, 0x5d,                        -- pop r13                      [2]
+    0x41, 0x5c,                        -- pop r12                      [2]
+    0x5b,                              -- pop rbx                      [1]
+    0xc3,                              -- ret                          [1]
+                                        -- subtotal: 35, running: 139
+
+    -- pad to 0x150 (5 bytes)
+    0x90, 0x90, 0x90, 0x90, 0x90
   ) in
+
+  -- === rt_print_int (0x150): integer to decimal ASCII + write to stdout ===
+  -- rdi = integer value
+  -- Converts to decimal, writes to stdout. Returns bytes written in rax.
+  -- Uses stack buffer (40 bytes) for digit conversion.
+  -- Adapted from elf_wrapper.iris emit_print_result_and_exit.
+  -- 102 bytes of code + 10 pad = 112 bytes (0x1C0 - 0x150 = 0x70)
+  let rt_print_int = bytes_from_ints (
+    0x48, 0x83, 0xec, 0x28,           -- sub rsp, 40 (scratch buffer)
+    0x45, 0x31, 0xc0,                 -- xor r8d, r8d (sign flag = 0)
+    0x48, 0x89, 0xf8,                 -- mov rax, rdi (value)
+    0x48, 0x85, 0xc0,                 -- test rax, rax
+    0x79, 0x0a,                        -- jns +10 (.positive)
+    0x48, 0xf7, 0xd8,                 -- neg rax
+    0x49, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, -- mov r8, 1 (negative)
+    -- .positive (offset 25):
+    0x48, 0x8d, 0x4c, 0x24, 0x1f,     -- lea rcx, [rsp+31] (buf end)
+    0xc6, 0x01, 0x0a,                 -- mov byte [rcx], 0x0A (newline)
+    0x48, 0xff, 0xc9,                 -- dec rcx
+    0x49, 0xc7, 0xc2, 0x0a, 0x00, 0x00, 0x00, -- mov r10, 10 (divisor)
+    -- .digit_loop (offset 43):
+    0x48, 0x31, 0xd2,                 -- xor rdx, rdx
+    0x49, 0xf7, 0xf2,                 -- div r10
+    0x80, 0xc2, 0x30,                 -- add dl, '0'
+    0x88, 0x11,                        -- mov [rcx], dl
+    0x48, 0xff, 0xc9,                 -- dec rcx
+    0x48, 0x85, 0xc0,                 -- test rax, rax
+    0x75, 0xed,                        -- jnz -19 (.digit_loop)
+    -- .check_sign (offset 62):
+    0x4d, 0x85, 0xc0,                 -- test r8, r8
+    0x74, 0x06,                        -- jz +6 (.write)
+    0xc6, 0x01, 0x2d,                 -- mov byte [rcx], '-'
+    0x48, 0xff, 0xc9,                 -- dec rcx
+    -- .write (offset 73):
+    0xbf, 0x01, 0x00, 0x00, 0x00,     -- mov edi, 1 (stdout)
+    0x48, 0x8d, 0x71, 0x01,           -- lea rsi, [rcx+1] (string start)
+    0x48, 0x8d, 0x54, 0x24, 0x20,     -- lea rdx, [rsp+32] (past newline)
+    0x48, 0x29, 0xf2,                 -- sub rdx, rsi (length)
+    0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1 (SYS_write)
+    0x0f, 0x05,                        -- syscall
+    0x48, 0x83, 0xc4, 0x28,           -- add rsp, 40 (restore stack)
+    0xc3,                              -- ret
+    -- pad to 0x1C0 (10 bytes)
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
+  ) in
+
+  -- === rt_str_new (0x1C0): create string on heap ===
+  -- rdi = length (number of bytes)
+  -- Returns: tagged pointer to heap string object
+  -- Layout: [header: (len<<8)|1, uninitialized bytes...]
+  -- Allocates 8 (header) + length bytes, aligned to 8.
+  -- 33 bytes of code + 15 pad = 48 bytes (0x1F0 - 0x1C0 = 0x30)
+  let rt_str_new = bytes_from_ints (
+    0x48, 0x89, 0xf9,                 -- mov rcx, rdi (save length)
+    0x48, 0x8d, 0x7f, 0x0f,           -- lea rdi, [rdi+15] (+8 header +7 align)
+    0x48, 0x83, 0xe7, 0xf8,           -- and rdi, -8 (align to 8)
+    0x4c, 0x89, 0xf8,                 -- mov rax, r15 (str_obj addr)
+    0x49, 0x01, 0xff,                 -- add r15, rdi (bump allocator)
+    0x48, 0xc1, 0xe1, 0x08,           -- shl rcx, 8
+    0x48, 0x83, 0xc9, 0x01,           -- or rcx, 1 (tag=1=String)
+    0x48, 0x89, 0x08,                 -- mov [rax], rcx (write header)
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1 (tag pointer)
+    0xc3,                              -- ret
+    -- pad to 0x1F0 (15 bytes)
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
+  ) in
+
+  -- === rt_str_len (0x1F0): get string length from header ===
+  -- rdi = tagged string pointer -> rax = length
+  -- 12 bytes of code + 4 pad = 16 bytes (0x200 - 0x1F0 = 0x10)
+  let rt_str_len = bytes_from_ints (
+    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, -2 (untag: clear bit 0)
+    0x48, 0x8b, 0x07,                 -- mov rax, [rdi] (load header)
+    0x48, 0xc1, 0xe8, 0x08,           -- shr rax, 8 (extract length)
+    0xc3,                              -- ret
+    -- pad to 0x200 (4 bytes)
+    0x90, 0x90, 0x90, 0x90
+  ) in
+
+  -- === rt_char_at (0x200): get byte at index in string ===
+  -- rdi = tagged string pointer, rsi = index -> rax = byte value
+  -- 10 bytes of code (no padding needed, last function)
+  let rt_char_at = bytes_from_ints (
+    0x48, 0x83, 0xe7, 0xfe,           -- and rdi, -2 (untag: clear bit 0)
+    0x0f, 0xb6, 0x44, 0x37, 0x08,     -- movzx eax, byte [rdi+rsi+8] (skip header)
+    0xc3                               -- ret
+  ) in
+
+  -- Concatenate all runtime functions into a single block
+  bytes_concat rt_init (bytes_concat pad_init (bytes_concat rt_alloc
+    (bytes_concat rt_tuple_new (bytes_concat rt_tuple_set
+      (bytes_concat rt_tuple_get (bytes_concat rt_tuple_len
+        (bytes_concat rt_write_stdout (bytes_concat rt_read_file
+          (bytes_concat rt_print_int (bytes_concat rt_str_new
+            (bytes_concat rt_str_len rt_char_at)))))))))))

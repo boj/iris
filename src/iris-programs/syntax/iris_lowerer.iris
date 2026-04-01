@@ -1354,6 +1354,9 @@ let lower ast src =
                   -- lazy_map a b (hash=861)
                   else if inf.1 == 861 then
                     (pg, ns, nsp, (ina, (aa, ((50, 236, mt), rws))), nwsp + 3, sc)
+                  -- tuple_get tup idx (hash=969, 2-arg — overrides str_chars collision)
+                  else if inf.1 == 969 then
+                    (pg, ns, nsp, (ina, (aa, ((50, 210, mt), rws))), nwsp + 3, sc)
                   -- time_format a b (hash=1175)
                   else if inf.1 == 1175 then
                     (pg, ns, nsp, (ina, (aa, ((50, 228, mt), rws))), nwsp + 3, sc)
@@ -1502,6 +1505,8 @@ let lower ast src =
                 else if fa.1 == 1623 then (pg, ns, nsp, (aa, ((52, 230, mt), rws)), nwsp + 2, sc)
                 -- bytes_len (hash=965)
                 else if fa.1 == 965 then (pg, ns, nsp, (aa, ((52, 232, mt), rws)), nwsp + 2, sc)
+                -- tuple_len (hash=968, overrides str_slice collision for 1-arg)
+                else if fa.1 == 968 then (pg, ns, nsp, (aa, ((52, 214, mt), rws)), nwsp + 2, sc)
                 -- value_get_tag (hash=1367)
                 else if fa.1 == 1367 then (pg, ns, nsp, (aa, ((52, 156, mt), rws)), nwsp + 2, sc)
                 -- value_get_payload (hash=1797)
