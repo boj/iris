@@ -211,9 +211,91 @@ let emit_vm_core =
     0x49, 0x83, 0xc4, 0x02            -- not_taken: add r12, 2
   ) in
 
+  -- MAKE_TUPLE (18, n): pop n values from stack, allocate tuple on heap
+  -- Uses r15 as bump allocator (must be initialized by startup stub)
+  -- Tuple layout: [header: (n<<8)|0, elem0, elem1, ..., elemN-1]
+  -- Returns tagged pointer (bit 0 = 1)
+  -- Pop order: last-pushed is TOS = last element. We reverse to get correct order.
+  let op_mktuple_body = bytes_from_ints (
+    -- n = bytecode[pc+1]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8] (count)
+    -- Save count in rcx
+    0x48, 0x89, 0xc1,                 -- mov rcx, rax
+    -- Compute alloc size: (count+1)*8
+    0x48, 0xff, 0xc0,                 -- inc rax
+    0x48, 0xc1, 0xe0, 0x03,           -- shl rax, 3
+    -- Allocate: rax = r15, bump r15
+    0x4c, 0x89, 0xfa,                 -- mov rdx, r15 (alloc base)
+    0x49, 0x01, 0xc7,                 -- add r15, rax (bump)
+    -- Write header: (count << 8) | 0
+    0x48, 0xc1, 0xe1, 0x08,           -- shl rcx, 8
+    0x48, 0x89, 0x0a,                 -- mov [rdx], rcx
+    -- Pop elements from stack into tuple (reverse order for correct indexing)
+    -- Reload count from header
+    0x48, 0x8b, 0x0a,                 -- mov rcx, [rdx] (header)
+    0x48, 0xc1, 0xe9, 0x08,           -- shr rcx, 8 (count)
+    -- Loop: for i = count-1 downto 0: tuple[i] = pop()
+    0x48, 0xff, 0xc9,                 -- dec rcx (start from count-1)
+    -- .loop: if rcx < 0, done
+    0x48, 0x85, 0xc9,                 -- test rcx, rcx  (+0)
+    0x78, 0x12,                       -- js .done (+18 bytes to skip loop body)
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13] (pop)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x89, 0x44, 0xca, 0x08,     -- mov [rdx + rcx*8 + 8], rax
+    0x48, 0xff, 0xc9,                 -- dec rcx
+    0xeb, 0xe9,                       -- jmp .loop (-23 = back to test)
+    -- .done: tag pointer and push
+    0x48, 0x83, 0xca, 0x01,           -- or rdx, 1 (tag)
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x55, 0x00,           -- mov [r13], rdx (push tagged ptr)
+    0x49, 0x83, 0xc4, 0x02            -- add r12, 2
+  ) in
+
+  -- TUPLE_GET (19, idx): pop tuple, push element at idx
+  -- Input: tagged tuple pointer on stack, idx from bytecode
+  let op_tget_body = bytes_from_ints (
+    -- idx = bytecode[pc+1]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x5c, 0xde, 0x08,     -- mov rbx, [r14 + rbx*8 + 8] (idx)
+    -- Pop tuple pointer
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    -- Untag: and rax, ~1
+    0x48, 0x83, 0xe0, 0xfe,           -- and rax, -2
+    -- Load element: [rax + rbx*8 + 8]
+    0x48, 0x8b, 0x44, 0xd8, 0x08,     -- mov rax, [rax + rbx*8 + 8]
+    -- Push result
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    0x49, 0x83, 0xc4, 0x02            -- add r12, 2
+  ) in
+
+  -- NE (11): pop 2, push (a != b ? 1 : 0)
+  let op_ne_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x39, 0xc3,
+    0x0f, 0x95, 0xc0,                 -- setne al
+    0x48, 0x0f, 0xb6, 0xc0,
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- LE (12): pop 2, push (b <= a ? 1 : 0)
+  let op_le_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x39, 0xc3,
+    0x0f, 0x9e, 0xc0,                 -- setle al
+    0x48, 0x0f, 0xb6, 0xc0,
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
   -- Build handlers array: (opcode, body_bytes) for each handler
-  -- Format: cmp rax, OP (4 bytes) + jne skip (2 bytes) + body + jmp loop (2 bytes)
-  -- Handler size = 4 + 2 + body_len + 2 = body_len + 8
   let handlers = (
     (1, op_push_body),
     (2, op_add_body),
@@ -221,12 +303,16 @@ let emit_vm_core =
     (4, op_mul_body),
     (8, op_eq_body),
     (9, op_lt_body),
+    (11, op_ne_body),
+    (12, op_le_body),
     (14, op_load_body),
     (15, op_store_body),
     (16, op_jmp_body),
-    (17, op_jz_body)
+    (17, op_jz_body),
+    (18, op_mktuple_body),
+    (19, op_tget_body)
   ) in
-  let n_handlers = 10 in
+  let n_handlers = 14 in
 
   -- Compute total dispatch size: halt + sum(4+2+body+2 for each handler) + 5 (jmp back)
   let halt_size = bytes_len op_halt in

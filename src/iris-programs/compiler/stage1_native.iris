@@ -111,12 +111,21 @@ let emit_print_int = bytes_from_ints (
 -- 5. Exit
 let build_stub vm_offset bytecode_offset =
   let stub = bytes_from_ints (
-    -- mov rbp, rsp; load argc
-    0x48, 0x89, 0xe5,           -- mov rbp, rsp
-    -- sub rsp, 64 (scratch space)
+    -- mov rbp, rsp
+    0x48, 0x89, 0xe5,
+    -- sub rsp, 64
     0x48, 0x83, 0xec, 0x40,
+    -- Init heap: sys_brk(0) to get current break, then extend by 64MB
+    0x48, 0x31, 0xff,                 -- xor rdi, rdi
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,   -- mov rax, 12 (SYS_brk)
+    0x0f, 0x05,                       -- syscall
+    0x49, 0x89, 0xc7,                 -- mov r15, rax (heap start)
+    0x48, 0x89, 0xc7,                 -- mov rdi, rax
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04, -- add rdi, 64MB
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,   -- mov rax, 12
+    0x0f, 0x05,                       -- syscall
     -- Parse argv[1]: mov rdi, [rbp+16]
-    0x48, 0x8b, 0x7d, 0x10      -- mov rdi, [rbp+16]
+    0x48, 0x8b, 0x7d, 0x10
   ) in
   -- Call atoi (immediately follows)
   let atoi_call = emit_atoi in
