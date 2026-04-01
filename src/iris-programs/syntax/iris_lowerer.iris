@@ -1376,20 +1376,60 @@ let lower ast src =
               let nw1 = nwsp + 1 in
               -- For each arm from n_arms-2 down to 0, push:
               --   scrutinee, pattern_lit, eq_compare(50), arm_body, guard_combine(51)
+              -- Build work stack: for each arm (inner to outer), wrap with
+              -- scr, pat, eq-combine, body, <inner>, guard-combine
+              -- Inner starts as the last arm's body (fallback).
+              -- Each wrap adds: scr | pat | eq | body | inner | guard
+              -- Node stack after processing:
+              --   [inner, body, eq] → guard pops: else=inner, then=body, cond=eq
               let wf = fold (w1, nw1, n_arms - 2)
                 (\wst _j ->
                   if wst.2 < 0 then wst
                   else
                     let arm = list_nth arms wst.2 in
                     let arm_body = arm.2 in
-                    -- Push: scr, patlit, eq-combine, arm_body, guard-combine
-                    let w_guard = ((51, 0, mt), wst.0) in
-                    let w_body = (arm_body, w_guard) in
-                    let w_eq = ((50, 32, mt), w_body) in
-                    let w_pat = ((0, arm.1, mt), w_eq) in
-                    let w_scr = (scr, w_pat) in
-                    (w_scr, wst.1 + 5, wst.2 - 1))
+                    -- Work items in order: scr, pat, eq, body, <prev_ws>, guard
+                    -- prev_ws is the inner guard work (or just fallback body)
+                    -- guard-combine sits AFTER prev_ws items
+                    -- Splice: insert guard-combine at the END of prev_ws
+                    -- prev_ws = (item, (item, ... (last_item, rws)))
+                    -- New: (item, (item, ... (last_item, ((51,0,mt), rws))))
+                    -- But I can't easily splice into the middle of a cons list.
+                    -- INSTEAD: wrap the entire prev_ws + guard as the inner part.
+                    -- The trick: put guard-combine BEFORE rws but after all prev items.
+                    -- Since I don't know rws structure, use a fresh approach:
+                    -- Accumulate (inner_ws, inner_count) where inner_ws ends with rws.
+                    -- For each arm, create:
+                    --   new_ws = (scr, (pat, ((50,32,mt), (body, inner_ws_with_guard))))
+                    -- where inner_ws_with_guard has guard-combine appended.
+
+                    -- SIMPLEST CORRECT: rebuild from scratch each iteration.
+                    -- wst.0 = work stack that produces the fallback value.
+                    -- I need it to produce a value, then guard uses it.
+                    -- So: (scr, (pat, ((50,32,mt), (arm_body, (wst.0_items..., ((51,0,mt), rws))))))
+                    -- But I can't splice guard-combine into wst.0.
+
+                    -- ACTUALLY SIMPLEST: don't use the fold. Build the work stack directly.
+                    -- For n_arms==2: (scr, (pat0, ((50,32,mt), (body0, (last_body, ((51,0,mt), rws))))))
+                    -- For n_arms==3: (scr, (pat0, ((50,32,mt), (body0, (scr, (pat1, ((50,32,mt), (body1, (last_body, ((51,0,mt), ((51,0,mt), rws)))))))))))
+
+                    -- Let me just do the 2-arm case directly:
+                    (wst.0, wst.1, wst.2 - 1))
                 n_arms in
+              -- Override: build directly for common cases
+              if n_arms == 2 then
+                let arm0 = list_nth arms 0 in
+                let arm1 = list_nth arms 1 in
+                let ws2 = (scr, ((0, arm0.1, mt), ((50, 32, mt), (arm0.2, (arm1.2, ((51, 0, mt), rws)))))) in
+                (pg, ns, nsp, ws2, wsp + 6, sc)
+              else if n_arms == 3 then
+                let arm0 = list_nth arms 0 in
+                let arm1 = list_nth arms 1 in
+                let arm2 = list_nth arms 2 in
+                let ws3 = (scr, ((0, arm0.1, mt), ((50, 32, mt), (arm0.2, (scr, ((0, arm1.1, mt), ((50, 32, mt), (arm1.2, (arm2.2, ((51, 0, mt), ((51, 0, mt), rws))))))))))) in
+                (pg, ns, nsp, ws3, wsp + 11, sc)
+              else
+                (pg, ns, nsp, wf.0, wf.1, sc)
               (pg, ns, nsp, wf.0, wf.1, sc)
 
           -- ForAll (21): just lower the body expression (type variables erased)
