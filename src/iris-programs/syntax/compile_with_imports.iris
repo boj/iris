@@ -1,6 +1,17 @@
 -- Import-aware compiler: resolves import "path" as Name by source inlining.
 -- Supports qualified access: Foo.func → func (alias prefix stripped).
+-- Directory imports: import "dir/" or import "dir" → reads dir/__init__.iris
 -- Usage: iris-stage0 run compile_with_imports.iris <source_path> [args...]
+
+-- Resolve import path: if path doesn't end with .iris, treat as directory
+-- and append /__init__.iris
+let resolve_import_path path =
+  let len = str_len path in
+  if len >= 5 then
+    if str_ends_with path ".iris" then path
+    else if str_ends_with path "/" then str_concat path "__init__.iris"
+    else str_concat (str_concat path "/") "__init__.iris"
+  else str_concat (str_concat path "/") "__init__.iris"
 
 -- Parse an import line. Returns (1, path, alias) or (0, "", "").
 let parse_import_line line =
@@ -13,7 +24,8 @@ let parse_import_line line =
       else if char_at rest i == 34 then i
       else 0) (str_len rest) in
     if qpos > 0 then
-      let path = str_slice rest 0 qpos in
+      let raw_path = str_slice rest 0 qpos in
+      let path = resolve_import_path raw_path in
       -- Find " as " after the closing quote
       let after_quote = str_slice line (8 + qpos + 1) (str_len line) in
       -- Look for " as " prefix

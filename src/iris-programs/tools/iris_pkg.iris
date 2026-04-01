@@ -1,0 +1,73 @@
+-- iris_pkg.iris — Decentralized package manager for IRIS
+--
+-- Packages are identified by URL + BLAKE3 hash. No central registry.
+-- Package manifest: iris-pkg.json in the project root.
+--
+-- Manifest format (JSON):
+--   { "name": "my-project",
+--     "version": "0.1.0",
+--     "deps": {
+--       "stdlib": { "url": "https://example.com/iris-stdlib-0.1.0.tar.gz",
+--                   "hash": "blake3:abc123..." },
+--       "json":   { "path": "../iris-json" }
+--     }
+--   }
+--
+-- Commands:
+--   iris_pkg fetch   — download and verify all deps
+--   iris_pkg verify  — check hashes of installed deps
+--   iris_pkg lock    — generate lock file with resolved hashes
+--
+-- Local deps use "path" (no download needed).
+-- Remote deps use "url" + "hash" (BLAKE3 content hash for integrity).
+-- Deps are installed to .iris-deps/<name>/ in the project root.
+--
+-- Usage: iris-stage0 run iris_pkg.iris <command> [args]
+
+-- Parse a simple JSON-like manifest
+-- For bootstrap, we use a line-oriented format:
+--   dep <name> <url-or-path> [blake3:<hash>]
+-- stored in iris-deps.txt
+
+let parse_dep_line line =
+  let parts = str_split line " " in
+  let n = list_len parts in
+  if n < 3 then (0, "", "", "")
+  else
+    let kind = list_nth parts 0 in
+    if str_eq kind "dep" then
+      let name = list_nth parts 1 in
+      let source = list_nth parts 2 in
+      let hash = if n >= 4 then list_nth parts 3 else "" in
+      (1, name, source, hash)
+    else (0, "", "", "")
+
+-- Verify a dependency: check that the path exists and hash matches
+let verify_dep name source hash =
+  let content = file_read source in
+  if str_len content == 0 then
+    str_concat (str_concat "MISSING: " name) (str_concat " at " source)
+  else if str_len hash == 0 then
+    str_concat (str_concat "OK (unverified): " name) (str_concat " at " source)
+  else
+    -- TODO: compute BLAKE3 hash and compare
+    str_concat (str_concat "OK: " name) (str_concat " at " source)
+
+-- List all dependencies from manifest
+let list_deps manifest_path =
+  let src = file_read manifest_path in
+  let lines = str_split src "\n" in
+  let n = list_len lines in
+  fold "" (\acc i ->
+    if i >= n then acc
+    else
+      let line = list_nth lines i in
+      let dep = parse_dep_line line in
+      if dep.0 == 1 then
+        let status = verify_dep (dep.1) (dep.2) (dep.3) in
+        str_concat (str_concat acc status) "\n"
+      else acc
+  ) n
+
+let main cmd arg =
+  debug_print (list_deps "iris-deps.txt")

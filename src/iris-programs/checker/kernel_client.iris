@@ -1,0 +1,74 @@
+-- kernel_client.iris — IRIS client for the Lean proof kernel IPC server
+--
+-- Wire format (matching IrisKernelServer.lean):
+--   Request:  rule_id (1 byte) + payload_len (4 LE bytes) + payload
+--   Response: result_len (4 LE bytes) + result
+--
+-- Rule IDs:
+--   0   = cost_leq check (returns 1 byte: 0=false, 1=true)
+--   1-20 = inference rules (returns proof term bytes)
+--   255 = shutdown
+--
+-- This module provides high-level wrappers for kernel operations.
+-- Requires: a running IrisKernelServer on stdin/stdout of a subprocess.
+--
+-- Usage (when effects are available):
+--   let kernel = kernel_connect "lean/build/bin/IrisKernelServer" in
+--   let proof = kernel_apply kernel 1 payload in  -- rule 1: Refl
+--   kernel_shutdown kernel
+
+-- Encode a kernel request as bytes
+let encode_request rule_id payload =
+  let plen = bytes_len payload in
+  let header = bytes_from_ints (
+    rule_id,
+    bitand plen 255,
+    bitand (shr plen 8) 255,
+    bitand (shr plen 16) 255,
+    bitand (shr plen 24) 255
+  ) in
+  bytes_concat header payload
+
+-- Decode a kernel response (4-byte length + payload)
+let decode_response raw =
+  let len_bytes = bytes_from_ints (
+    bytes_len raw
+  ) in
+  raw
+
+-- Cost check: verify cost_a <= cost_b via the kernel
+-- Returns 1 if cost_a <= cost_b, 0 otherwise
+let cost_leq_request cost_a cost_b =
+  let payload = bytes_concat (bytes_from_ints cost_a) (bytes_from_ints cost_b) in
+  encode_request 0 payload
+
+-- Build a proof obligation request for rule N
+let rule_request rule_id args =
+  encode_request rule_id args
+
+-- Shutdown request
+let shutdown_request x = encode_request 255 (bytes_from_ints ())
+
+-- The 20 inference rules (IDs 1-20):
+--  1  = Refl       (reflexivity)
+--  2  = Sym        (symmetry)
+--  3  = Trans      (transitivity)
+--  4  = Beta       (beta reduction)
+--  5  = Eta        (eta expansion)
+--  6  = AppCong    (application congruence)
+--  7  = AbsCong    (abstraction congruence)
+--  8  = LetCong    (let congruence)
+--  9  = FoldCong   (fold congruence)
+-- 10  = UnfoldStep (unfold step)
+-- 11  = CostComp   (cost composition)
+-- 12  = CostSub    (cost subsumption)
+-- 13  = Weaken     (structural weakening)
+-- 14  = Contract   (structural contraction)
+-- 15  = TyRefl     (type reflexivity)
+-- 16  = TySym      (type symmetry)
+-- 17  = TyTrans    (type transitivity)
+-- 18  = Subst      (substitution)
+-- 19  = Instantiate (type instantiation)
+-- 20  = Abstract   (type abstraction)
+
+let main x = debug_print "kernel_client: use kernel_connect when effects are available"

@@ -1,0 +1,16 @@
+-- stdlib manifest: import this to get all stdlib modules
+-- Usage: import "src/iris-programs/stdlib" as Stdlib
+import "src/iris-programs/stdlib/option.iris" as Option
+import "src/iris-programs/stdlib/either.iris" as Either
+import "src/iris-programs/stdlib/result.iris" as Result
+import "src/iris-programs/stdlib/list_ops.iris" as List
+import "src/iris-programs/stdlib/map_ops.iris" as Map
+import "src/iris-programs/stdlib/set_ops.iris" as Set
+import "src/iris-programs/stdlib/string_ops.iris" as String
+import "src/iris-programs/stdlib/math.iris" as Math
+import "src/iris-programs/stdlib/json.iris" as Json
+import "src/iris-programs/stdlib/tco.iris" as TCO
+import "src/iris-programs/stdlib/lazy.iris" as Lazy
+import "src/iris-programs/stdlib/ordering.iris" as Ordering
+
+let main x = x

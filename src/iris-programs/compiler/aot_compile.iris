@@ -816,16 +816,17 @@ let aot_compile_node program node_id next_reg default_type =
     let field_idx = graph_get_field_index program node_id in
     let child0_kind = graph_get_kind program child0 in
 
-    -- Check: is child an InputRef(128) (fold lambda param)?
+    -- Check: is child an InputRef (fold lambda binder)?
+    -- InputRef is encoded as Lit with type_tag=255. Any InputRef in a fold
+    -- body refers to the fold's binder (acc or elem). Previously hardcoded
+    -- clv==128 which broke in nested contexts where binder index > 128.
     let is_fold_input =
       if child0_kind == 5 then
         let ctt = graph_get_lit_type_tag program child0 in
-        let clv = graph_get_lit_value program child0 in
-        if ctt == 255 then if clv == 128 then 1 else 0
-        else 0
+        if ctt == 255 then 1 else 0
       else 0 in
 
-    -- Check: is child a Project on InputRef(128)? (nested tuple acc access)
+    -- Check: is child a Project on an InputRef? (nested tuple acc access)
     let nested_info =
       if child0_kind == 13 then
         let gc_list = graph_outgoing program child0 in
@@ -833,12 +834,9 @@ let aot_compile_node program node_id next_reg default_type =
         let gc_kind = graph_get_kind program grandchild in
         if gc_kind == 5 then
           let gc_tt = graph_get_lit_type_tag program grandchild in
-          let gc_lv = graph_get_lit_value program grandchild in
           if gc_tt == 255 then
-            if gc_lv == 128 then
-              let parent_fi = graph_get_field_index program child0 in
-              (1, parent_fi)  -- (is_nested, parent_field_index)
-            else (0, 0)
+            let parent_fi = graph_get_field_index program child0 in
+            (1, parent_fi)  -- (is_nested, parent_field_index)
           else (0, 0)
         else (0, 0)
       else (0, 0) in
