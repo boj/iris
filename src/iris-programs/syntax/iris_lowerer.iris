@@ -430,18 +430,22 @@ let lower ast src =
             (p3, (step2.1, rns), nsp - 1, rws, nwsp, sc)
 
           -- Lambda combine (63): pop body, create Lambda node with binder
-          -- item.2 carries the binder_idx directly (set by the Lambda handler)
+          -- item.2 carries (binder_idx, scope_depth) from the Lambda handler
           else if k == 63 then
             let body_id = ns.0 in
             let rns = ns.1 in
-            let binder_idx = item.2 in
+            let combo = item.2 in
+            let binder_idx = combo.0 in
+            let saved_depth = combo.1 in
             let binder_id = 4294901760 + binder_idx in
             -- Create Lambda node (kind 2) and set its binder
             let step = graph_add_node_rt pg 2 in
             let step2 = graph_set_binder (step.0) (step.1) binder_id in
             -- Connect body via Continuation edge (label 3, port 0)
             let p2 = graph_connect_labeled (step2.0) (step2.1) body_id 0 3 in
-            (p2, (step2.1, rns), nsp, rws, nwsp, sc)
+            -- Restore scope to pre-Lambda state (remove Lambda param)
+            let restored_sc = list_take sc saved_depth in
+            (p2, (step2.1, rns), nsp, rws, nwsp, restored_sc)
 
           -- ==========================================================
           -- AST expression nodes
@@ -1083,10 +1087,12 @@ let lower ast src =
             --   Project(0) on InputRef for param1
             --   Project(1) on InputRef for param2
             let binder_idx = 128 + pc in
+            let scope_depth = list_len sc in
             if param2 == 0 then
               -- Single param lambda: add param hash to scope
               let new_sc = list_append sc (ph, binder_idx, 0) in
-              (pg, ns, nsp, (ba, ((63, ph, binder_idx), rws)), nwsp + 2, new_sc)
+              -- Pass (binder_idx, scope_depth) to combine so it can restore scope
+              (pg, ns, nsp, (ba, ((63, ph, (binder_idx, scope_depth)), rws)), nwsp + 2, new_sc)
             else
               -- Multi-param lambda: curry as \p1 -> \p2 -> body
               -- Create inner Lambda AST for the second param, then outer for first
@@ -1094,14 +1100,19 @@ let lower ast src =
               let inner_lambda = (13, param2, list_append mt ba, 0) in
               -- Outer: single-param lambda for p1, body = inner_lambda
               let new_sc = list_append sc (ph, binder_idx, 0) in
-              (pg, ns, nsp, (inner_lambda, ((63, ph, binder_idx), rws)), nwsp + 2, new_sc)
+              (pg, ns, nsp, (inner_lambda, ((63, ph, (binder_idx, scope_depth)), rws)), nwsp + 2, new_sc)
 
           -- Let/in (14)
           else if k == 14 then
             let nh = item.1 in
             let va = (item.2).0 in
             let ba = (item.2).1 in
-            (pg, ns, nsp, (va, ((56, nh, ba), rws)), nwsp + 2, sc)
+            -- For both rec and non-rec, use standard LetBind.
+            -- Recursion is handled through the evaluator's fragment registry
+            -- (run command) or through trampoline fold (IRIS pipeline).
+            -- Strip rec bit so the name resolves correctly.
+            let clean_nh = if nh >= 2147483648 then nh - 2147483648 else nh in
+            (pg, ns, nsp, (va, ((56, clean_nh, ba), rws)), nwsp + 2, sc)
 
           -- If/then/else (15)
           else if k == 15 then
