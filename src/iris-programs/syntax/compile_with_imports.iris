@@ -1,48 +1,64 @@
 -- Import-aware compiler: resolves import "path" as Name by source inlining.
+-- Supports qualified access: Foo.func → func (alias prefix stripped).
 -- Usage: iris-stage0 run compile_with_imports.iris <source_path> [args...]
 
--- Check if a line starts with 'import "'
--- Returns (1, path_string) or (0, "")
-let is_import_line line =
-  if str_len line < 9 then (0, "")
+-- Parse an import line. Returns (1, path, alias) or (0, "", "").
+let parse_import_line line =
+  if str_len line < 9 then (0, "", "")
   else if str_starts_with line "import \"" then
-    -- Extract path between quotes
     let rest = str_slice line 8 (str_len line) in
     let qpos = fold 0 (\r i ->
       if r > 0 then r
       else if i >= str_len rest then 0
       else if char_at rest i == 34 then i
       else 0) (str_len rest) in
-    if qpos > 0 then (1, str_slice rest 0 qpos)
-    else (0, "")
-  else (0, "")
+    if qpos > 0 then
+      let path = str_slice rest 0 qpos in
+      -- Find " as " after the closing quote
+      let after_quote = str_slice line (8 + qpos + 1) (str_len line) in
+      -- Look for " as " prefix
+      let alias = if str_len after_quote >= 4 then
+        if str_starts_with after_quote " as " then
+          str_trim (str_slice after_quote 4 (str_len after_quote))
+        else ""
+      else "" in
+      (1, path, alias)
+    else (0, "", "")
+  else (0, "", "")
 
--- Main: read source, inline imports, compile, run
+-- Replace all occurrences of "Alias." with "" in source text.
+-- This strips qualified prefixes so Foo.func becomes func.
+let strip_qualifier src alias =
+  let prefix = str_concat alias "." in
+  str_replace src prefix ""
+
+-- Main: read source, inline imports, strip qualifiers, compile, run
+-- Import paths resolve from CWD (project root), not the importing file.
 let main path arg =
   let src = file_read path in
   let lines = str_split src "\n" in
   let n_lines = list_len lines in
 
-  -- Collect import paths and build clean source (without import lines)
-  let scan = fold ((), "") (\state i ->
+  -- Collect (path, alias) pairs and build clean source
+  let scan = fold ((), "", ()) (\state i ->
     if i >= n_lines then state
     else
       let line = list_nth lines i in
-      let chk = is_import_line line in
-      if chk.0 == 1 then
-        -- Import line: add path to list, skip line in clean source
-        (list_append (state.0) (chk.1), str_concat (state.1) "\n")
+      let parsed = parse_import_line line in
+      if parsed.0 == 1 then
+        -- Import line: collect path+alias, skip line
+        (list_append (state.0) (parsed.1), str_concat (state.1) "\n", list_append (state.2) (parsed.2))
       else
-        -- Normal line: keep in clean source
-        (state.0, str_concat (str_concat (state.1) line) "\n")
+        -- Normal line: keep
+        (state.0, str_concat (str_concat (state.1) line) "\n", state.2)
   ) n_lines in
 
   let import_paths = scan.0 in
   let clean_src = scan.1 in
+  let aliases = scan.2 in
   let n_imports = list_len import_paths in
 
   if n_imports == 0 then
-    -- No imports: compile directly
     let m = compile_source_json src in
     module_eval (m.0) 0 (arg,)
   else
@@ -50,12 +66,45 @@ let main path arg =
     let prefix = fold "" (\acc i ->
       if i >= n_imports then acc
       else
-        let imp_path = list_nth import_paths i in
-        let imp_src = file_read imp_path in
+        let raw_imp_src = file_read (list_nth import_paths i) in
+        -- Strip import lines from the imported file (handle transitive imports)
+        let imp_lines = str_split raw_imp_src "\n" in
+        let imp_n = list_len imp_lines in
+        let imp_scan = fold ("", ()) (\is j ->
+          if j >= imp_n then is
+          else
+            let il = list_nth imp_lines j in
+            let ip = parse_import_line il in
+            if ip.0 == 1 then
+              -- Transitive import: read and inline it
+              let trans_src = file_read (ip.1) in
+              (str_concat (str_concat (is.0) trans_src) "\n", list_append (is.1) (ip.2))
+            else
+              (str_concat (str_concat (is.0) il) "\n", is.1)
+        ) imp_n in
+        -- Strip transitive qualifiers
+        let trans_aliases = imp_scan.1 in
+        let imp_stripped = fold (imp_scan.0) (\s j ->
+          if j >= list_len trans_aliases then s
+          else
+            let ta = list_nth trans_aliases j in
+            if str_len ta > 0 then strip_qualifier s ta else s
+        ) (list_len trans_aliases) in
+        let imp_src = imp_stripped in
         str_concat (str_concat acc imp_src) "\n"
     ) n_imports in
 
+    -- Strip qualified prefixes from the main source
+    -- For each alias, replace "Alias." with ""
+    let stripped = fold clean_src (\s i ->
+      if i >= n_imports then s
+      else
+        let alias = list_nth aliases i in
+        if str_len alias > 0 then strip_qualifier s alias
+        else s
+    ) n_imports in
+
     -- Compile combined source
-    let full = str_concat prefix clean_src in
+    let full = str_concat prefix stripped in
     let m = compile_source_json full in
     module_eval (m.0) 0 (arg,)
