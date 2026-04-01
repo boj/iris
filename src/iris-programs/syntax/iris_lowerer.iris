@@ -58,14 +58,112 @@ let lower ast src =
               -- Compile as a trampoline fold instead of a recursive Lambda.
               -- The fold state is (done_flag, arg_tuple). Each iteration either
               -- returns (1, result) [done] or (0, new_args) [continue].
-              let value_ast = if is_rec == 1 then
+              -- TCO transformation for tail-recursive functions.
+              -- Detect: let rec f args = if cond then base else f(new_args)
+              -- Emit: let f args = trampoline_fold(args, body_step, 1000000)
+              -- where body_step replaces f(x) with (0,x) and base with (1,result)
+              let is_tail_rec =
+                if is_rec == 1 then
+                  if n_pp == 1 then
+                    -- Single arg: check if body is If/Then/Else (kind 15)
+                    if prior_body.0 == 15 then
+                      -- Check if else branch (item.2).2 is Apply(Var(f), ...)
+                      let else_br = (prior_body.2).2 in
+                      if else_br.0 == 12 then
+                        -- Apply: check if function is Var(clean_name)
+                        let app_fn = (else_br.2).0 in
+                        if app_fn.0 == 4 then
+                          if app_fn.1 == clean_name then 1 else 0
+                        else 0
+                      else 0
+                    else 0
+                  else if n_pp == 2 then
+                    -- Two args: check if body is If/Then/Else
+                    if prior_body.0 == 15 then
+                      let else_br = (prior_body.2).2 in
+                      -- else branch should be Apply(Apply(Var(f), arg1), arg2)
+                      if else_br.0 == 12 then
+                        let inner_app = (else_br.2).0 in
+                        if inner_app.0 == 12 then
+                          let app_fn = (inner_app.2).0 in
+                          if app_fn.0 == 4 then
+                            if app_fn.1 == clean_name then 1 else 0
+                          else 0
+                        else 0
+                      else 0
+                    else 0
+                  else 0
+                else 0 in
+              let value_ast = if is_tail_rec == 1 then
+                if n_pp == 1 then
+                  -- Single-arg tail recursion: let rec f n = if cond then base else f(step(n))
+                  -- Transform to: \n -> (fold (0, n) (\acc _i -> if acc.0 == 1 then acc else
+                  --   if <cond with n replaced by acc.1> then (1, <base with n replaced by acc.1>)
+                  --   else (0, <recursive_arg with n replaced by acc.1>)) 1000000).1
+                  --
+                  -- Strategy: we DON'T do AST substitution (too complex).
+                  -- Instead, we use a Let binding: let n = acc.1 in <original_body>
+                  -- where the body's f(x) is replaced with (0, x) and base with (1, base).
+                  -- But replacing f(x) in the AST requires walking it...
+                  --
+                  -- SIMPLEST: emit a fold where the step function is:
+                  --   \acc _i -> if acc.0 == 1 then acc else
+                  --     let <param> = acc.1 in
+                  --       if <cond> then (1, <base>) else (0, <rec_arg>)
+                  -- This reuses the ORIGINAL cond and base ASTs by Let-binding
+                  -- the param to acc.1.
+                  let param_hash = (list_nth prior_params 0).1 in
+                  let cond_ast = (prior_body.2).0 in
+                  let base_ast = (prior_body.2).1 in
+                  let else_br = (prior_body.2).2 in
+                  let rec_arg_ast = (else_br.2).1 in
+                  -- Build the fold step body:
+                  --   if acc.0 == 1 then acc
+                  --   else let <param> = acc.1 in
+                  --     if <cond> then (1, <base>) else (0, <rec_arg>)
+                  -- acc is the fold accumulator (tuple), _i is the index (ignored)
+                  -- We use acc_hash = 295 (a+c+c = 97+99+99) as the accumulator name
+                  let acc_hash = 295 in
+                  -- acc.0: TupleAccess(0, Var(acc))
+                  let acc_0 = (18, 0, list_append mt (4, acc_hash, mt)) in
+                  -- acc.1: TupleAccess(1, Var(acc))
+                  let acc_1 = (18, 1, list_append mt (4, acc_hash, mt)) in
+                  -- acc.0 == 1: BinOp(eq, acc.0, 1)
+                  let done_check = (10, 32, (acc_0, (0, 1, mt))) in
+                  -- (1, <base>): Tuple(1, base)
+                  let done_result = (17, 0, list_append (list_append mt (0, 1, mt)) base_ast) in
+                  -- (0, <rec_arg>): Tuple(0, rec_arg)
+                  let cont_result = (17, 0, list_append (list_append mt (0, 0, mt)) rec_arg_ast) in
+                  -- if <cond> then (1, base) else (0, rec_arg)
+                  let inner_if = (15, 0, (cond_ast, done_result, cont_result)) in
+                  -- let <param> = acc.1 in inner_if
+                  let let_param = (14, param_hash, (acc_1, inner_if)) in
+                  -- if acc.0 == 1 then acc else let_param
+                  let step_body = (15, 0, (done_check, (4, acc_hash, mt), let_param)) in
+                  -- fold step lambda: \acc _i -> step_body
+                  -- _i hash = 232 (arbitrary, just needs to be unique)
+                  let step_lambda = (13, acc_hash, list_append mt (13, 232, list_append mt step_body, 0), 232) in
+                  -- Initial tuple: (0, n) where n is the param
+                  let init_tuple = (17, 0, list_append (list_append mt (0, 0, mt)) (4, param_hash, mt)) in
+                  -- fold init_tuple step_lambda 1000000
+                  -- This is: Apply(Apply(Apply(Var(fold), init_tuple), step_lambda), 1000000)
+                  let fold_call = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_tuple)), step_lambda)), (0, 1000000, mt))) in
+                  -- result.1: TupleAccess(1, fold_call)
+                  let extract = (18, 1, list_append mt fold_call) in
+                  -- Wrap in \param -> extract
+                  (13, param_hash, list_append mt extract, 0)
+                else
+                  -- Multi-param tail rec: fall through to simple lambda for now
+                  fold prior_body
+                    (\inner j ->
+                      let rj = n_pp - 1 - j in
+                      if rj < 0 then inner
+                      else
+                        let ph = (list_nth prior_params rj).1 in
+                        (13, ph, list_append mt inner, 0))
+                    n_pp
+              else if is_rec == 1 then
                 if n_pp >= 1 then
-                  -- Build trampoline: fold (0, arg0, arg1, ...) step 1000000
-                  -- Step function checks the body, returns (1, result) or (0, new_args)
-                  -- For now, wrap as a curried lambda that uses fold internally.
-                  -- The recursive call f(x) becomes updating the accumulator.
-                  -- This is complex AST surgery; for now use the simple lambda approach
-                  -- and rely on the stdlib/tco.iris helpers for deep recursion.
                   fold prior_body
                     (\inner j ->
                       let rj = n_pp - 1 - j in

@@ -286,3 +286,12 @@
 
 **Assistant:** OK. The path forward for `let rec` through IRIS pipeline is clear:
 
+
+---
+
+**2026-03-31 22:12**
+
+**Human:** Investigate it
+
+**Assistant:** Here's the concrete situation:
+
