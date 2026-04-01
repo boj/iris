@@ -295,3 +295,12 @@
 
 **Assistant:** Here's the concrete situation:
 
+
+---
+
+**2026-03-31 22:34**
+
+**Human:** Investigate it
+
+**Assistant:** Done. `let rec` with tail calls works through the IRIS pipeline — 100K deep, no stack overflow, pure IRIS, no Rust.
+
