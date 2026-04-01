@@ -1,0 +1,74 @@
+-- emit_stage1.iris — Build a native stage1 binary.
+--
+-- Produces a standalone x86-64 ELF binary that:
+-- 1. Parses argv[1] as an integer
+-- 2. Runs hardcoded bytecodes through the native VM
+-- 3. Prints the result
+--
+-- Usage: iris-stage0 run emit_stage1.iris <output_path> <bytecodes_as_comma_separated>
+--
+-- For now, embeds a simple test program: fold 0 (\acc i -> acc + i) n
+
+-- Import the ELF wrapper helpers
+let le32 v =
+  bytes_from_ints (bitand v 255, bitand (shr v 8) 255,
+    bitand (shr v 16) 255, bitand (shr v 24) 255)
+
+let le64 v =
+  let b0 = bitand v 255 in
+  let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in
+  let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in
+  let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in
+  let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- Bytecodes for: fold 0 (\acc i -> acc + i) n  (sum 0..n-1)
+-- PUSH 0, LOAD 0, FOLD_BEGIN 12, STORE 2, STORE 1, LOAD 1, LOAD 2, ADD, FOLD_END, HALT
+let test_bytecodes = (1, 0, 14, 0, 25, 12, 15, 2, 15, 1, 14, 1, 14, 2, 2, 26, 0)
+
+-- Emit bytecodes as a data section: a tuple in memory
+-- Layout: [header: (count<<8)|0, elem0, elem1, ...]
+-- Each element is a 64-bit integer
+let emit_bytecode_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in  -- (n << 8) | tag=0 (Tuple)
+  let elems = fold (bytes_from_ints ()) (\acc i ->
+    if i >= n then acc
+    else bytes_concat acc (le64 (tuple_get bc i))
+  ) n in
+  bytes_concat header elems
+
+-- Build the complete stage1 binary
+let main output_path arg =
+  -- Load the native VM code
+  let vm_src = file_read "src/iris-programs/compiler/native_vm.iris" in
+  let vm_m = compile_source_json vm_src in
+  let vm_bytes = module_eval (vm_m.0) 0 () in
+
+  -- Build bytecode data
+  let bc_data = emit_bytecode_data test_bytecodes in
+  let bc_size = bytes_len bc_data in
+
+  -- Build atoi (argument parser) — reuse from elf_wrapper
+  let elf_src = file_read "src/iris-programs/compiler/elf_wrapper.iris" in
+  let elf_m = compile_source_json elf_src in
+
+  -- Build the startup stub:
+  -- 1. Parse argv[1] as integer → rsi (input)
+  -- 2. Set rdi = address of bytecode data (tagged: +1)
+  -- 3. Call VM function
+  -- 4. Print result
+  -- 5. Exit
+
+  -- For the proof of concept, just emit a simple binary that
+  -- demonstrates the native VM works.
+  -- The VM function expects: rdi=bytecode_ptr(tagged), rsi=input
+  -- We'll hard-code the bytecodes inline.
+
+  let vm_size = bytes_len vm_bytes in
+
+  -- Print the sizes for verification
+  debug_print (str_concat "VM: " (str_concat (int_to_string vm_size) " bytes"))

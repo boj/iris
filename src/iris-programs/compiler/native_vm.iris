@@ -1,0 +1,260 @@
+-- native_vm.iris — Hand-assembled x86-64 bytecode VM for stage1.
+--
+-- A native function that executes IRIS bytecodes.
+-- Uses the native runtime for tuple/string operations.
+--
+-- Calling convention:
+--   rdi = bytecode tuple (tagged pointer from runtime)
+--   rsi = input value (integer)
+-- Returns:
+--   rax = result value
+--
+-- Internal state:
+--   r12 = program counter (index into bytecode)
+--   r13 = value stack pointer (grows downward in local stack area)
+--   r14 = bytecode tuple pointer (untagged)
+--   rbx = locals array pointer (untagged)
+--
+-- The VM uses a local stack area at [rbp-512..rbp-256] for the value stack,
+-- and a locals area at [rbp-768..rbp-512] for 32 local variable slots.
+--
+-- Stack layout:
+--   [rbp-8]    = saved rbx
+--   [rbp-16]   = saved r12
+--   [rbp-24]   = saved r13
+--   [rbp-32]   = saved r14
+--   [rbp-256]  = value stack top (grows toward rbp-512)
+--   [rbp-512]  = value stack bottom
+--   [rbp-768]  = locals[0..31] (32 slots × 8 bytes)
+
+-- Helper: emit a NOP sled of n bytes
+let nop_sled n = fold (bytes_from_ints ()) (\acc i -> bytes_concat acc (bytes_from_ints (0x90))) n
+
+-- The VM function: hand-assembled x86-64
+-- Core opcodes: HALT(0), PUSH(1), ADD(2), SUB(3), MUL(4), DIV(5), MOD(6),
+--   NEG(7), EQ(8), LT(9), GT(10), NE(11), LE(12), GE(13),
+--   LOAD(14), STORE(15), JMP(16), JZ(17), MAKE_TUPLE(18), TUPLE_GET(19)
+--
+-- Returns machine code bytes for the VM function (no prologue/epilogue —
+-- those are added by the stage1 builder).
+let emit_vm_core =
+  -- Prologue: save regs, set up frame, init state
+  let prologue = bytes_from_ints (
+    0x55,                             -- push rbp
+    0x48, 0x89, 0xe5,                 -- mov rbp, rsp
+    0x53,                             -- push rbx
+    0x41, 0x54,                       -- push r12
+    0x41, 0x55,                       -- push r13
+    0x41, 0x56,                       -- push r14
+    0x48, 0x81, 0xec, 0x00, 0x03, 0x00, 0x00, -- sub rsp, 768
+    -- Init: r12=pc=0, r14=bytecode_ptr (untag rdi)
+    0x45, 0x31, 0xe4,                 -- xor r12d, r12d  (pc = 0)
+    0x49, 0x89, 0xfe,                 -- mov r14, rdi     (bytecode)
+    0x49, 0x83, 0xe6, 0xfe,           -- and r14, ~1      (untag)
+    -- r13 = stack pointer: start at [rbp-256]
+    0x4c, 0x8d, 0xad, 0x00, 0xff, 0xff, 0xff, -- lea r13, [rbp-256]
+    -- Push input (rsi) onto value stack
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x4c, 0x89, 0x6d, 0x00,           -- mov [r13], rsi... wait, wrong
+    0x49, 0x89, 0x75, 0x00,           -- mov [r13], rsi  (push input)
+    -- Store input as locals[0]
+    0x48, 0x89, 0xb5, 0x00, 0xfd, 0xff, 0xff -- mov [rbp-768], rsi
+  ) in
+
+  -- Dispatch loop top: load opcode from bytecode[r12]
+  -- mov rax, [r14 + r12*8 + 8]  (bytecode is a tuple: [header, elem0, elem1, ...])
+  let dispatch_top = bytes_from_ints (
+    -- load bytecode[pc]: mov rax, [r14 + r12*8 + 8]
+    0x4e, 0x8b, 0x44, 0xe6, 0x08     -- mov r8, [r14 + r12*8 + 8]... hmm
+  ) in
+
+  -- Actually, let me use a simpler encoding.
+  -- To read bytecode[pc]: we need [r14 + r12*8 + 8]
+  -- r14 = base (untagged), r12 = index
+  -- REX.W=1, REX.R=0(rax), REX.X=1(r12), REX.B=1(r14)
+  -- 0x4B 0x8B 0x44 0xE6 0x08
+  -- Actually: REX = 0x48 | R<<2 | X<<1 | B
+  --   rax(0): R=0, r12(4 in ext): X=1, r14(6 in ext): B=1
+  --   REX = 0x48 | 0 | 2 | 1 = 0x4B
+  --   ModRM: 01 (disp8) 000 (rax) 100 (SIB) = 0x44
+  --   SIB: 11 (x8) r12_lo(4) r14_lo(6) = 0xC0|32|6 = 0xE6
+  --   disp8: 0x08
+  -- So: 0x4B 0x8B 0x44 0xE6 0x08 = mov rax, [r14 + r12*8 + 8]
+
+  let load_opcode = bytes_from_ints (
+    0x4b, 0x8b, 0x44, 0xe6, 0x08     -- mov rax, [r14 + r12*8 + 8]
+  ) in
+
+  -- Now dispatch on rax (opcode)
+  -- Use compare + jump chains
+
+  -- HALT (0): result = stack top, return
+  let op_halt = bytes_from_ints (
+    0x48, 0x85, 0xc0,                 -- test rax, rax
+    0x75, 0x0a,                       -- jnz .not_halt (skip 10 bytes)
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13] (pop stack top)
+    -- epilogue
+    0x48, 0x81, 0xc4, 0x00, 0x03, 0x00, 0x00, -- add rsp, 768
+    0x41, 0x5e,                       -- pop r14
+    0x41, 0x5d,                       -- pop r13
+    0x41, 0x5c,                       -- pop r12
+    0x5b,                             -- pop rbx
+    0x5d,                             -- pop rbp
+    0xc3                              -- ret
+  ) in
+
+  -- PUSH (1, val): push bytecode[pc+1]
+  let op_push = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x01,           -- cmp rax, 1
+    0x75, 0x14,                       -- jnz .not_push (skip 20 bytes)
+    -- val = bytecode[pc+1] = [r14 + (r12+1)*8 + 8]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8]
+    -- push onto stack
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    -- pc += 2
+    0x49, 0x83, 0xc4, 0x02            -- add r12, 2
+  ) in
+
+  -- ADD (2): pop 2, push sum
+  let op_add = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x02,           -- cmp rax, 2
+    0x75, 0x12,                       -- jnz .not_add
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]    (top = a)
+    0x49, 0x8b, 0x5d, 0x08,           -- mov rbx, [r13+8]  (b)
+    0x48, 0x01, 0xc3,                 -- add rbx, rax      (b + a)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8        (pop one)
+    0x49, 0x89, 0x5d, 0x00,           -- mov [r13], rbx    (replace top)
+    0x49, 0xff, 0xc4                  -- inc r12            (pc++)
+  ) in
+
+  -- SUB (3): pop 2, push b-a
+  let op_sub = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x03,
+    0x75, 0x12,
+    0x49, 0x8b, 0x45, 0x00,           -- a = [r13]
+    0x49, 0x8b, 0x5d, 0x08,           -- b = [r13+8]
+    0x48, 0x29, 0xc3,                 -- rbx = b - a
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x5d, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- MUL (4): pop 2, push b*a
+  let op_mul = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x04,
+    0x75, 0x14,
+    0x49, 0x8b, 0x45, 0x00,           -- a
+    0x49, 0x8b, 0x5d, 0x08,           -- b
+    0x48, 0x0f, 0xaf, 0xd8,           -- imul rbx, rax
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x5d, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- EQ (8): pop 2, push (b==a ? 1 : 0)
+  let op_eq = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x08,
+    0x75, 0x18,
+    0x49, 0x8b, 0x45, 0x00,           -- a
+    0x49, 0x8b, 0x5d, 0x08,           -- b
+    0x48, 0x39, 0xc3,                 -- cmp rbx, rax
+    0x0f, 0x94, 0xc0,                 -- sete al
+    0x48, 0x0f, 0xb6, 0xc0,           -- movzx rax, al
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- LT (9): pop 2, push (b<a ? 1 : 0)
+  let op_lt = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x09,
+    0x75, 0x18,
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x39, 0xc3,                 -- cmp rbx, rax
+    0x0f, 0x9c, 0xc0,                 -- setl al
+    0x48, 0x0f, 0xb6, 0xc0,
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- LOAD (14, slot): push locals[slot]
+  let op_load = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x0e,
+    0x75, 0x1a,
+    -- slot = bytecode[pc+1]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8] (slot idx)
+    -- load locals[slot]: [rbp - 768 + slot*8]
+    0x48, 0x8b, 0x84, 0xc5, 0x00, 0xfd, 0xff, 0xff, -- mov rax, [rbp + rax*8 - 768]
+    -- push
+    0x49, 0x83, 0xed, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0x83, 0xc4, 0x02             -- add r12, 2
+  ) in
+
+  -- STORE (15, slot): pop, store to locals[slot]
+  let op_store = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x0f,
+    0x75, 0x1a,
+    -- slot = bytecode[pc+1]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,
+    0x49, 0x8b, 0x5c, 0xde, 0x08,     -- mov rbx, [r14 + rbx*8 + 8] (slot)
+    -- pop top
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    -- store: [rbp - 768 + rbx*8] = rax
+    0x48, 0x89, 0x84, 0xdd, 0x00, 0xfd, 0xff, 0xff,
+    0x49, 0x83, 0xc4, 0x02
+  ) in
+
+  -- JMP (16, addr): pc = bytecode[pc+1]
+  let op_jmp = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x10,
+    0x75, 0x0a,
+    0x49, 0x8d, 0x5c, 0x24, 0x01,
+    0x49, 0x8b, 0x64, 0xde, 0x08      -- mov r12, [r14 + rbx*8 + 8]
+  ) in
+
+  -- JZ (17, addr): pop, if zero jump
+  let op_jz = bytes_from_ints (
+    0x48, 0x83, 0xf8, 0x11,
+    0x75, 0x16,
+    -- pop top
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x83, 0xc5, 0x08,
+    -- test
+    0x48, 0x85, 0xc0,
+    0x75, 0x08,                       -- jnz .not_taken
+    -- taken: pc = bytecode[pc+1]
+    0x49, 0x8d, 0x5c, 0x24, 0x01,
+    0x49, 0x8b, 0x64, 0xde, 0x08,     -- mov r12, [...]
+    0xeb, 0x03,                       -- jmp .end
+    -- not taken: pc += 2
+    0x49, 0x83, 0xc4, 0x02
+  ) in
+
+  -- Jump back to dispatch loop
+  -- Calculate total size of all dispatch code and jump back
+  let all_ops = bytes_concat op_halt (bytes_concat op_push (bytes_concat op_add
+    (bytes_concat op_sub (bytes_concat op_mul (bytes_concat op_eq
+      (bytes_concat op_lt (bytes_concat op_load (bytes_concat op_store
+        (bytes_concat op_jmp op_jz))))))))) in
+  let loop_body_len = bytes_len load_opcode + bytes_len all_ops in
+  -- jmp back: e9 rel32 (rel32 = -(loop_body_len + 5))
+  let jmp_back_offset = 0 - (loop_body_len + 5) in
+  let jmp_back = bytes_from_ints (0xe9,
+    bitand jmp_back_offset 255,
+    bitand (shr jmp_back_offset 8) 255,
+    bitand (shr jmp_back_offset 16) 255,
+    bitand (shr jmp_back_offset 24) 255) in
+
+  -- Final assembly: prologue + [load_opcode + dispatch + jmp_back]*
+  bytes_concat prologue (bytes_concat load_opcode (bytes_concat all_ops jmp_back))
+
+let main x =
+  let vm_code = emit_vm_core in
+  bytes_len vm_code

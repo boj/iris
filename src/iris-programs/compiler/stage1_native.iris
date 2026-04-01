@@ -1,0 +1,247 @@
+-- stage1_native.iris — Directly emit a native stage1 binary.
+--
+-- Produces a minimal x86-64 ELF binary that executes bytecodes.
+-- No compilation of components at runtime — everything is hand-assembled.
+--
+-- Binary layout:
+--   [64 bytes] ELF header
+--   [56 bytes] Program header
+--   [N bytes]  Startup stub (argv parse + call VM + print + exit)
+--   [M bytes]  VM function (dispatch loop)
+--   [K bytes]  Bytecode data (tuple in memory)
+--
+-- Usage: iris-stage0 run stage1_native.iris <output_path>
+
+let le32 v =
+  bytes_from_ints (bitand v 255, bitand (shr v 8) 255,
+    bitand (shr v 16) 255, bitand (shr v 24) 255)
+
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in
+  let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in
+  let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in
+  let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ELF64 header (64 bytes)
+let elf_header file_size mem_size entry_offset =
+  bytes_concat (bytes_from_ints (
+    0x7f, 0x45, 0x4c, 0x46,  -- magic
+    0x02,                     -- 64-bit
+    0x01,                     -- little endian
+    0x01,                     -- ELF version
+    0x00,                     -- OS/ABI
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  -- padding
+    0x02, 0x00,               -- ET_EXEC
+    0x3e, 0x00                -- x86-64
+  )) (bytes_concat (le32 1) (bytes_concat  -- ELF version
+    (le64 (4194304 + entry_offset))        -- e_entry (vaddr)
+    (bytes_concat (le64 64)                -- e_phoff
+      (bytes_concat (le64 0)               -- e_shoff
+        (bytes_concat (le32 0)             -- e_flags
+          (bytes_concat (bytes_from_ints (0x40, 0x00))  -- e_ehsize=64
+            (bytes_concat (bytes_from_ints (0x38, 0x00))  -- e_phentsize=56
+              (bytes_concat (bytes_from_ints (0x01, 0x00))  -- e_phnum=1
+                (bytes_from_ints (0x00, 0x00, 0x00, 0x00, 0x00, 0x00))))))))))
+
+-- Program header (56 bytes): single PT_LOAD
+let prog_header file_size mem_size =
+  bytes_concat (le32 1) (bytes_concat (le32 5) (bytes_concat  -- PT_LOAD, PF_R|PF_X
+    (le64 0) (bytes_concat                                     -- p_offset
+      (le64 4194304) (bytes_concat                             -- p_vaddr
+        (le64 4194304) (bytes_concat                           -- p_paddr
+          (le64 file_size) (bytes_concat                       -- p_filesz
+            (le64 mem_size)                                    -- p_memsz
+            (le64 4096)))))))                                  -- p_align
+
+-- Inline atoi: parse decimal from null-terminated string at [rdi]
+-- Returns result in rax. Handles negative numbers.
+let emit_atoi = bytes_from_ints (
+  -- xor rax, rax (result = 0)
+  0x48, 0x31, 0xc0,
+  -- xor rcx, rcx (sign = 0)
+  0x48, 0x31, 0xc9,
+  -- check leading '-'
+  0x80, 0x3f, 0x2d,       -- cmp byte [rdi], '-'
+  0x75, 0x04,              -- jne .digits
+  0x48, 0xff, 0xc1,       -- inc rcx (sign = 1)
+  0x48, 0xff, 0xc7,       -- inc rdi
+  -- .digits:
+  0x0f, 0xb6, 0x17,       -- movzx edx, byte [rdi]
+  0x80, 0xfa, 0x30,       -- cmp dl, '0'
+  0x72, 0x10,              -- jb .done
+  0x80, 0xfa, 0x39,       -- cmp dl, '9'
+  0x77, 0x0b,              -- ja .done
+  0x48, 0x6b, 0xc0, 0x0a, -- imul rax, 10
+  0x80, 0xea, 0x30,       -- sub dl, '0'
+  0x48, 0x0f, 0xb6, 0xd2, -- movzx rdx, dl
+  0x48, 0x01, 0xd0,       -- add rax, rdx
+  0x48, 0xff, 0xc7,       -- inc rdi
+  0xeb, 0xe2,              -- jmp .digits
+  -- .done:
+  0x48, 0x85, 0xc9,       -- test rcx, rcx
+  0x74, 0x03,              -- jz .positive
+  0x48, 0xf7, 0xd8,       -- neg rax
+  0xc3                      -- ret
+)
+
+-- Print i64 in rax as decimal + newline to stdout
+let emit_print_int = bytes_from_ints (
+  -- Save value
+  0x49, 0x89, 0xc4,       -- mov r12, rax
+  -- Handle negative
+  0x45, 0x31, 0xc0,       -- xor r8d, r8d (neg_flag = 0)
+  0x48, 0x85, 0xc0,       -- test rax, rax
+  0x79, 0x0a,              -- jns .positive
+  0x48, 0xf7, 0xd8,       -- neg rax
+  0x49, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, -- mov r8, 1
+  -- .positive: convert to decimal on stack
+  0x48, 0x8d, 0x4c, 0x24, 0xf0, -- lea rcx, [rsp-16] (buffer end)
+  0xc6, 0x01, 0x0a,       -- mov byte [rcx], '\n'
+  0x48, 0xff, 0xc9,       -- dec rcx
+  0x49, 0xba, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, -- mov r10, 10
+  -- .digit_loop:
+  0x48, 0x31, 0xd2,       -- xor rdx, rdx
+  0x49, 0xf7, 0xf2,       -- div r10
+  0x80, 0xc2, 0x30,       -- add dl, '0'
+  0x88, 0x11,              -- mov [rcx], dl
+  0x48, 0xff, 0xc9,       -- dec rcx
+  0x48, 0x85, 0xc0,       -- test rax, rax
+  0x75, 0xef,              -- jnz .digit_loop
+  -- Handle negative sign
+  0x4d, 0x85, 0xc0,       -- test r8, r8
+  0x74, 0x04,              -- jz .write
+  0xc6, 0x01, 0x2d,       -- mov byte [rcx], '-'
+  0x48, 0xff, 0xc9,       -- dec rcx
+  -- .write: sys_write(1, rcx+1, end-rcx)
+  0x48, 0xff, 0xc1,       -- inc rcx (start of string)
+  0x48, 0x8d, 0x54, 0x24, 0xf1, -- lea rdx, [rsp-15] (end+1 = past newline)
+  0x48, 0x29, 0xca,       -- sub rdx, rcx (length)
+  0x48, 0x89, 0xce,       -- mov rsi, rcx (buffer)
+  0xbf, 0x01, 0x00, 0x00, 0x00, -- mov edi, 1 (stdout)
+  0xb8, 0x01, 0x00, 0x00, 0x00, -- mov eax, 1 (SYS_write)
+  0x0f, 0x05,              -- syscall
+  0xc3                      -- ret
+)
+
+-- Build the startup stub
+-- 1. Parse argv[1] → rsi (input)
+-- 2. Load bytecode data address → rdi (tagged)
+-- 3. Call VM
+-- 4. Print result
+-- 5. Exit
+let build_stub vm_offset bytecode_offset =
+  let stub = bytes_from_ints (
+    -- mov rbp, rsp; load argc
+    0x48, 0x89, 0xe5,           -- mov rbp, rsp
+    -- sub rsp, 64 (scratch space)
+    0x48, 0x83, 0xec, 0x40,
+    -- Parse argv[1]: mov rdi, [rbp+16]
+    0x48, 0x8b, 0x7d, 0x10      -- mov rdi, [rbp+16]
+  ) in
+  -- Call atoi (immediately follows)
+  let atoi_call = emit_atoi in
+  -- rax = parsed integer. Move to rsi (input arg for VM)
+  let setup_vm = bytes_from_ints (
+    0x48, 0x89, 0xc6             -- mov rsi, rax (input)
+  ) in
+  -- Load bytecode address: lea rdi, [rip + offset_to_bytecode_data]
+  -- The bytecode data is at bytecode_offset relative to the binary start.
+  -- Current position (after this lea) we need to know to compute rip-relative.
+  -- For now, use a placeholder and compute later.
+  -- Actually: rdi = bytecode_data_address | 1 (tagged)
+  -- Virtual address = 0x400000 + bytecode_offset
+  let bc_vaddr = 4194304 + bytecode_offset in
+  -- mov rdi, bc_vaddr | 1 (tagged pointer)
+  let load_bc_ptr = bytes_concat (bytes_from_ints (0x48, 0xbf))
+    (le64 (bc_vaddr + 1)) in
+  -- Call VM function (at vm_offset)
+  -- The VM is at a known position. Use call rel32.
+  let stub_so_far = bytes_len stub + bytes_len atoi_call + bytes_len setup_vm + bytes_len load_bc_ptr in
+  let call_site = 120 + stub_so_far in  -- 120 = ehdr(64) + phdr(56)
+  let vm_vaddr = 4194304 + vm_offset in
+  -- call rel32: target = vm_vaddr, current = call_site + 5
+  -- rel32 = vm_vaddr - (call_site + 5)... but we're computing file offsets, not vaddr
+  -- Since the binary is loaded at 0x400000 with offset 0:
+  -- call target = vm_offset (from file start), current pc = call_site
+  -- rel32 = vm_offset - (call_site + 5)... but need to account for vaddr base
+  -- Actually: call rel32 where rel32 = target_vaddr - (current_vaddr + 5)
+  -- current_vaddr = 0x400000 + call_site = 0x400000 + 120 + stub_so_far
+  -- target_vaddr = 0x400000 + vm_offset
+  -- rel32 = (0x400000 + vm_offset) - (0x400000 + 120 + stub_so_far + 5)
+  --        = vm_offset - 120 - stub_so_far - 5
+  let call_rel = vm_offset - 120 - stub_so_far - 5 in
+  let call_vm = bytes_concat (bytes_from_ints (0xe8)) (le32 call_rel) in
+  -- Print result (rax) and exit
+  -- Call print_int (inline — it follows)
+  -- Then: xor edi, edi; mov eax, 231; syscall (sys_exit_group)
+  let print_call = emit_print_int in
+  let exit_code = bytes_from_ints (
+    0x31, 0xff,                 -- xor edi, edi
+    0xb8, 0xe7, 0x00, 0x00, 0x00, -- mov eax, 231 (sys_exit_group)
+    0x0f, 0x05                  -- syscall
+  ) in
+  bytes_concat stub (bytes_concat atoi_call (bytes_concat setup_vm
+    (bytes_concat load_bc_ptr (bytes_concat call_vm
+      (bytes_concat print_call exit_code)))))
+
+-- Load the hand-assembled native VM
+let load_vm_bytes x =
+  let vm_src = file_read "src/iris-programs/compiler/native_vm.iris" in
+  let vm_m = compile_source_json vm_src in
+  module_eval (vm_m.0) 0 ()
+
+-- Emit bytecode data as raw bytes in memory (tuple format)
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in
+  fold header (\acc i ->
+    if i >= n then acc
+    else bytes_concat acc (le64 (tuple_get bc i))
+  ) n
+
+-- Main: build the stage1 binary
+let main output_path arg =
+  -- Load VM code
+  let vm_code = load_vm_bytes 0 in
+  let vm_size = bytes_len vm_code in
+
+  -- Build bytecode data
+  -- For proof of concept: fold 0 (\acc i -> acc + i) n = sum(0..n-1)
+  let bc = (1, 0, 14, 0, 25, 12, 15, 2, 15, 1, 14, 1, 14, 2, 2, 26, 0) in
+  let bc_data = emit_bc_data bc in
+  let bc_size = bytes_len bc_data in
+
+  -- Compute layout:
+  -- [64 ehdr] [56 phdr] [stub] [vm_code] [bc_data]
+  let header_total = 120 in
+  let stub_placeholder_size = 300 in  -- approximate, will recompute
+  let vm_offset = header_total + stub_placeholder_size in
+  let bc_offset = vm_offset + vm_size in
+
+  -- Build stub with correct offsets
+  let stub = build_stub vm_offset bc_offset in
+  let stub_size = bytes_len stub in
+
+  -- Recompute with actual stub size
+  let vm_offset2 = header_total + stub_size in
+  let bc_offset2 = vm_offset2 + vm_size in
+  let stub2 = build_stub vm_offset2 bc_offset2 in
+  let stub_size2 = bytes_len stub2 in
+
+  -- Final layout
+  let file_size = header_total + stub_size2 + vm_size + bc_size in
+  let mem_size = file_size + 4096 in
+
+  -- Assemble
+  let ehdr = elf_header file_size mem_size header_total in
+  let phdr = prog_header file_size mem_size in
+  let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub2
+    (bytes_concat vm_code bc_data))) in
+
+  -- Write
+  let r = file_write_bytes output_path binary in
+  debug_print (str_concat "stage1: " (str_concat (int_to_string (bytes_len binary)) " bytes"))
