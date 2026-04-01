@@ -223,3 +223,12 @@
 
 **Assistant:** Background task was from the earlier import test that timed out — already addressed. The import feature is WIP as described above.
 
+
+---
+
+**2026-03-31 17:26**
+
+**Human:** Investigate it
+
+**Assistant:** Single-function `helper` through IRIS pipeline: 6 ✓. Multi-function `helper` through Rust run command: 6 ✓. But multi-function `helper` through compile_source_json (IRIS pipeline): 0.
+
