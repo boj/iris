@@ -211,7 +211,7 @@ let lower ast src =
                   -- acc.1: TupleAccess(1, Var(acc))
                   let acc_1 = (18, 1, list_append mt (4, acc_hash, mt)) in
                   -- acc.0 == 1: BinOp(eq, acc.0, 1)
-                  let done_check = (10, 32, (acc_0, (0, 1, mt))) in
+                  let done_check = (10, 5, (acc_0, (0, 1, mt))) in
                   -- (1, <base>): Tuple(1, base)
                   let done_result = (17, 0, list_append (list_append mt (0, 1, mt)) base_ast) in
                   -- (0, <rec_arg>): Tuple(0, rec_arg)
@@ -292,8 +292,38 @@ let lower ast src =
                   -- Wrap in \a -> \b -> extract (curried)
                   let inner_lam = (13, p1_hash, list_append mt extract, 0) in
                   (13, p0_hash, list_append mt inner_lam, 0)
+                else if n_pp == 3 then
+                  -- 3-arg tail recursion: state (done, a, b, c)
+                  let p0_h = (list_nth prior_params 0).1 in
+                  let p1_h = (list_nth prior_params 1).1 in
+                  let p2_h = (list_nth prior_params 2).1 in
+                  let cond_ast = (prior_body.2).0 in
+                  let base_ast = (prior_body.2).1 in
+                  let else_br = (prior_body.2).2 in
+                  let a2 = (else_br.2).0 in let a1_app = (a2.2).0 in
+                  let ra0 = (a1_app.2).1 in let ra1 = (a2.2).1 in let ra2 = (else_br.2).1 in
+                  let st_h = 295 in
+                  let st0 = (18, 0, list_append mt (4, st_h, mt)) in
+                  let st1 = (18, 1, list_append mt (4, st_h, mt)) in
+                  let st2 = (18, 2, list_append mt (4, st_h, mt)) in
+                  let st3 = (18, 3, list_append mt (4, st_h, mt)) in
+                  let dc = (10, 5, (st0, (0, 1, mt))) in
+                  let dr = (17, 0, list_append (list_append (list_append (list_append mt (0, 1, mt)) base_ast) (0, 0, mt)) (0, 0, mt)) in
+                  let cr = (17, 0, list_append (list_append (list_append (list_append mt (0, 0, mt)) ra0) ra1) ra2) in
+                  let ii = (15, 0, (cond_ast, dr, cr)) in
+                  let lp2 = (14, p2_h, (st3, ii)) in
+                  let lp1 = (14, p1_h, (st2, lp2)) in
+                  let lp0 = (14, p0_h, (st1, lp1)) in
+                  let sb = (15, 0, (dc, (4, st_h, mt), lp0)) in
+                  let sf = (13, st_h, list_append mt sb, 232) in
+                  let it = (17, 0, list_append (list_append (list_append (list_append mt (0, 0, mt)) (4, p0_h, mt)) (4, p1_h, mt)) (4, p2_h, mt)) in
+                  let fa = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), it)), sf)), (0, 1000000, mt))) in
+                  let ex = (18, 1, list_append mt fa) in
+                  let l2 = (13, p2_h, list_append mt ex, 0) in
+                  let l1 = (13, p1_h, list_append mt l2, 0) in
+                  (13, p0_h, list_append mt l1, 0)
                 else
-                  -- 3+ param tail rec: fall through to simple lambda
+                  -- 4+ param: fall through to simple lambda
                   fold prior_body
                     (\inner j ->
                       let rj = n_pp - 1 - j in
