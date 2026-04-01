@@ -1,0 +1,243 @@
+-- compile_bytecode.iris — Compile a SemanticGraph to stack-based bytecodes.
+--
+-- Bytecode is a flat tuple of integers. Instructions are variable-length:
+--   HALT(0)                 — stop, TOS is result
+--   PUSH(1, val)            — push integer constant
+--   ADD(2)..MOD(6)          — pop 2, push result (arithmetic)
+--   NEG(7)                  — pop 1, negate
+--   EQ(8) LT(9) GT(10)     — pop 2, push 0/1
+--   NE(11) LE(12) GE(13)   — pop 2, push 0/1
+--   LOAD(14, slot)          — push locals[slot]
+--   STORE(15, slot)         — pop, store to locals[slot]
+--   JMP(16, addr)           — unconditional jump
+--   JZ(17, addr)            — pop, jump if zero
+--   MAKE_TUPLE(18, n)       — pop n values, push tuple
+--   TUPLE_GET(19, idx)      — pop tuple, push element
+--   DUP(20)                 — duplicate TOS
+--   POP(21)                 — discard TOS
+--   CALL(22, addr)          — push pc+3, jump to addr
+--   RET(23)                 — pop return addr, jump
+--   PUSH_F64(24, bits)      — push float (as bits)
+--   FOLD_BEGIN(25)          — pop limit, pop step_addr, pop init; start fold
+--   FOLD_END(26)            — end of fold body (loop back)
+--   SWAP(27)                — swap top 2
+--   PRIM(28, opcode, nargs) — call primitive, pop nargs, push result
+--
+-- The compiler walks the SemanticGraph depth-first. For each node, it emits
+-- code to compute the node's value and leave it on the stack.
+--
+-- Usage: compile_bytecode program → bytecodes (tuple of ints)
+
+-- Compile a node: emit bytecodes that compute the node's value onto the stack.
+-- Returns the bytecode tuple.
+-- env: mapping from binder indices to local slots
+
+let compile_node program node_id env next_slot =
+  let kind = graph_get_kind program node_id in
+  let children = graph_outgoing program node_id in
+  let nc = list_len children in
+
+  -- Lit (kind 5): push constant
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag program node_id in
+    let lv = graph_get_lit_value program node_id in
+    if tt == 255 then
+      -- InputRef: load from local slot
+      -- Map binder index to local slot via env
+      let slot = fold 0 (\s i ->
+        if i >= list_len env then s
+        else
+          let e = list_nth env i in
+          if e.0 == lv then e.1 else s
+      ) (list_len env) in
+      ((14, slot), env, next_slot)
+    else if tt == 2 then
+      -- Float64
+      let bits = float_to_bits lv in
+      ((24, bits), env, next_slot)
+    else
+      -- Integer
+      ((1, lv), env, next_slot)
+
+  -- Prim (kind 0): compile children, emit operation
+  else if kind == 0 then
+    let opcode = graph_get_prim_op program node_id in
+    -- Map SemanticGraph prim opcodes to bytecode ops
+    let bc_op = if opcode == 0 then 2        -- add
+                else if opcode == 1 then 3    -- sub
+                else if opcode == 2 then 4    -- mul
+                else if opcode == 3 then 5    -- div
+                else if opcode == 4 then 6    -- mod
+                else if opcode == 5 then 7    -- neg (unary)
+                else if opcode == 32 then 8   -- eq
+                else if opcode == 33 then 11  -- ne
+                else if opcode == 34 then 9   -- lt
+                else if opcode == 35 then 10  -- gt
+                else if opcode == 36 then 12  -- le
+                else if opcode == 37 then 13  -- ge
+                else 0 in
+    if bc_op >= 2 then
+      if nc == 2 then
+        -- Binary op: compile child 0, child 1, emit op
+        let c0 = list_nth children 0 in
+        let c1 = list_nth children 1 in
+        let r0 = compile_node program c0 env next_slot in
+        let r1 = compile_node program c1 (r0.1) (r0.2) in
+        (list_concat (list_concat (r0.0) (r1.0)) (bc_op,), r1.1, r1.2)
+      else if nc == 1 then
+        -- Unary op: compile child, emit op
+        let c0 = list_nth children 0 in
+        let r0 = compile_node program c0 env next_slot in
+        (list_concat (r0.0) (bc_op,), r0.1, r0.2)
+      else ((1, 0), env, next_slot)
+    else
+      -- Unknown prim: emit PRIM instruction
+      -- Compile all children first
+      let child_code = fold ((), env, next_slot) (\st i ->
+        if i >= nc then st
+        else
+          let cid = list_nth children i in
+          let r = compile_node program cid (st.1) (st.2) in
+          (list_concat (st.0) (r.0), r.1, r.2)
+      ) nc in
+      (list_concat (child_code.0) (28, opcode, nc), child_code.1, child_code.2)
+
+  -- Guard (kind 17): if/then/else
+  else if kind == 17 then
+    let cond_id = list_nth children 0 in
+    let then_id = list_nth children 1 in
+    let else_id = list_nth children 2 in
+    -- Compile condition
+    let rc = compile_node program cond_id env next_slot in
+    -- Compile then branch
+    let rt = compile_node program then_id (rc.1) (rc.2) in
+    let then_code = rt.0 in
+    let then_len = list_len then_code in
+    -- Compile else branch
+    let re = compile_node program else_id (rt.1) (rt.2) in
+    let else_code = re.0 in
+    let else_len = list_len else_code in
+    -- Emit: cond_code + JZ(skip_then) + then_code + JMP(skip_else) + else_code
+    let cond_code = rc.0 in
+    let cond_len = list_len cond_code in
+    -- JZ jumps over then_code + JMP(2)
+    let jz_target = cond_len + 2 + then_len + 2 in
+    -- JMP jumps over else_code
+    let jmp_target = cond_len + 2 + then_len + 2 + else_len in
+    let full = list_concat cond_code (17, jz_target) in
+    let full2 = list_concat full then_code in
+    let full3 = list_concat full2 (16, jmp_target) in
+    let full4 = list_concat full3 else_code in
+    (full4, re.1, re.2)
+
+  -- Tuple (kind 11): compile children, make tuple
+  else if kind == 11 then
+    let child_code = fold ((), env, next_slot) (\st i ->
+      if i >= nc then st
+      else
+        let cid = list_nth children i in
+        let r = compile_node program cid (st.1) (st.2) in
+        (list_concat (st.0) (r.0), r.1, r.2)
+    ) nc in
+    (list_concat (child_code.0) (18, nc), child_code.1, child_code.2)
+
+  -- Project (kind 13): compile child, get field
+  else if kind == 13 then
+    let fi = graph_get_field_index program node_id in
+    let c0 = list_nth children 0 in
+    let r0 = compile_node program c0 env next_slot in
+    (list_concat (r0.0) (19, fi), r0.1, r0.2)
+
+  -- Fold (kind 8): compile base, step, limit
+  else if kind == 8 then
+    let base_id = list_nth children 0 in
+    let step_id = list_nth children 1 in
+    let limit_id = list_nth children 2 in
+    -- Compile base → push initial value
+    let rb = compile_node program base_id env next_slot in
+    -- Compile limit → push count
+    let rl = compile_node program limit_id (rb.1) (rb.2) in
+    -- The step function is a Lambda → compile its body
+    -- Bind acc and index to slots
+    let step_kind = graph_get_kind program step_id in
+    if step_kind == 2 then
+      -- Lambda: \acc -> (maybe \idx -> body)
+      let outer_binder = graph_get_binder program step_id in
+      let outer_idx = bitand outer_binder 255 in
+      let step_children = graph_outgoing program step_id in
+      let body_id = list_nth step_children 0 in
+      let inner_kind = graph_get_kind program body_id in
+      let acc_slot = rl.2 in
+      let idx_slot = acc_slot + 1 in
+      let actual_body = if inner_kind == 2 then
+        let inner_binder = graph_get_binder program body_id in
+        let inner_idx = bitand inner_binder 255 in
+        let ic = graph_outgoing program body_id in
+        list_nth ic 0
+      else body_id in
+      let inner_binder_idx = if inner_kind == 2 then
+        bitand (graph_get_binder program body_id) 255
+      else 0 in
+      -- Add binder→slot mappings to env
+      let env2 = list_append (rl.1) (outer_idx, acc_slot) in
+      let env3 = if inner_kind == 2 then list_append env2 (inner_binder_idx, idx_slot) else env2 in
+      -- Compile fold body
+      let rbody = compile_node program actual_body env3 (idx_slot + 1) in
+      let body_code = rbody.0 in
+      let body_len = list_len body_code in
+      -- Emit: base_code + limit_code + FOLD_BEGIN + STORE acc + STORE idx + body_code + FOLD_END
+      -- FOLD_BEGIN pops limit and sets up loop counter
+      -- Each iteration: store acc from stack, store idx, run body, result replaces acc
+      let code = list_concat (list_concat (rb.0) (rl.0)) (25, body_len + 6) in
+      -- STORE idx (loop counter goes to idx_slot)
+      let code2 = list_concat code (15, idx_slot) in
+      -- STORE acc (current accumulator)
+      let code3 = list_concat code2 (15, acc_slot) in
+      -- LOAD acc for body to use
+      let code4 = list_concat code3 (14, acc_slot) in
+      let code5 = list_concat code4 body_code in
+      -- FOLD_END: store result as new acc, increment counter, loop
+      let code6 = list_concat code5 (26,) in
+      (code6, rl.1, rbody.2)
+    else
+      -- Non-lambda step: just emit base code
+      (rb.0, rb.1, rb.2)
+
+  -- Lambda (kind 2): emit as function address (for fold step, handled above)
+  else if kind == 2 then
+    let body_children = graph_outgoing program node_id in
+    let body_id = list_nth body_children 0 in
+    let binder = graph_get_binder program node_id in
+    let binder_idx = bitand binder 255 in
+    let slot = next_slot in
+    let env2 = list_append env (binder_idx, slot) in
+    compile_node program body_id env2 (slot + 1)
+
+  -- Let (kind 3): compile value, bind, compile body
+  else if kind == 3 then
+    -- Let has edges: port 0 = binding value, port 1 = body (continuation)
+    -- The binding edge has label 2, continuation has label 3
+    let val_id = list_nth children 0 in
+    let body_id = list_nth children 1 in
+    let binder = graph_get_binder program node_id in
+    let binder_idx = bitand binder 255 in
+    let slot = next_slot in
+    -- Compile value
+    let rv = compile_node program val_id env next_slot in
+    -- Store to slot
+    let store_code = list_concat (rv.0) (15, slot) in
+    -- Compile body with binding in env
+    let env2 = list_append (rv.1) (binder_idx, slot) in
+    let rb = compile_node program body_id env2 (slot + 1) in
+    (list_concat store_code (rb.0), rb.1, rb.2)
+
+  -- Default: push 0
+  else ((1, 0), env, next_slot)
+
+-- Entry point: compile program to bytecode tuple
+let compile_bytecode program =
+  let root = graph_get_root program in
+  let result = compile_node program root () 0 in
+  list_concat (result.0) (0,)  -- append HALT
+
+let main x = debug_print "compile_bytecode: use compile_bytecode(program)"

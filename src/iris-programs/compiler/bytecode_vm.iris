@@ -1,0 +1,329 @@
+-- bytecode_vm.iris — Stack-based bytecode interpreter for IRIS.
+--
+-- Executes bytecodes produced by compile_bytecode.iris.
+-- The VM is a fold loop with a dispatch on opcodes — AOT-compilable.
+--
+-- State: (pc, stack, locals, done_flag)
+--   pc: program counter (index into bytecode tuple)
+--   stack: value stack as nested tuple (val, rest) with () as empty
+--   locals: tuple of local variable values (fixed size, pre-allocated)
+--   done_flag: 1 when HALT reached
+--
+-- Usage: vm_run bytecode input → result value
+
+-- Stack operations (nested-tuple stack)
+let stack_push stack val = (val, stack)
+let stack_pop stack = stack  -- returns (top, rest)
+let stack_top stack = stack.0
+let stack_rest stack = stack.1
+
+-- Local variable operations (tuple-based, max 64 slots)
+let locals_new x = fold () (\acc i -> list_append acc 0) 64
+let locals_get locals slot = tuple_get locals slot
+let locals_set locals slot val =
+  -- Build new tuple with val at slot
+  fold () (\acc i ->
+    if i >= 64 then acc
+    else if i == slot then list_append acc val
+    else list_append acc (tuple_get locals i)
+  ) 64
+
+-- Read bytecode at position
+let bc_read code pc = tuple_get code pc
+
+-- The VM: execute one instruction per fold iteration
+-- Returns the final value (top of stack when HALT reached)
+let vm_run code input =
+  let locals = locals_new 0 in
+  -- Store input as local 0
+  let locals_init = locals_set locals 0 input in
+  -- State: (pc, stack, locals, done)
+  let init_state = (0, (input, ()), locals_init, 0) in
+  let final_state = fold init_state (\st _i ->
+    if st.3 == 1 then st  -- done
+    else
+      let pc = st.0 in
+      let stack = st.1 in
+      let locals = st.2 in
+      let op = bc_read code pc in
+
+      -- HALT (0): stop
+      if op == 0 then (pc, stack, locals, 1)
+
+      -- PUSH (1, val): push integer
+      else if op == 1 then
+        let val = bc_read code (pc + 1) in
+        (pc + 2, stack_push stack val, locals, 0)
+
+      -- ADD (2): pop 2, push sum
+      else if op == 2 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (b + a), locals, 0)
+
+      -- SUB (3)
+      else if op == 3 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (b - a), locals, 0)
+
+      -- MUL (4)
+      else if op == 4 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (b * a), locals, 0)
+
+      -- DIV (5)
+      else if op == 5 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (b / a), locals, 0)
+
+      -- MOD (6)
+      else if op == 6 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (b % a), locals, 0)
+
+      -- NEG (7)
+      else if op == 7 then
+        let a = stack_top stack in
+        (pc + 1, stack_push (stack_rest stack) (0 - a), locals, 0)
+
+      -- EQ (8)
+      else if op == 8 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if a == b then 1 else 0), locals, 0)
+
+      -- LT (9)
+      else if op == 9 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if b < a then 1 else 0), locals, 0)
+
+      -- GT (10)
+      else if op == 10 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if b > a then 1 else 0), locals, 0)
+
+      -- NE (11)
+      else if op == 11 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if a != b then 1 else 0), locals, 0)
+
+      -- LE (12)
+      else if op == 12 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if b <= a then 1 else 0), locals, 0)
+
+      -- GE (13)
+      else if op == 13 then
+        let a = stack_top stack in
+        let b = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        (pc + 1, stack_push rest (if b >= a then 1 else 0), locals, 0)
+
+      -- LOAD (14, slot)
+      else if op == 14 then
+        let slot = bc_read code (pc + 1) in
+        let val = locals_get locals slot in
+        (pc + 2, stack_push stack val, locals, 0)
+
+      -- STORE (15, slot)
+      else if op == 15 then
+        let slot = bc_read code (pc + 1) in
+        let val = stack_top stack in
+        let new_locals = locals_set locals slot val in
+        (pc + 2, stack_rest stack, new_locals, 0)
+
+      -- JMP (16, addr)
+      else if op == 16 then
+        let addr = bc_read code (pc + 1) in
+        (addr, stack, locals, 0)
+
+      -- JZ (17, addr)
+      else if op == 17 then
+        let addr = bc_read code (pc + 1) in
+        let val = stack_top stack in
+        let rest = stack_rest stack in
+        if val == 0 then (addr, rest, locals, 0)
+        else (pc + 2, rest, locals, 0)
+
+      -- MAKE_TUPLE (18, n)
+      else if op == 18 then
+        let n = bc_read code (pc + 1) in
+        -- Pop n values from stack, create tuple
+        let popped = fold (stack, ()) (\ps _j ->
+          if _j >= n then ps
+          else
+            let v = stack_top (ps.0) in
+            (stack_rest (ps.0), list_append (ps.1) v)
+        ) n in
+        (pc + 2, stack_push (popped.0) (popped.1), locals, 0)
+
+      -- TUPLE_GET (19, idx)
+      else if op == 19 then
+        let idx = bc_read code (pc + 1) in
+        let tup = stack_top stack in
+        let val = tuple_get tup idx in
+        (pc + 2, stack_push (stack_rest stack) val, locals, 0)
+
+      -- DUP (20)
+      else if op == 20 then
+        let val = stack_top stack in
+        (pc + 1, stack_push stack val, locals, 0)
+
+      -- POP (21)
+      else if op == 21 then
+        (pc + 1, stack_rest stack, locals, 0)
+
+      -- CALL (22, addr) — not yet used
+      else if op == 22 then
+        let addr = bc_read code (pc + 1) in
+        (addr, stack_push stack (pc + 2), locals, 0)
+
+      -- RET (23)
+      else if op == 23 then
+        let ret_addr = stack_top stack in
+        (ret_addr, stack_rest stack, locals, 0)
+
+      -- PUSH_F64 (24, bits) — push float
+      else if op == 24 then
+        let bits = bc_read code (pc + 1) in
+        let fval = bits_to_float bits in
+        (pc + 2, stack_push stack fval, locals, 0)
+
+      -- FOLD_BEGIN (25, body_len)
+      else if op == 25 then
+        let body_len = bc_read code (pc + 1) in
+        -- Stack has: [limit, base, ...]
+        -- limit was pushed last (on top), base pushed first (below)
+        let limit = stack_top stack in
+        let acc = stack_top (stack_rest stack) in
+        let rest = stack_rest (stack_rest stack) in
+        -- Execute fold: iterate body_len bytecodes, `limit` times
+        let body_start = pc + 2 in
+        let fold_result = fold (acc, 0) (\fs _j ->
+          if fs.1 >= limit then fs
+          else
+            -- Store acc and index to locals via STORE instructions in body
+            -- The body starts with STORE idx, STORE acc, LOAD acc
+            -- Execute body bytecodes
+            let body_state = fold (body_start, (fs.0, ()), locals, 0) (\bs _k ->
+              if bs.3 == 1 then bs  -- body done (hit FOLD_END)
+              else if bs.0 >= body_start + body_len then (bs.0, bs.1, bs.2, 1)
+              else
+                let bop = bc_read code (bs.0) in
+                -- Dispatch (reuse main dispatch logic)
+                -- STORE (15)
+                if bop == 15 then
+                  let sl = bc_read code (bs.0 + 1) in
+                  let v = stack_top (bs.1) in
+                  (bs.0 + 2, stack_rest (bs.1), locals_set (bs.2) sl v, 0)
+                -- LOAD (14)
+                else if bop == 14 then
+                  let sl = bc_read code (bs.0 + 1) in
+                  (bs.0 + 2, stack_push (bs.1) (locals_get (bs.2) sl), 0)
+                -- PUSH (1)
+                else if bop == 1 then
+                  let v = bc_read code (bs.0 + 1) in
+                  (bs.0 + 2, stack_push (bs.1) v, bs.2, 0)
+                -- Arithmetic and comparison
+                else if bop >= 2 then if bop <= 13 then
+                  let a = stack_top (bs.1) in
+                  let b = stack_top (stack_rest (bs.1)) in
+                  let r = stack_rest (stack_rest (bs.1)) in
+                  let result = if bop == 2 then b + a
+                    else if bop == 3 then b - a
+                    else if bop == 4 then b * a
+                    else if bop == 5 then b / a
+                    else if bop == 6 then b % a
+                    else if bop == 8 then (if a == b then 1 else 0)
+                    else if bop == 9 then (if b < a then 1 else 0)
+                    else if bop == 10 then (if b > a then 1 else 0)
+                    else if bop == 11 then (if a != b then 1 else 0)
+                    else if bop == 12 then (if b <= a then 1 else 0)
+                    else if bop == 13 then (if b >= a then 1 else 0)
+                    else 0 in
+                  (bs.0 + 1, stack_push r result, bs.2, 0)
+                else (bs.0 + 1, bs.1, bs.2, 0)
+                else if bop == 18 then
+                  -- MAKE_TUPLE
+                  let n = bc_read code (bs.0 + 1) in
+                  let popped = fold ((bs.1), ()) (\ps _m ->
+                    if _m >= n then ps
+                    else (stack_rest (ps.0), list_append (ps.1) (stack_top (ps.0)))
+                  ) n in
+                  (bs.0 + 2, stack_push (popped.0) (popped.1), bs.2, 0)
+                else if bop == 19 then
+                  -- TUPLE_GET
+                  let idx = bc_read code (bs.0 + 1) in
+                  let tup = stack_top (bs.1) in
+                  (bs.0 + 2, stack_push (stack_rest (bs.1)) (tuple_get tup idx), bs.2, 0)
+                else if bop == 17 then
+                  -- JZ
+                  let addr = bc_read code (bs.0 + 1) in
+                  let v = stack_top (bs.1) in
+                  if v == 0 then (addr, stack_rest (bs.1), bs.2, 0)
+                  else (bs.0 + 2, stack_rest (bs.1), bs.2, 0)
+                else if bop == 16 then
+                  -- JMP
+                  let addr = bc_read code (bs.0 + 1) in
+                  (addr, bs.1, bs.2, 0)
+                -- FOLD_END (26): signal end of fold body
+                else if bop == 26 then (bs.0 + 1, bs.1, bs.2, 1)
+                else (bs.0 + 1, bs.1, bs.2, 0)
+            ) (body_len + 10) in
+            -- Body result is on top of body_state stack
+            let new_acc = stack_top (body_state.1) in
+            (new_acc, fs.1 + 1)
+        ) limit in
+        -- Skip past the fold body + FOLD_END
+        (body_start + body_len, stack_push rest (fold_result.0), locals, 0)
+
+      -- FOLD_END (26): shouldn't be hit outside fold
+      else if op == 26 then (pc + 1, stack, locals, 0)
+
+      -- PRIM (28, opcode, nargs)
+      else if op == 28 then
+        let opcode = bc_read code (pc + 1) in
+        let nargs = bc_read code (pc + 2) in
+        -- Pop nargs values
+        let args_state = fold (stack, ()) (\as _j ->
+          if _j >= nargs then as
+          else (stack_rest (as.0), list_append (as.1) (stack_top (as.0)))
+        ) nargs in
+        -- Dispatch primitive
+        let result = if opcode == 156 then value_get_tag (list_nth (args_state.1) 0)
+          else if opcode == 157 then value_get_payload (list_nth (args_state.1) 0)
+          else if opcode == 158 then value_make_tagged (list_nth (args_state.1) 0) (list_nth (args_state.1) 1)
+          else if opcode == 176 then str_len (list_nth (args_state.1) 0)
+          else if opcode == 177 then str_concat (list_nth (args_state.1) 0) (list_nth (args_state.1) 1)
+          else 0 in
+        (pc + 3, stack_push (args_state.0) result, locals, 0)
+
+      -- Unknown opcode: skip
+      else (pc + 1, stack, locals, 0)
+  ) 10000000 in  -- 10M step limit
+  stack_top (final_state.1)
+
+-- Convenience: compile and run a program
+let compile_and_run program input =
+  let bytecode = compile_bytecode program in
+  vm_run bytecode input
+
+let main x = debug_print "bytecode_vm: use vm_run(bytecodes, input)"
