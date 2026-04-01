@@ -192,7 +192,7 @@ let main output_path arg =
 
   -- Build bytecode data
   -- f(n) = n + 1: LOAD 0, PUSH 1, ADD, HALT
-  let bc = (1, 0, 14, 0, 25, 9, 15, 2, 15, 1, 14, 1, 14, 2, 2, 26, 0) in
+  let bc = (14, 0, 1, 1, 2, 0) in
   let bc_data = emit_bc_data bc in
   let bc_size = bytes_len bc_data in
 

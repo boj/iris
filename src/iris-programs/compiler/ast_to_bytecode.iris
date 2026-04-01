@@ -1,0 +1,234 @@
+-- ast_to_bytecode.iris — Direct AST → bytecodes compiler
+-- Bypasses SemanticGraph: parser output → bytecodes directly.
+-- All data is tuples → fully inspectable, no graph API limitations.
+
+let rec scope_lookup scope hash =
+  fold (0 - 1) (\s i ->
+    if s >= 0 then s
+    else if i >= list_len scope then s
+    else let e = list_nth scope i in if e.0 == hash then e.1 else s
+  ) (list_len scope)
+
+let rec compile_expr ast scope ns =
+  let kind = ast.0 in
+  let payload = ast.1 in
+
+  if kind == 0 then ((1, payload), scope, ns)                         -- IntLit
+
+  else if kind == 4 then                                               -- Ident
+    let slot = scope_lookup scope payload in
+    if slot >= 0 then ((14, slot), scope, ns)
+    else ((1, 0), scope, ns)
+
+  else if kind == 10 then                                              -- BinOp
+    let left = (ast.2).0 in
+    let right = (ast.2).1 in
+    let rl = compile_expr left scope ns in
+    let rr = compile_expr right (rl.1) (rl.2) in
+    let bc = if payload == 0 then 2 else if payload == 1 then 3
+      else if payload == 2 then 4 else if payload == 3 then 5
+      else if payload == 4 then 6 else if payload == 5 then 8
+      else if payload == 6 then 11 else if payload == 7 then 9
+      else if payload == 8 then 10 else if payload == 9 then 12
+      else if payload == 10 then 13 else 0 in
+    (list_concat (list_concat (rl.0) (rr.0)) (bc,), rr.1, rr.2)
+
+  else if kind == 15 then                                              -- IfThenElse
+    let cond = (ast.2).0 in
+    let then_br = (ast.2).1 in
+    let else_br = (ast.2).2 in
+    let rc = compile_expr cond scope ns in
+    let rt = compile_expr then_br (rc.1) (rc.2) in
+    let re = compile_expr else_br (rt.1) (rt.2) in
+    let cl = list_len (rc.0) in
+    let tl = list_len (rt.0) in
+    let jz_target = cl + 2 + tl + 2 in
+    let jmp_target = jz_target + list_len (re.0) in
+    let code = list_concat (rc.0) (17, jz_target) in
+    let code2 = list_concat (list_concat code (rt.0)) (16, jmp_target) in
+    (list_concat code2 (re.0), re.1, re.2)
+
+  else if kind == 17 then                                              -- Tuple
+    let nc = list_len (ast.2) in
+    let cc = fold ((), scope, ns) (\st i ->
+      if i >= nc then st
+      else let r = compile_expr (list_nth (ast.2) i) (st.1) (st.2) in
+        (list_concat (st.0) (r.0), r.1, r.2)
+    ) nc in
+    (list_concat (cc.0) (18, nc), cc.1, cc.2)
+
+  else if kind == 18 then                                              -- TupleAccess
+    let r = compile_expr (list_nth (ast.2) 0) scope ns in
+    (list_concat (r.0) (19, payload), r.1, r.2)
+
+  else if kind == 13 then                                              -- Lambda
+    let body = list_nth (ast.2) 0 in
+    let ih = ast.3 in
+    if ih != 0 then
+      let sc2 = list_append (list_append scope (payload, ns)) (ih, ns + 1) in
+      compile_expr body sc2 (ns + 2)
+    else
+      compile_expr body (list_append scope (payload, ns)) (ns + 1)
+
+  else if kind == 12 then                                              -- App
+    let func = (ast.2).0 in
+    let arg = (ast.2).1 in
+    -- Detect fold: App(App(App(Ident(421), base), step), limit)
+    if func.0 == 12 then
+      let inner = (func.2).0 in
+      if inner.0 == 12 then
+        let head = (inner.2).0 in
+        if head.0 == 4 then
+          if head.1 == 421 then
+            -- FOLD: base=(inner.2).1, step=(func.2).1, limit=arg
+            let base = (inner.2).1 in
+            let step = (func.2).1 in
+            let rb = compile_expr base scope ns in
+            let rl = compile_expr arg (rb.1) (rb.2) in
+            let acc_s = rl.2 in
+            let idx_s = acc_s + 1 in
+            let step_body = if step.0 == 13 then
+              let si = list_nth (step.2) 0 in
+              if si.0 == 13 then list_nth (si.2) 0 else si
+            else step in
+            let step_sc = if step.0 == 13 then
+              let ih2 = step.3 in
+              if ih2 != 0 then
+                list_append (list_append (rl.1) (step.1, acc_s)) (ih2, idx_s)
+              else list_append (rl.1) (step.1, acc_s)
+            else rl.1 in
+            let rbd = compile_expr step_body step_sc (idx_s + 1) in
+            let bl = list_len (rbd.0) in
+            let c = list_concat (list_concat (rb.0) (rl.0)) (25, bl + 4) in
+            let c2 = list_concat (list_concat c (15, idx_s)) (15, acc_s) in
+            (list_concat (list_concat c2 (rbd.0)) (26,), rl.1, rbd.2)
+          else
+            -- Other triple app
+            let rf = compile_expr func scope ns in
+            let ra = compile_expr arg (rf.1) (rf.2) in
+            (list_concat (rf.0) (ra.0), ra.1, ra.2)
+        else
+          let rf = compile_expr func scope ns in
+          let ra = compile_expr arg (rf.1) (rf.2) in
+          (list_concat (rf.0) (ra.0), ra.1, ra.2)
+      else
+        -- Double app: might be a 2-arg builtin
+        let inner_func = (func.2).0 in
+        let inner_arg = (func.2).1 in
+        if inner_func.0 == 4 then
+          let fname = inner_func.1 in
+          -- 2-arg builtins: str_concat, char_at, tuple_get, list_nth, etc.
+          let ra1 = compile_expr inner_arg scope ns in
+          let ra2 = compile_expr arg (ra1.1) (ra1.2) in
+          let opc = if fname == 1072 then 177 else if fname == 722 then 192
+            else if fname == 969 then 210 else if fname == 869 then 194
+            else if fname == 1171 then 193 else if fname == 1765 then 158
+            else if fname == 1093 then 182 else if fname == 1411 then 183
+            else if fname == 654 then 184 else if fname == 996 then 180
+            else if fname == 968 then 178 else 0 in
+          if opc > 0 then
+            (list_concat (list_concat (ra1.0) (ra2.0)) (28, opc, 2), ra2.1, ra2.2)
+          else
+            -- Unknown 2-arg: might be a known function
+            let slot = scope_lookup scope fname in
+            if slot >= 0 then
+              -- Function call: store arg, call func
+              let ra = compile_expr arg scope ns in
+              (ra.0, ra.1, ra.2)
+            else (list_concat (ra1.0) (ra2.0), ra2.1, ra2.2)
+        else
+          let rf = compile_expr func scope ns in
+          let ra = compile_expr arg (rf.1) (rf.2) in
+          (list_concat (rf.0) (ra.0), ra.1, ra.2)
+    else if func.0 == 13 then
+      -- App(Lambda, arg): let binding
+      let param_hash = func.1 in
+      let body = list_nth (func.2) 0 in
+      let ra = compile_expr arg scope ns in
+      let slot = ra.2 in
+      let sc2 = list_append (ra.1) (param_hash, slot) in
+      let rb = compile_expr body sc2 (slot + 1) in
+      (list_concat (list_concat (ra.0) (15, slot)) (rb.0), rb.1, rb.2)
+    else if func.0 == 4 then
+      -- App(Ident, arg): 1-arg builtin or function call
+      let fname = func.1 in
+      let ra = compile_expr arg scope ns in
+      let opc = if fname == 759 then 176 else if fname == 1093 then 182
+        else if fname == 1411 then 183 else if fname == 968 then 214
+        else if fname == 858 then 240 else if fname == 1367 then 156
+        else if fname == 1797 then 157 else 0 in
+      if opc > 0 then (list_concat (ra.0) (28, opc, 1), ra.1, ra.2)
+      else
+        let slot = scope_lookup scope fname in
+        if slot >= 0 then
+          -- Known function: store arg in func's param slot, load result
+          -- For inlined single-function: STORE to param slot, then func body runs
+          -- This is handled by multi-function chaining
+          (ra.0, ra.1, ra.2)
+        else (ra.0, ra.1, ra.2)
+    else
+      let rf = compile_expr func scope ns in
+      let ra = compile_expr arg (rf.1) (rf.2) in
+      (list_concat (rf.0) (ra.0), ra.1, ra.2)
+
+  else ((1, 0), scope, ns)
+
+-- Compile full program
+let compile_program tree =
+  let func_decls = tuple_get tree 2 in
+  let n_funcs = tuple_len func_decls in
+  if n_funcs == 1 then
+    -- Single function
+    let decl = tuple_get func_decls 0 in
+    let children = tuple_get decl 2 in
+    let params = tuple_get children 0 in
+    let body = tuple_get children 1 in
+    let n_params = list_len params in
+    let scope = fold () (\sc j ->
+      if j >= n_params then sc
+      else list_append sc ((list_nth params j).1, j)
+    ) n_params in
+    let r = compile_expr body scope n_params in
+    list_concat (r.0) (0,)
+  else
+    -- Multi-function: chain as nested let-in
+    -- Earlier functions are compiled and stored; last function is main
+    let result = fold ((), (), 1) (\st i ->
+      if i >= n_funcs then st
+      else
+        let decl = tuple_get func_decls i in
+        let name_hash = decl.1 in
+        let dc = tuple_get decl 2 in
+        let params = tuple_get dc 0 in
+        let body = tuple_get dc 1 in
+        let n_params = list_len params in
+        if i == n_funcs - 1 then
+          -- Main: compile with input at slot 0, remap to param slot
+          let param_scope = fold (st.1) (\sc j ->
+            if j >= n_params then sc
+            else list_append sc ((list_nth params j).1, j)
+          ) n_params in
+          let rb = compile_expr body param_scope (st.2) in
+          (list_concat (st.0) (rb.0), rb.1, rb.2)
+        else
+          -- Helper function: add to scope as a slot
+          -- The function call will be inlined at the call site
+          -- For now: compile body, store result to slot
+          let slot = st.2 in
+          let scope2 = list_append (st.1) (name_hash, slot) in
+          (st.0, scope2, slot + 1)
+    ) n_funcs in
+    list_concat (result.0) (0,)
+
+let main path arg =
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let par_m = compile_source (file_read "src/iris-programs/syntax/iris_parser.iris") in
+  let src = file_read path in
+  let tokens = module_eval (tok_m.0) 0 src in
+  let tree = module_eval (par_m.0) 0 (tokens, src) in
+  let bytecodes = compile_program tree in
+  -- Verify
+  let m = compile_source src in
+  let nb = list_len (m.1) in
+  let expected = module_eval (m.0) (nb - 1) 42 in
+  (expected, bytecodes)
