@@ -55,7 +55,6 @@ let emit_vm_core =
     0x4c, 0x8d, 0xad, 0x00, 0xff, 0xff, 0xff, -- lea r13, [rbp-256]
     -- Push input (rsi) onto value stack
     0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
-    0x4c, 0x89, 0x6d, 0x00,           -- mov [r13], rsi... wait, wrong
     0x49, 0x89, 0x75, 0x00,           -- mov [r13], rsi  (push input)
     -- Store input as locals[0]
     0x48, 0x89, 0xb5, 0x00, 0xfd, 0xff, 0xff -- mov [rbp-768], rsi
@@ -88,172 +87,188 @@ let emit_vm_core =
   -- Now dispatch on rax (opcode)
   -- Use compare + jump chains
 
-  -- HALT (0): result = stack top, return
+  -- Each handler: check opcode, if match execute + jmp to loop_top.
+  -- jmp_to_top is a placeholder filled at the end with the correct offset.
+  -- We use jmp rel8 (0xeb XX) at the end of each handler.
+  --
+  -- The dispatch is: load_opcode → handler chain → jmp loop_top
+  -- Each handler: cmp rax, OP; jne .next; body; jmp .loop_top
+
+  -- Helper: 2-byte jmp placeholder (will be patched)
+  -- We compute the total dispatch size first, then fill jmp offsets.
+
+  -- HALT (0): test rax, rax; jnz skip; load top; epilogue; ret
   let op_halt = bytes_from_ints (
     0x48, 0x85, 0xc0,                 -- test rax, rax
-    0x75, 0x0a,                       -- jnz .not_halt (skip 10 bytes)
-    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13] (pop stack top)
-    -- epilogue
-    0x48, 0x81, 0xc4, 0x00, 0x03, 0x00, 0x00, -- add rsp, 768
-    0x41, 0x5e,                       -- pop r14
-    0x41, 0x5d,                       -- pop r13
-    0x41, 0x5c,                       -- pop r12
-    0x5b,                             -- pop rbx
-    0x5d,                             -- pop rbp
-    0xc3                              -- ret
+    0x75, 0x14,                       -- jnz .not_halt (skip 20 bytes)
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x48, 0x81, 0xc4, 0x00, 0x03, 0x00, 0x00,
+    0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x5d, 0xc3
   ) in
 
-  -- PUSH (1, val): push bytecode[pc+1]
-  let op_push = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x01,           -- cmp rax, 1
-    0x75, 0x14,                       -- jnz .not_push (skip 20 bytes)
-    -- val = bytecode[pc+1] = [r14 + (r12+1)*8 + 8]
+  -- For all other handlers: body ends with eb XX (jmp back to load_opcode).
+  -- We'll compute XX at the end based on total dispatch size.
+  -- For now, use 0x00 as placeholder for the jmp offset.
+
+  -- PUSH (1): pc += 2
+  let op_push_body = bytes_from_ints (
     0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
     0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8]
-    -- push onto stack
     0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
     0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
-    -- pc += 2
     0x49, 0x83, 0xc4, 0x02            -- add r12, 2
   ) in
 
-  -- ADD (2): pop 2, push sum
-  let op_add = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x02,           -- cmp rax, 2
-    0x75, 0x12,                       -- jnz .not_add
-    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]    (top = a)
-    0x49, 0x8b, 0x5d, 0x08,           -- mov rbx, [r13+8]  (b)
-    0x48, 0x01, 0xc3,                 -- add rbx, rax      (b + a)
-    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8        (pop one)
-    0x49, 0x89, 0x5d, 0x00,           -- mov [r13], rbx    (replace top)
-    0x49, 0xff, 0xc4                  -- inc r12            (pc++)
+  -- ADD (2): pc += 1
+  let op_add_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x8b, 0x5d, 0x08,           -- mov rbx, [r13+8]
+    0x48, 0x01, 0xc3,                 -- add rbx, rax
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x49, 0x89, 0x5d, 0x00,           -- mov [r13], rbx
+    0x49, 0xff, 0xc4                  -- inc r12
   ) in
 
-  -- SUB (3): pop 2, push b-a
-  let op_sub = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x03,
-    0x75, 0x12,
-    0x49, 0x8b, 0x45, 0x00,           -- a = [r13]
-    0x49, 0x8b, 0x5d, 0x08,           -- b = [r13+8]
-    0x48, 0x29, 0xc3,                 -- rbx = b - a
-    0x49, 0x83, 0xc5, 0x08,
-    0x49, 0x89, 0x5d, 0x00,
-    0x49, 0xff, 0xc4
-  ) in
-
-  -- MUL (4): pop 2, push b*a
-  let op_mul = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x04,
-    0x75, 0x14,
-    0x49, 0x8b, 0x45, 0x00,           -- a
-    0x49, 0x8b, 0x5d, 0x08,           -- b
-    0x48, 0x0f, 0xaf, 0xd8,           -- imul rbx, rax
-    0x49, 0x83, 0xc5, 0x08,
-    0x49, 0x89, 0x5d, 0x00,
-    0x49, 0xff, 0xc4
-  ) in
-
-  -- EQ (8): pop 2, push (b==a ? 1 : 0)
-  let op_eq = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x08,
-    0x75, 0x18,
-    0x49, 0x8b, 0x45, 0x00,           -- a
-    0x49, 0x8b, 0x5d, 0x08,           -- b
-    0x48, 0x39, 0xc3,                 -- cmp rbx, rax
-    0x0f, 0x94, 0xc0,                 -- sete al
-    0x48, 0x0f, 0xb6, 0xc0,           -- movzx rax, al
-    0x49, 0x83, 0xc5, 0x08,
-    0x49, 0x89, 0x45, 0x00,
-    0x49, 0xff, 0xc4
-  ) in
-
-  -- LT (9): pop 2, push (b<a ? 1 : 0)
-  let op_lt = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x09,
-    0x75, 0x18,
+  -- SUB (3): pc += 1
+  let op_sub_body = bytes_from_ints (
     0x49, 0x8b, 0x45, 0x00,
     0x49, 0x8b, 0x5d, 0x08,
-    0x48, 0x39, 0xc3,                 -- cmp rbx, rax
-    0x0f, 0x9c, 0xc0,                 -- setl al
+    0x48, 0x29, 0xc3,
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x5d, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- MUL (4): pc += 1
+  let op_mul_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x0f, 0xaf, 0xd8,
+    0x49, 0x83, 0xc5, 0x08,
+    0x49, 0x89, 0x5d, 0x00,
+    0x49, 0xff, 0xc4
+  ) in
+
+  -- EQ (8): pc += 1
+  let op_eq_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x39, 0xc3,
+    0x0f, 0x94, 0xc0,
     0x48, 0x0f, 0xb6, 0xc0,
     0x49, 0x83, 0xc5, 0x08,
     0x49, 0x89, 0x45, 0x00,
     0x49, 0xff, 0xc4
   ) in
 
-  -- LOAD (14, slot): push locals[slot]
-  let op_load = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x0e,
-    0x75, 0x1a,
-    -- slot = bytecode[pc+1]
-    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
-    0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8] (slot idx)
-    -- load locals[slot]: [rbp - 768 + slot*8]
-    0x48, 0x8b, 0x84, 0xc5, 0x00, 0xfd, 0xff, 0xff, -- mov rax, [rbp + rax*8 - 768]
-    -- push
-    0x49, 0x83, 0xed, 0x08,
+  -- LT (9): pc += 1
+  let op_lt_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x8b, 0x5d, 0x08,
+    0x48, 0x39, 0xc3,
+    0x0f, 0x9c, 0xc0,
+    0x48, 0x0f, 0xb6, 0xc0,
+    0x49, 0x83, 0xc5, 0x08,
     0x49, 0x89, 0x45, 0x00,
-    0x49, 0x83, 0xc4, 0x02             -- add r12, 2
+    0x49, 0xff, 0xc4
   ) in
 
-  -- STORE (15, slot): pop, store to locals[slot]
-  let op_store = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x0f,
-    0x75, 0x1a,
-    -- slot = bytecode[pc+1]
+  -- LOAD (14, slot): pc += 2
+  let op_load_body = bytes_from_ints (
     0x49, 0x8d, 0x5c, 0x24, 0x01,
-    0x49, 0x8b, 0x5c, 0xde, 0x08,     -- mov rbx, [r14 + rbx*8 + 8] (slot)
-    -- pop top
-    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
-    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
-    -- store: [rbp - 768 + rbx*8] = rax
+    0x49, 0x8b, 0x44, 0xde, 0x08,
+    0x48, 0x8b, 0x84, 0xc5, 0x00, 0xfd, 0xff, 0xff,
+    0x49, 0x83, 0xed, 0x08,
+    0x49, 0x89, 0x45, 0x00,
+    0x49, 0x83, 0xc4, 0x02
+  ) in
+
+  -- STORE (15, slot): pc += 2
+  let op_store_body = bytes_from_ints (
+    0x49, 0x8d, 0x5c, 0x24, 0x01,
+    0x49, 0x8b, 0x5c, 0xde, 0x08,
+    0x49, 0x8b, 0x45, 0x00,
+    0x49, 0x83, 0xc5, 0x08,
     0x48, 0x89, 0x84, 0xdd, 0x00, 0xfd, 0xff, 0xff,
     0x49, 0x83, 0xc4, 0x02
   ) in
 
   -- JMP (16, addr): pc = bytecode[pc+1]
-  let op_jmp = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x10,
-    0x75, 0x0a,
+  let op_jmp_body = bytes_from_ints (
     0x49, 0x8d, 0x5c, 0x24, 0x01,
-    0x49, 0x8b, 0x64, 0xde, 0x08      -- mov r12, [r14 + rbx*8 + 8]
+    0x4d, 0x8b, 0x64, 0xde, 0x08      -- mov r12, [r14 + rbx*8 + 8]
   ) in
 
-  -- JZ (17, addr): pop, if zero jump
-  let op_jz = bytes_from_ints (
-    0x48, 0x83, 0xf8, 0x11,
-    0x75, 0x16,
-    -- pop top
-    0x49, 0x8b, 0x45, 0x00,
+  -- JZ (17, addr): pop, if zero jump, else pc += 2
+  let op_jz_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- pop top
     0x49, 0x83, 0xc5, 0x08,
-    -- test
-    0x48, 0x85, 0xc0,
-    0x75, 0x08,                       -- jnz .not_taken
-    -- taken: pc = bytecode[pc+1]
-    0x49, 0x8d, 0x5c, 0x24, 0x01,
-    0x49, 0x8b, 0x64, 0xde, 0x08,     -- mov r12, [...]
-    0xeb, 0x03,                       -- jmp .end
-    -- not taken: pc += 2
-    0x49, 0x83, 0xc4, 0x02
+    0x48, 0x85, 0xc0,                 -- test
+    0x75, 0x08,                       -- jnz .not_taken (skip 8 bytes)
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- taken: lea rbx, [r12+1]
+    0x4d, 0x8b, 0x64, 0xde, 0x08,     -- mov r12, [r14+rbx*8+8]
+    0xeb, 0x04,                       -- jmp past not_taken
+    0x49, 0x83, 0xc4, 0x02            -- not_taken: add r12, 2
   ) in
 
-  -- Jump back to dispatch loop
-  -- Calculate total size of all dispatch code and jump back
-  let all_ops = bytes_concat op_halt (bytes_concat op_push (bytes_concat op_add
-    (bytes_concat op_sub (bytes_concat op_mul (bytes_concat op_eq
-      (bytes_concat op_lt (bytes_concat op_load (bytes_concat op_store
-        (bytes_concat op_jmp op_jz))))))))) in
-  let loop_body_len = bytes_len load_opcode + bytes_len all_ops in
-  -- jmp back: e9 rel32 (rel32 = -(loop_body_len + 5))
-  let jmp_back_offset = 0 - (loop_body_len + 5) in
-  let jmp_back = bytes_from_ints (0xe9,
-    bitand jmp_back_offset 255,
-    bitand (shr jmp_back_offset 8) 255,
-    bitand (shr jmp_back_offset 16) 255,
-    bitand (shr jmp_back_offset 24) 255) in
+  -- Build handlers array: (opcode, body_bytes) for each handler
+  -- Format: cmp rax, OP (4 bytes) + jne skip (2 bytes) + body + jmp loop (2 bytes)
+  -- Handler size = 4 + 2 + body_len + 2 = body_len + 8
+  let handlers = (
+    (1, op_push_body),
+    (2, op_add_body),
+    (3, op_sub_body),
+    (4, op_mul_body),
+    (8, op_eq_body),
+    (9, op_lt_body),
+    (14, op_load_body),
+    (15, op_store_body),
+    (16, op_jmp_body),
+    (17, op_jz_body)
+  ) in
+  let n_handlers = 10 in
 
-  -- Final assembly: prologue + [load_opcode + dispatch + jmp_back]*
-  bytes_concat prologue (bytes_concat load_opcode (bytes_concat all_ops jmp_back))
+  -- Compute total dispatch size: halt + sum(4+2+body+2 for each handler) + 5 (jmp back)
+  let halt_size = bytes_len op_halt in
+  let handlers_size = fold 0 (\acc i ->
+    if i >= n_handlers then acc
+    else acc + 8 + bytes_len (tuple_get (tuple_get handlers i) 1)
+  ) n_handlers in
+  let dispatch_size = bytes_len load_opcode + halt_size + handlers_size in
+
+  -- Build the dispatch code
+  -- After each handler body, jmp back to load_opcode.
+  -- jmp offset = -(current_position_from_load_opcode + 2)
+  let dispatch_code = fold op_halt (\acc i ->
+    if i >= n_handlers then acc
+    else
+      let h = tuple_get handlers i in
+      let op = tuple_get h 0 in
+      let body = tuple_get h 1 in
+      let body_len = bytes_len body in
+      -- cmp rax, op
+      let cmp_instr = bytes_from_ints (0x48, 0x83, 0xf8, op) in
+      -- jne over body+jmp = body_len + 5 (5 bytes for near jmp e9)
+      let jne_instr = bytes_from_ints (0x75, body_len + 5) in
+      -- jmp back (near jmp e9 rel32): offset from current position to load_opcode
+      let pos_after_body = bytes_len load_opcode + bytes_len acc + 4 + 2 + body_len in
+      let jmp_offset = 0 - (pos_after_body + 5) in
+      let jmp_instr = bytes_from_ints (0xe9,
+        bitand jmp_offset 255, bitand (shr jmp_offset 8) 255,
+        bitand (shr jmp_offset 16) 255, bitand (shr jmp_offset 24) 255) in
+      bytes_concat acc (bytes_concat cmp_instr (bytes_concat jne_instr (bytes_concat body jmp_instr)))
+  ) n_handlers in
+
+  -- Final jmp back for unhandled opcodes: inc r12, jmp loop_top (near jmp)
+  let unhandled_size = bytes_len load_opcode + bytes_len dispatch_code in
+  let final_jmp_offset = 0 - (unhandled_size + 3 + 5) in
+  let final_code = bytes_from_ints (
+    0x49, 0xff, 0xc4,                 -- inc r12 (skip unknown opcode)
+    0xe9, bitand final_jmp_offset 255, bitand (shr final_jmp_offset 8) 255,
+    bitand (shr final_jmp_offset 16) 255, bitand (shr final_jmp_offset 24) 255
+  ) in
+
+  bytes_concat prologue (bytes_concat load_opcode (bytes_concat dispatch_code final_code))
 
 let main x =
   let vm_code = emit_vm_core in

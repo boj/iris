@@ -36,7 +36,7 @@ let elf_header file_size mem_size entry_offset =
     0x40, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0,
-    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 1
+    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 0
   )
 
 -- Program header (56 bytes)
@@ -52,7 +52,7 @@ let prog_header file_size mem_size =
     0, 0, 0x40, 0, 0, 0, 0, 0,
     fs0, fs1, fs2, fs3, 0, 0, 0, 0,
     ms0, ms1, ms2, ms3, 0, 0, 0, 0,
-    0, 0x10, 0, 0, 0, 0, 0, 1
+    0, 0x10, 0, 0, 0, 0, 0, 0
   )
 
 -- Use the proven components from elf_wrapper.iris
@@ -159,13 +159,12 @@ let build_stub vm_offset bytecode_offset =
   bytes_concat stub (bytes_concat atoi_call (bytes_concat setup_vm
     (bytes_concat load_bc_ptr (bytes_concat call_vm post_call))))
 
--- Minimal test function: f(n) = n + 1
--- Convention: rdi = bytecode ptr (unused), rsi = input value
+-- Load the full native VM dispatch loop from native_vm.iris
+-- Convention: rdi = bytecode tuple (tagged ptr), rsi = input value
+-- Returns result in rax
 let load_vm_bytes x =
-  bytes_from_ints (
-    0x48, 0x8d, 0x46, 0x01,           -- lea rax, [rsi+1]
-    0xc3                              -- ret
-  )
+  let m = compile_source (file_read "src/iris-programs/compiler/native_vm.iris") in
+  module_eval (m.0) 1 ()  -- emit_vm_core = binding 1
 
 -- Emit bytecode data as raw bytes in memory (tuple format)
 let emit_bc_data bc =
@@ -183,8 +182,8 @@ let main output_path arg =
   let vm_size = bytes_len vm_code in
 
   -- Build bytecode data
-  -- For proof of concept: fold 0 (\acc i -> acc + i) n = sum(0..n-1)
-  let bc = (1, 0, 14, 0, 25, 12, 15, 2, 15, 1, 14, 1, 14, 2, 2, 26, 0) in
+  -- f(n) = n + 1: LOAD 0, PUSH 1, ADD, HALT
+  let bc = (14, 0, 1, 1, 2, 0) in
   let bc_data = emit_bc_data bc in
   let bc_size = bytes_len bc_data in
 
@@ -199,21 +198,28 @@ let main output_path arg =
   let stub = build_stub vm_offset bc_offset in
   let stub_size = bytes_len stub in
 
-  -- Recompute with actual stub size
+  -- Recompute with actual stub size, ensuring even alignment for bytecode data
   let vm_offset2 = header_total + stub_size in
-  let bc_offset2 = vm_offset2 + vm_size in
+  let raw_bc_offset = vm_offset2 + vm_size in
+  -- Pad to even alignment (tagged pointer requires bit 0 free for tag)
+  let bc_pad = raw_bc_offset % 2 in
+  let bc_offset2 = raw_bc_offset + bc_pad in
   let stub2 = build_stub vm_offset2 bc_offset2 in
   let stub_size2 = bytes_len stub2 in
 
   -- Final layout
-  let file_size = header_total + stub_size2 + vm_size + bc_size in
+  let pad_bytes = if bc_pad == 1 then bytes_from_ints (0x90) else bytes_from_ints (0x90, 0x90) in
+  let actual_pad = bc_pad in
+  let file_size = header_total + stub_size2 + vm_size + actual_pad + bc_size in
   let mem_size = file_size + 4096 in
 
   -- Assemble
   let ehdr = elf_header file_size mem_size header_total in
   let phdr = prog_header file_size mem_size in
+  -- Add alignment padding between VM and bytecodes
+  let pad = if actual_pad == 1 then bytes_from_ints (0x90) else bytes_from_ints () in
   let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub2
-    (bytes_concat vm_code bc_data))) in
+    (bytes_concat vm_code (bytes_concat pad bc_data)))) in
 
   -- Return binary as Bytes value — pipe through Python to write:
   -- iris-stage0 run stage1_native.iris out 0 | python3 -c "import sys,ast; d=sys.stdin.read().strip(); sys.stdout.buffer.write(bytes(ast.literal_eval(d.replace('Bytes(','').rstrip(')'))))" > stage1
