@@ -1,0 +1,61 @@
+-- Import-aware compiler: resolves import "path" as Name by source inlining.
+-- Usage: iris-stage0 run compile_with_imports.iris <source_path> [args...]
+
+-- Check if a line starts with 'import "'
+-- Returns (1, path_string) or (0, "")
+let is_import_line line =
+  if str_len line < 9 then (0, "")
+  else if str_starts_with line "import \"" then
+    -- Extract path between quotes
+    let rest = str_slice line 8 (str_len line) in
+    let qpos = fold 0 (\r i ->
+      if r > 0 then r
+      else if i >= str_len rest then 0
+      else if char_at rest i == 34 then i
+      else 0) (str_len rest) in
+    if qpos > 0 then (1, str_slice rest 0 qpos)
+    else (0, "")
+  else (0, "")
+
+-- Main: read source, inline imports, compile, run
+let main path arg =
+  let src = file_read path in
+  let lines = str_split src "\n" in
+  let n_lines = list_len lines in
+
+  -- Collect import paths and build clean source (without import lines)
+  let scan = fold ((), "") (\state i ->
+    if i >= n_lines then state
+    else
+      let line = list_nth lines i in
+      let chk = is_import_line line in
+      if chk.0 == 1 then
+        -- Import line: add path to list, skip line in clean source
+        (list_append (state.0) (chk.1), str_concat (state.1) "\n")
+      else
+        -- Normal line: keep in clean source
+        (state.0, str_concat (str_concat (state.1) line) "\n")
+  ) n_lines in
+
+  let import_paths = scan.0 in
+  let clean_src = scan.1 in
+  let n_imports = list_len import_paths in
+
+  if n_imports == 0 then
+    -- No imports: compile directly
+    let m = compile_source_json src in
+    module_eval (m.0) 0 (arg,)
+  else
+    -- Read and concatenate imported sources
+    let prefix = fold "" (\acc i ->
+      if i >= n_imports then acc
+      else
+        let imp_path = list_nth import_paths i in
+        let imp_src = file_read imp_path in
+        str_concat (str_concat acc imp_src) "\n"
+    ) n_imports in
+
+    -- Compile combined source
+    let full = str_concat prefix clean_src in
+    let m = compile_source_json full in
+    module_eval (m.0) 0 (arg,)

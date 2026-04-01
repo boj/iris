@@ -205,3 +205,21 @@
 
 **Assistant:** Saved. Now the priority is clear: port all compiler fixes into the IRIS programs so the IRIS pipeline matches the Rust compiler's capabilities. That means working through:
 
+
+---
+
+**2026-03-31 16:12**
+
+**Human:** Investigate it
+
+**Assistant:** Here's where we stand on the import features:
+
+
+---
+
+**2026-03-31 16:12**
+
+**Human:** Investigate it
+
+**Assistant:** Background task was from the earlier import test that timed out — already addressed. The import feature is WIP as described above.
+
