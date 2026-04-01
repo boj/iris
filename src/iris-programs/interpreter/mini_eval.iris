@@ -221,7 +221,9 @@ let eval me program env =
         let fn_prog = fn_val.0 in
         let fn_env = fn_val.1 in
         let binder = graph_get_binder fn_prog (graph_get_root fn_prog) in
-        let new_env = list_append fn_env (binder, arg_val) in
+        -- Merge outer env into closure env so LetRec bindings are visible
+        let merged_env = list_concat fn_env env in
+        let new_env = list_append merged_env (binder, arg_val) in
         let body_id = graph_edge_target fn_prog (graph_get_root fn_prog) 0 3 in
         let body_prog = graph_set_root fn_prog body_id in
         graph_eval me (me, body_prog, new_env)
@@ -289,7 +291,10 @@ let eval me program env =
       graph_eval me (me, body_sub, env)
     else ()
 
-  -- LetRec (kind 16): recursive binding
+  -- LetRec (kind 16): recursive binding with self-reference
+  -- The value (typically a Lambda) is evaluated, then its closure env
+  -- is patched to include a reference to itself. This enables recursion:
+  -- the closure can call itself because its own env contains (binder, self).
   else if kind == 16 then
     let binder = graph_get_binder program root in
     let children = graph_outgoing program root in
@@ -298,7 +303,14 @@ let eval me program env =
       let body_id = list_nth children 1 in
       let vbind_sub = graph_set_root program vbind_id in
       let vbind = graph_eval me (me, vbind_sub, env) in
-      let new_env = list_append env (binder, vbind) in
+      -- Patch the closure's env to include self-reference
+      -- A closure is (program, env) tuple. Append (binder, self) to its env.
+      let patched = if tuple_len vbind >= 2 then
+        let clos_prog = vbind.0 in
+        let clos_env = vbind.1 in
+        (clos_prog, list_append clos_env (binder, vbind))
+      else vbind in
+      let new_env = list_append env (binder, patched) in
       let body_sub = graph_set_root program body_id in
       graph_eval me (me, body_sub, new_env)
     else ()

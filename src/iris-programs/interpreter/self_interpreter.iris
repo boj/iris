@@ -215,13 +215,14 @@ let interpret me program env =
       let arg_sub = graph_set_root program arg_id in
       let arg_val = graph_eval me (me, arg_sub, env) in
       -- fn_val should be a closure (program, env)
-      -- Apply: evaluate fn body with arg bound
+      -- Apply: evaluate fn body with arg bound.
+      -- Merge outer env so LetRec bindings are visible in Lambda bodies.
       if tuple_len fn_val >= 2 then
         let fn_prog = fn_val.0 in
         let fn_env = fn_val.1 in
         let binder = graph_get_binder fn_prog (graph_get_root fn_prog) in
-        let new_env = list_append fn_env (binder, arg_val) in
-        -- Evaluate the lambda body (continuation of the lambda node)
+        let merged = list_concat fn_env env in
+        let new_env = list_append merged (binder, arg_val) in
         let body_id = graph_edge_target fn_prog (graph_get_root fn_prog) 0 3 in
         let body_prog = graph_set_root fn_prog body_id in
         graph_eval me (me, body_prog, new_env)

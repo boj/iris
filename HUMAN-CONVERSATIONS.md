@@ -268,3 +268,12 @@
 
 **Assistant:** Let me update the TODO:
 
+
+---
+
+**2026-03-31 21:55**
+
+**Human:** Investigate it
+
+**Assistant:** Right, TODO.md is gitignored. That's by design. Let me summarize where we are:
+

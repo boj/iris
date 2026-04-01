@@ -353,6 +353,35 @@ let lower ast src =
             let body2 = item.2 in
             (pg, rns, nsp - 1, (body2, rws), nwsp + 1, new_sc)
 
+          -- LetRecBind (65): create LetRec node (kind 16) with proper edge labels
+          else if k == 65 then
+            let val_id = ns.0 in
+            let rns = ns.1 in
+            let rh = item.1 in
+            -- Compute unique binder for the LetRec
+            let nsc = list_len sc in
+            let pc = fold 0 (\c _j -> if _j >= nsc then c else let e = list_nth sc _j in if e.2 == 0 then c + 1 else c) nsc in
+            let binder_idx = 128 + pc in
+            let binder_id = 4294901760 + binder_idx in
+            -- Create LetRec node (kind 16)
+            let lr = graph_add_node_rt pg 16 in
+            let lr2 = graph_set_binder (lr.0) (lr.1) binder_id in
+            -- Connect value at port 0, label 2 (Binding)
+            let p1 = graph_connect_labeled (lr2.0) (lr2.1) val_id 0 2 in
+            -- Add self-reference to scope (tag 0 = creates InputRef for the binder)
+            let new_sc = list_append sc (rh, binder_idx, 0) in
+            -- Push body + LetRecBody combine (66)
+            let body2 = item.2 in
+            (p1, rns, nsp - 1, (body2, ((66, lr2.1, 0), rws)), nwsp + 2, new_sc)
+
+          -- LetRecBody (66): connect body to LetRec at port 0, label 3 (Continuation)
+          else if k == 66 then
+            let body_id = ns.0 in
+            let rns = ns.1 in
+            let letrec_id = item.1 in
+            let p1 = graph_connect_labeled pg letrec_id body_id 0 3 in
+            (p1, (letrec_id, rns), nsp, rws, nwsp, sc)
+
           -- Pipe combine (57)
           else if k == 57 then
             let func_id = ns.0 in
@@ -1107,11 +1136,12 @@ let lower ast src =
             let nh = item.1 in
             let va = (item.2).0 in
             let ba = (item.2).1 in
-            -- For both rec and non-rec, use standard LetBind.
-            -- Recursion is handled through the evaluator's fragment registry
-            -- (run command) or through trampoline fold (IRIS pipeline).
-            -- Strip rec bit so the name resolves correctly.
-            let clean_nh = if nh >= 2147483648 then nh - 2147483648 else nh in
+            let is_rec = if nh >= 2147483648 then 1 else 0 in
+            let clean_nh = if is_rec == 1 then nh - 2147483648 else nh in
+            if is_rec == 1 then
+              -- Recursive: use LetRecBind combine (65) which creates LetRec node
+              (pg, ns, nsp, (va, ((65, clean_nh, ba), rws)), nwsp + 2, sc)
+            else
             (pg, ns, nsp, (va, ((56, clean_nh, ba), rws)), nwsp + 2, sc)
 
           -- If/then/else (15)
