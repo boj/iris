@@ -14,7 +14,7 @@ set -euo pipefail
 
 STAGE0="${STAGE0:-bootstrap/iris-stage0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SOURCE="${1:?Usage: stage1_build.sh <source.iris> <output>}"
 OUTPUT="${2:?Usage: stage1_build.sh <source.iris> <output>}"
 

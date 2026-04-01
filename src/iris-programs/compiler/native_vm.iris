@@ -13,6 +13,7 @@
 --   r12 = program counter (index into bytecode)
 --   r13 = value stack pointer (grows downward in local stack area)
 --   r14 = bytecode tuple pointer (untagged)
+--   r15 = heap bump allocator
 --   rbx = locals array pointer (untagged)
 --
 -- The VM uses a local stack area at [rbp-512..rbp-256] for the value stack,
@@ -26,16 +27,35 @@
 --   [rbp-256]  = value stack top (grows toward rbp-512)
 --   [rbp-512]  = value stack bottom
 --   [rbp-768]  = locals[0..31] (32 slots × 8 bytes)
+--
+-- Scratch slots for complex handlers (string ops, file I/O):
+--   [rbp-136]  = scratch slot 0
+--   [rbp-144]  = scratch slot 1
+--   [rbp-152]  = scratch slot 2
+--   [rbp-160]  = scratch slot 3
+--   [rbp-168]  = scratch slot 4
+--   [rbp-176]  = scratch slot 5
+--
+-- String format: same as tuples but tag=1
+--   [header: (byte_count << 8) | 1, byte0, byte1, ...]
+--   Bytes are packed after the 8-byte header (NOT one per slot).
+--   Tagged pointer has bit 0 = 1.
+--
+-- Opcodes:
+--   0  HALT          1  PUSH           2  ADD            3  SUB
+--   4  MUL           5  DIV            6  MOD            7  NEG
+--   8  EQ            9  LT            10  GT            11  NE
+--  12  LE           13  GE            14  LOAD          15  STORE
+--  16  JMP          17  JZ            18  MAKE_TUPLE    19  TUPLE_GET
+--  25  FOLD_BEGIN   26  FOLD_END      29  PUSH_STR_PTR  30  STR_LEN
+--  31  CHAR_AT      32  STR_CONCAT    33  STR_SLICE
+--  39  FILE_READ    40  DEBUG_PRINT
 
 -- Helper: emit a NOP sled of n bytes
 let nop_sled n = fold (bytes_from_ints ()) (\acc i -> bytes_concat acc (bytes_from_ints (0x90))) n
 
 -- The VM function: hand-assembled x86-64
--- Core opcodes: HALT(0), PUSH(1), ADD(2), SUB(3), MUL(4), DIV(5), MOD(6),
---   NEG(7), EQ(8), LT(9), GT(10), NE(11), LE(12), GE(13),
---   LOAD(14), STORE(15), JMP(16), JZ(17), MAKE_TUPLE(18), TUPLE_GET(19)
---
--- Returns machine code bytes for the VM function (no prologue/epilogue —
+-- Returns machine code bytes for the VM function (no prologue/epilogue --
 -- those are added by the stage1 builder).
 let emit_vm_core =
   -- Prologue: save regs, set up frame, init state
@@ -84,18 +104,9 @@ let emit_vm_core =
     0x4b, 0x8b, 0x44, 0xe6, 0x08     -- mov rax, [r14 + r12*8 + 8]
   ) in
 
-  -- Now dispatch on rax (opcode)
-  -- Use compare + jump chains
-
-  -- Each handler: check opcode, if match execute + jmp to loop_top.
-  -- jmp_to_top is a placeholder filled at the end with the correct offset.
-  -- We use jmp rel8 (0xeb XX) at the end of each handler.
-  --
-  -- The dispatch is: load_opcode → handler chain → jmp loop_top
-  -- Each handler: cmp rax, OP; jne .next; body; jmp .loop_top
-
-  -- Helper: 2-byte jmp placeholder (will be patched)
-  -- We compute the total dispatch size first, then fill jmp offsets.
+  -- Now dispatch on rax (opcode) using compare + jump chains.
+  -- Each handler: cmp rax, OP (4B); jne rel32 .next (6B); body; jmp rel32 .loop_top (5B)
+  -- The jne uses rel32 (0x0f 0x85) to support handler bodies > 127 bytes.
 
   -- HALT (0): test rax, rax; jnz skip; load top; epilogue; ret
   let op_halt = bytes_from_ints (
@@ -105,10 +116,6 @@ let emit_vm_core =
     0x48, 0x81, 0xc4, 0x00, 0x03, 0x00, 0x00,
     0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x5d, 0xc3
   ) in
-
-  -- For all other handlers: body ends with eb XX (jmp back to load_opcode).
-  -- We'll compute XX at the end based on total dispatch size.
-  -- For now, use 0x00 as placeholder for the jmp offset.
 
   -- PUSH (1): pc += 2
   let op_push_body = bytes_from_ints (
@@ -295,12 +302,265 @@ let emit_vm_core =
     0x49, 0xff, 0xc4
   ) in
 
+  -- FOLD_BEGIN (25): pc += 2
   let op_fold_body_test = bytes_from_ints (0x49, 0x8d, 0x44, 0x24, 0x01, 0x4b, 0x8b, 0x44, 0xe6, 0x08, 0x49, 0x8b, 0x4d, 0x00, 0x49, 0x83, 0xc5, 0x08, 0x49, 0x8b, 0x55, 0x00, 0x49, 0x83, 0xc5, 0x08, 0x48, 0x89, 0x4d, 0x90, 0x48, 0x89, 0x45, 0x88, 0x49, 0x83, 0xc4, 0x02, 0x4c, 0x89, 0x65, 0x80, 0x48, 0xc7, 0x45, 0x98, 0x00, 0x00, 0x00, 0x00, 0x49, 0x83, 0xed, 0x08, 0x49, 0x89, 0x55, 0x00, 0x49, 0x83, 0xed, 0x08, 0x48, 0x31, 0xc9, 0x49, 0x89, 0x4d, 0x00) in
+  -- FOLD_END (26): pc += 1 (or loops back)
   let op_foldend_body_test = bytes_from_ints (0x49, 0x8b, 0x55, 0x00, 0x49, 0x83, 0xc5, 0x08, 0x48, 0xff, 0x45, 0x98, 0x48, 0x8b, 0x4d, 0x98, 0x48, 0x3b, 0x4d, 0x90, 0x7d, 0x16, 0x49, 0x83, 0xed, 0x08, 0x49, 0x89, 0x55, 0x00, 0x49, 0x83, 0xed, 0x08, 0x49, 0x89, 0x4d, 0x00, 0x4c, 0x8b, 0x65, 0x80, 0xeb, 0x0b, 0x49, 0xff, 0xc4, 0x49, 0x83, 0xed, 0x08, 0x49, 0x89, 0x55, 0x00) in
 
+  -- PUSH_STR_PTR (29): push bytecode[pc+1] as raw tagged pointer, pc += 2
+  -- Same encoding as PUSH — the value in the bytecode slot IS the tagged pointer.
+  let op_push_str_ptr_body = bytes_from_ints (
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x44, 0xde, 0x08,     -- mov rax, [r14 + rbx*8 + 8]
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    0x49, 0x83, 0xc4, 0x02            -- add r12, 2
+  ) in
 
-  -- Build handlers array: (opcode, body_bytes) for each handler
-  let handlers = (
+  -- STR_LEN (30): pop string, push byte length. pc += 1
+  -- Untag pointer, read header word, shift right 8 to get length.
+  let op_str_len_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop string)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x83, 0xe0, 0xfe,           -- and rax, -2          (untag)
+    0x48, 0x8b, 0x00,                 -- mov rax, [rax]       (read header)
+    0x48, 0xc1, 0xe8, 0x08,           -- shr rax, 8           (length)
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8           (push)
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- CHAR_AT (31): pop index, pop string, push byte at [str+8+index]. pc += 1
+  let op_char_at_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop index)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x49, 0x8b, 0x5d, 0x00,           -- mov rbx, [r13]       (pop string)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x83, 0xe3, 0xfe,           -- and rbx, -2          (untag string)
+    0x0f, 0xb6, 0x44, 0x03, 0x08,     -- movzx eax, byte [rbx+rax+8]
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8           (push)
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- STR_CONCAT (32): pop str2, pop str1, concat, push new string. pc += 1
+  -- Uses rep movsb for byte copying, scratch slots at [rbp-136..rbp-176].
+  -- Allocation via r15 bump allocator, result is tagged pointer.
+  let op_str_concat_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop str2)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x49, 0x8b, 0x5d, 0x00,           -- mov rbx, [r13]       (pop str1)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x83, 0xe0, 0xfe,           -- and rax, -2          (untag str2)
+    0x48, 0x83, 0xe3, 0xfe,           -- and rbx, -2          (untag str1)
+    0x48, 0x8b, 0x0b,                 -- mov rcx, [rbx]       (str1 header)
+    0x48, 0xc1, 0xe9, 0x08,           -- shr rcx, 8           (len1)
+    0x48, 0x8b, 0x10,                 -- mov rdx, [rax]       (str2 header)
+    0x48, 0xc1, 0xea, 0x08,           -- shr rdx, 8           (len2)
+    0x48, 0x89, 0x9d, 0x78, 0xff, 0xff, 0xff, -- mov [rbp-136], rbx  (str1_ptr)
+    0x48, 0x89, 0x85, 0x70, 0xff, 0xff, 0xff, -- mov [rbp-144], rax  (str2_ptr)
+    0x48, 0x89, 0x8d, 0x68, 0xff, 0xff, 0xff, -- mov [rbp-152], rcx  (len1)
+    0x48, 0x89, 0x95, 0x60, 0xff, 0xff, 0xff, -- mov [rbp-160], rdx  (len2)
+    0x48, 0x8d, 0x04, 0x11,           -- lea rax, [rcx+rdx]   (total_len)
+    0x48, 0x89, 0x85, 0x58, 0xff, 0xff, 0xff, -- mov [rbp-168], rax  (total_len)
+    0x48, 0x8d, 0x50, 0x0f,           -- lea rdx, [rax+15]
+    0x48, 0x83, 0xe2, 0xf8,           -- and rdx, -8          (align)
+    0x4c, 0x89, 0xff,                 -- mov rdi, r15         (alloc base)
+    0x49, 0x01, 0xd7,                 -- add r15, rdx         (bump)
+    0x48, 0x89, 0xbd, 0x50, 0xff, 0xff, 0xff, -- mov [rbp-176], rdi  (new str ptr)
+    -- Write header: (total_len << 8) | 1
+    0x48, 0x8b, 0x85, 0x58, 0xff, 0xff, 0xff, -- mov rax, [rbp-168]
+    0x48, 0xc1, 0xe0, 0x08,           -- shl rax, 8
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
+    0x48, 0x89, 0x07,                 -- mov [rdi], rax       (write header)
+    -- Copy str1 bytes
+    0x48, 0x8b, 0xb5, 0x78, 0xff, 0xff, 0xff, -- mov rsi, [rbp-136] (str1)
+    0x48, 0x83, 0xc6, 0x08,           -- add rsi, 8           (skip header)
+    0x48, 0x8b, 0xbd, 0x50, 0xff, 0xff, 0xff, -- mov rdi, [rbp-176] (new str)
+    0x48, 0x83, 0xc7, 0x08,           -- add rdi, 8           (skip header)
+    0x48, 0x8b, 0x8d, 0x68, 0xff, 0xff, 0xff, -- mov rcx, [rbp-152] (len1)
+    0xf3, 0xa4,                       -- rep movsb            (copy str1)
+    -- Copy str2 bytes (rdi already advanced past str1 bytes)
+    0x48, 0x8b, 0xb5, 0x70, 0xff, 0xff, 0xff, -- mov rsi, [rbp-144] (str2)
+    0x48, 0x83, 0xc6, 0x08,           -- add rsi, 8           (skip header)
+    0x48, 0x8b, 0x8d, 0x60, 0xff, 0xff, 0xff, -- mov rcx, [rbp-160] (len2)
+    0xf3, 0xa4,                       -- rep movsb            (copy str2)
+    -- Push tagged pointer
+    0x48, 0x8b, 0x85, 0x50, 0xff, 0xff, 0xff, -- mov rax, [rbp-176]
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1            (tag)
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax       (push)
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- STR_SLICE (33): pop end, pop start, pop str, push substring. pc += 1
+  -- Allocates new string of length (end - start), copies bytes.
+  let op_str_slice_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop end)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x49, 0x8b, 0x5d, 0x00,           -- mov rbx, [r13]       (pop start)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x49, 0x8b, 0x4d, 0x00,           -- mov rcx, [r13]       (pop str)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x83, 0xe1, 0xfe,           -- and rcx, -2          (untag str)
+    0x48, 0x89, 0xc2,                 -- mov rdx, rax
+    0x48, 0x29, 0xda,                 -- sub rdx, rbx         (new_len = end - start)
+    0x48, 0x89, 0x8d, 0x78, 0xff, 0xff, 0xff, -- mov [rbp-136], rcx  (str_ptr)
+    0x48, 0x89, 0x9d, 0x70, 0xff, 0xff, 0xff, -- mov [rbp-144], rbx  (start)
+    0x48, 0x89, 0x95, 0x68, 0xff, 0xff, 0xff, -- mov [rbp-152], rdx  (new_len)
+    0x48, 0x8d, 0x42, 0x0f,           -- lea rax, [rdx+15]
+    0x48, 0x83, 0xe0, 0xf8,           -- and rax, -8          (align)
+    0x4c, 0x89, 0xff,                 -- mov rdi, r15         (alloc base)
+    0x49, 0x01, 0xc7,                 -- add r15, rax         (bump)
+    0x48, 0x89, 0xbd, 0x60, 0xff, 0xff, 0xff, -- mov [rbp-160], rdi  (new str ptr)
+    -- Write header: (new_len << 8) | 1
+    0x48, 0x8b, 0x85, 0x68, 0xff, 0xff, 0xff, -- mov rax, [rbp-152]
+    0x48, 0xc1, 0xe0, 0x08,           -- shl rax, 8
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
+    0x48, 0x89, 0x07,                 -- mov [rdi], rax       (write header)
+    -- Copy bytes: src = str + 8 + start, dst = new + 8
+    0x48, 0x8b, 0xb5, 0x78, 0xff, 0xff, 0xff, -- mov rsi, [rbp-136] (str_ptr)
+    0x48, 0x83, 0xc6, 0x08,           -- add rsi, 8           (skip header)
+    0x48, 0x03, 0xb5, 0x70, 0xff, 0xff, 0xff, -- add rsi, [rbp-144] (+ start)
+    0x48, 0x8b, 0xbd, 0x60, 0xff, 0xff, 0xff, -- mov rdi, [rbp-160] (new str)
+    0x48, 0x83, 0xc7, 0x08,           -- add rdi, 8           (skip header)
+    0x48, 0x8b, 0x8d, 0x68, 0xff, 0xff, 0xff, -- mov rcx, [rbp-152] (new_len)
+    0xf3, 0xa4,                       -- rep movsb
+    -- Push tagged pointer
+    0x48, 0x8b, 0x85, 0x60, 0xff, 0xff, 0xff, -- mov rax, [rbp-160]
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1            (tag)
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax       (push)
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- FILE_READ (39): pop path string, sys_open/sys_read/sys_close, push result. pc += 1
+  -- Allocates 64KB+8 buffer via r15 bump allocator.
+  -- syscall clobbers rcx and r11 only; r12-r15 are safe.
+  let op_file_read_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop path)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x83, 0xe0, 0xfe,           -- and rax, -2          (untag)
+    0x48, 0x89, 0x85, 0x78, 0xff, 0xff, 0xff, -- mov [rbp-136], rax  (path_ptr)
+    -- sys_open(path+8, O_RDONLY, 0)
+    0x48, 0x8d, 0x78, 0x08,           -- lea rdi, [rax+8]     (path data)
+    0x31, 0xf6,                       -- xor esi, esi         (O_RDONLY)
+    0x31, 0xd2,                       -- xor edx, edx         (mode)
+    0xb8, 0x02, 0x00, 0x00, 0x00,     -- mov eax, 2           (sys_open)
+    0x0f, 0x05,                       -- syscall
+    0x48, 0x89, 0x85, 0x70, 0xff, 0xff, 0xff, -- mov [rbp-144], rax  (fd)
+    -- Allocate 64KB+8 buffer on heap
+    0x4c, 0x89, 0xff,                 -- mov rdi, r15         (buffer base)
+    0x48, 0x89, 0xbd, 0x68, 0xff, 0xff, 0xff, -- mov [rbp-152], rdi  (buffer ptr)
+    0x49, 0x81, 0xc7, 0x08, 0x00, 0x01, 0x00, -- add r15, 0x10008   (bump 64KB+8)
+    -- sys_read(fd, buf+8, 65536)
+    0x48, 0x8b, 0x85, 0x70, 0xff, 0xff, 0xff, -- mov rax, [rbp-144] (fd)
+    0x48, 0x89, 0xc7,                 -- mov rdi, rax
+    0x48, 0x8b, 0xb5, 0x68, 0xff, 0xff, 0xff, -- mov rsi, [rbp-152] (buffer)
+    0x48, 0x83, 0xc6, 0x08,           -- add rsi, 8           (skip header)
+    0xba, 0x00, 0x00, 0x01, 0x00,     -- mov edx, 65536
+    0x31, 0xc0,                       -- xor eax, eax         (sys_read)
+    0x0f, 0x05,                       -- syscall
+    0x48, 0x89, 0x85, 0x60, 0xff, 0xff, 0xff, -- mov [rbp-160], rax  (bytes_read)
+    -- sys_close(fd)
+    0x48, 0x8b, 0xbd, 0x70, 0xff, 0xff, 0xff, -- mov rdi, [rbp-144] (fd)
+    0xb8, 0x03, 0x00, 0x00, 0x00,     -- mov eax, 3           (sys_close)
+    0x0f, 0x05,                       -- syscall
+    -- Build string: header = (bytes_read << 8) | 1
+    0x48, 0x8b, 0x85, 0x60, 0xff, 0xff, 0xff, -- mov rax, [rbp-160] (bytes_read)
+    0x48, 0xc1, 0xe0, 0x08,           -- shl rax, 8
+    0x48, 0x83, 0xc8, 0x01,           -- or rax, 1
+    0x48, 0x8b, 0xbd, 0x68, 0xff, 0xff, 0xff, -- mov rdi, [rbp-152] (buffer)
+    0x48, 0x89, 0x07,                 -- mov [rdi], rax       (write header)
+    0x48, 0x83, 0xcf, 0x01,           -- or rdi, 1            (tag pointer)
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x7d, 0x00,           -- mov [r13], rdi       (push)
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- DEBUG_PRINT (40): pop value, write to stderr fd=2. pc += 1
+  -- If tagged pointer (bit 0 = 1): print as string.
+  -- If integer: convert to decimal digits, print, then newline.
+  -- Always pushes 0 afterward.
+  -- Internal jumps use relative offsets baked into the machine code.
+  -- Scratch: [rbp-136]..[rbp-168]. Integer conversion buffer at [rbp-168].
+  let op_debug_print_body = bytes_from_ints (
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]       (pop value)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0xa8, 0x01,                       -- test al, 1           (tagged ptr?)
+    -- jne .print_string (skip 0x95 bytes past this 6-byte instruction)
+    0x0f, 0x85, 0x95, 0x00, 0x00, 0x00,
+    -- Integer path: convert to decimal
+    0x48, 0x89, 0x85, 0x78, 0xff, 0xff, 0xff, -- mov [rbp-136], rax  (save value)
+    0x31, 0xc9,                       -- xor ecx, ecx         (sign=0)
+    0x48, 0x85, 0xc0,                 -- test rax, rax
+    0x79, 0x08,                       -- jns .positive (skip 8)
+    0x48, 0xf7, 0xd8,                 -- neg rax
+    0xb9, 0x01, 0x00, 0x00, 0x00,     -- mov ecx, 1           (sign=negative)
+    -- .positive: rdi = end of conversion buffer at [rbp-168]
+    0x48, 0x8d, 0xbd, 0x58, 0xff, 0xff, 0xff, -- lea rdi, [rbp-168]
+    0x41, 0xb8, 0x0a, 0x00, 0x00, 0x00, -- mov r8d, 10
+    -- .digit_loop:
+    0x31, 0xd2,                       -- xor edx, edx
+    0x49, 0xf7, 0xf0,                 -- div r8               (rax/10, rem->edx)
+    0x80, 0xc2, 0x30,                 -- add dl, 0x30         (+'0')
+    0x48, 0xff, 0xcf,                 -- dec rdi
+    0x88, 0x17,                       -- mov [rdi], dl
+    0x48, 0x85, 0xc0,                 -- test rax, rax
+    0x75, 0xee,                       -- jne .digit_loop      (-18)
+    -- Add '-' if negative
+    0x85, 0xc9,                       -- test ecx, ecx
+    0x74, 0x06,                       -- je .write_int (skip 6)
+    0x48, 0xff, 0xcf,                 -- dec rdi
+    0xc6, 0x07, 0x2d,                 -- mov byte [rdi], '-'
+    -- .write_int: sys_write(2, rdi, [rbp-168]-rdi)
+    0x48, 0x89, 0xfe,                 -- mov rsi, rdi         (buffer start)
+    0x48, 0x8d, 0x95, 0x58, 0xff, 0xff, 0xff, -- lea rdx, [rbp-168]
+    0x48, 0x29, 0xf2,                 -- sub rdx, rsi         (length)
+    0x48, 0x89, 0xb5, 0x70, 0xff, 0xff, 0xff, -- mov [rbp-144], rsi  (save buf)
+    0x48, 0x89, 0x95, 0x68, 0xff, 0xff, 0xff, -- mov [rbp-152], rdx  (save len)
+    0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1           (sys_write)
+    0xbf, 0x02, 0x00, 0x00, 0x00,     -- mov edi, 2           (stderr)
+    0x48, 0x8b, 0xb5, 0x70, 0xff, 0xff, 0xff, -- mov rsi, [rbp-144]
+    0x48, 0x8b, 0x95, 0x68, 0xff, 0xff, 0xff, -- mov rdx, [rbp-152]
+    0x0f, 0x05,                       -- syscall
+    -- Write newline
+    0xc6, 0x85, 0x58, 0xff, 0xff, 0xff, 0x0a, -- mov byte [rbp-168], '\n'
+    0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1
+    0xbf, 0x02, 0x00, 0x00, 0x00,     -- mov edi, 2
+    0x48, 0x8d, 0xb5, 0x58, 0xff, 0xff, 0xff, -- lea rsi, [rbp-168]
+    0xba, 0x01, 0x00, 0x00, 0x00,     -- mov edx, 1
+    0x0f, 0x05,                       -- syscall
+    0xeb, 0x3d,                       -- jmp .print_done (skip 61)
+    -- .print_string: untag, read header for length, write data
+    0x48, 0x83, 0xe0, 0xfe,           -- and rax, -2          (untag)
+    0x48, 0x8b, 0x18,                 -- mov rbx, [rax]       (header)
+    0x48, 0xc1, 0xeb, 0x08,           -- shr rbx, 8           (length)
+    0x48, 0x8d, 0x70, 0x08,           -- lea rsi, [rax+8]     (data)
+    0x48, 0x89, 0xda,                 -- mov rdx, rbx         (length)
+    0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1           (sys_write)
+    0xbf, 0x02, 0x00, 0x00, 0x00,     -- mov edi, 2           (stderr)
+    0x0f, 0x05,                       -- syscall
+    -- Write newline
+    0xc6, 0x85, 0x58, 0xff, 0xff, 0xff, 0x0a, -- mov byte [rbp-168], '\n'
+    0xb8, 0x01, 0x00, 0x00, 0x00,     -- mov eax, 1
+    0xbf, 0x02, 0x00, 0x00, 0x00,     -- mov edi, 2
+    0x48, 0x8d, 0xb5, 0x58, 0xff, 0xff, 0xff, -- lea rsi, [rbp-168]
+    0xba, 0x01, 0x00, 0x00, 0x00,     -- mov edx, 1
+    0x0f, 0x05,                       -- syscall
+    -- .print_done: push 0
+    0x31, 0xc0,                       -- xor eax, eax
+    0x49, 0x83, 0xed, 0x08,           -- sub r13, 8
+    0x49, 0x89, 0x45, 0x00,           -- mov [r13], rax
+    0x49, 0xff, 0xc4                  -- inc r12
+  ) in
+
+  -- ============================================================
+  -- Handler groups (max 14 entries per tuple for IRIS runtime)
+  -- ============================================================
+
+  -- Group A: integer arithmetic, comparisons, locals, control flow (14 handlers)
+  let handlers_a = (
     (1, op_push_body),
     (2, op_add_body),
     (3, op_sub_body),
@@ -314,40 +574,61 @@ let emit_vm_core =
     (16, op_jmp_body),
     (17, op_jz_body),
     (18, op_mktuple_body),
-    (19, op_tget_body), (25, op_fold_body_test), (26, op_foldend_body_test)
+    (19, op_tget_body)
   ) in
-  let n_handlers = 16 in
+  let n_a = 14 in
 
-  -- Compute total dispatch size: halt + sum(4+2+body+2 for each handler) + 5 (jmp back)
-  let halt_size = bytes_len op_halt in
-  let handlers_size = fold 0 (\acc i ->
-    if i >= n_handlers then acc
-    else acc + 8 + bytes_len (tuple_get (tuple_get handlers i) 1)
-  ) n_handlers in
-  let dispatch_size = bytes_len load_opcode + halt_size + handlers_size in
+  -- Group B: fold, string ops, file I/O, debug (9 handlers)
+  let handlers_b = (
+    (25, op_fold_body_test),
+    (26, op_foldend_body_test),
+    (29, op_push_str_ptr_body),
+    (30, op_str_len_body),
+    (31, op_char_at_body),
+    (32, op_str_concat_body),
+    (33, op_str_slice_body),
+    (39, op_file_read_body),
+    (40, op_debug_print_body)
+  ) in
+  let n_b = 9 in
 
-  -- Build the dispatch code
-  -- After each handler body, jmp back to load_opcode.
-  -- jmp offset = -(current_position_from_load_opcode + 2)
-  let dispatch_code = fold op_halt (\acc i ->
-    if i >= n_handlers then acc
-    else
-      let h = tuple_get handlers i in
-      let op = tuple_get h 0 in
-      let body = tuple_get h 1 in
-      let body_len = bytes_len body in
-      -- cmp rax, op
-      let cmp_instr = bytes_from_ints (0x48, 0x83, 0xf8, op) in
-      -- jne over body+jmp = body_len + 5 (5 bytes for near jmp e9)
-      let jne_instr = bytes_from_ints (0x75, body_len + 5) in
-      -- jmp back (near jmp e9 rel32): offset from current position to load_opcode
-      let pos_after_body = bytes_len load_opcode + bytes_len acc + 4 + 2 + body_len in
-      let jmp_offset = 0 - (pos_after_body + 5) in
-      let jmp_instr = bytes_from_ints (0xe9,
-        bitand jmp_offset 255, bitand (shr jmp_offset 8) 255,
-        bitand (shr jmp_offset 16) 255, bitand (shr jmp_offset 24) 255) in
-      bytes_concat acc (bytes_concat cmp_instr (bytes_concat jne_instr (bytes_concat body jmp_instr)))
-  ) n_handlers in
+  -- ============================================================
+  -- Dispatch builder: uses jne rel32 (0x0f 0x85) to support large handler bodies.
+  -- Each handler entry: cmp rax, OP (4 bytes) | jne rel32 (6 bytes) | body | jmp rel32 (5 bytes)
+  -- ============================================================
+
+  -- Helper: build dispatch for one handler group, folding into accumulator bytes.
+  -- acc = accumulated dispatch bytes so far (starts with op_halt on first call).
+  -- The jmp rel32 at end of each body jumps back to load_opcode.
+  let build_group = \handlers_tup n_entries acc ->
+    fold acc (\acc2 i ->
+      if i >= n_entries then acc2
+      else
+        let h = tuple_get handlers_tup i in
+        let op = tuple_get h 0 in
+        let body = tuple_get h 1 in
+        let body_len = bytes_len body in
+        -- cmp rax, op (4 bytes)
+        let cmp_instr = bytes_from_ints (0x48, 0x83, 0xf8, op) in
+        -- jne rel32 over body+jmp: skip = body_len + 5
+        let skip = body_len + 5 in
+        let jne_instr = bytes_from_ints (0x0f, 0x85,
+          bitand skip 255, bitand (shr skip 8) 255,
+          bitand (shr skip 16) 255, bitand (shr skip 24) 255) in
+        -- jmp rel32 back to load_opcode
+        -- Position after body = load_opcode_len + acc2_len + cmp(4) + jne(6) + body_len
+        let pos_after_body = bytes_len load_opcode + bytes_len acc2 + 4 + 6 + body_len in
+        let jmp_offset = 0 - (pos_after_body + 5) in
+        let jmp_instr = bytes_from_ints (0xe9,
+          bitand jmp_offset 255, bitand (shr jmp_offset 8) 255,
+          bitand (shr jmp_offset 16) 255, bitand (shr jmp_offset 24) 255) in
+        bytes_concat acc2 (bytes_concat cmp_instr (bytes_concat jne_instr (bytes_concat body jmp_instr)))
+    ) n_entries
+  in
+
+  -- Build dispatch across both groups
+  let dispatch_after_a = build_group handlers_a n_a op_halt in
+  let dispatch_code = build_group handlers_b n_b dispatch_after_a in
 
   -- Final jmp back for unhandled opcodes: inc r12, jmp loop_top (near jmp)
   let unhandled_size = bytes_len load_opcode + bytes_len dispatch_code in
