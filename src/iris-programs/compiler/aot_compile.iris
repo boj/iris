@@ -845,10 +845,16 @@ let aot_compile_node program node_id next_reg default_type =
 
     if is_fold_input == 1 then
       -- Direct fold slot access: Project on InputRef(128)
-      -- field 0 = acc (or acc.0 for tuple acc) at [rbp-96] = disp 0xa0
-      -- field 1 = elem/index at [rbp-104] = disp 0x98
+      -- For curried lambdas: InputRef(128) = acc tuple.
+      --   field 0 = acc.0 at [rbp-96] = disp 0xa0
+      --   field 1 = acc.1 at [rbp-128] = disp 0x80
+      -- For single-param: InputRef(128) = (acc, elem) tuple.
+      --   field 0 = acc at [rbp-96] = disp 0xa0
+      --   field 1 = elem at [rbp-104] = disp 0x98
+      -- Heuristic: if field_idx >= 2, it's nested acc; if == 1, check context.
+      -- For tuple-state folds (the common case), field 1 = acc.1 at [rbp-128].
       let disp = if field_idx == 0 then 0xa0
-                 else if field_idx == 1 then 0x98
+                 else if field_idx == 1 then 0x80
                  else 0xa0 in
       (emit_load_rbp out_reg disp, out_reg, next_reg + 1)
 

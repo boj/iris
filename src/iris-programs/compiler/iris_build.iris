@@ -1,0 +1,35 @@
+-- iris_build.iris — IRIS-native build tool
+-- Compiles source to native x86-64 binary using the IRIS pipeline.
+-- Uses aot_compile.iris and elf_wrapper.iris from disk (not embedded).
+--
+-- Usage: iris-stage0 run iris_build.iris <source.iris> <output> [n_args]
+
+let main source_path output_path n_args =
+  let src = file_read source_path in
+  -- Compile target source
+  let m = compile_source_json src in
+  let target = module_eval (m.0) 0 () in
+
+  -- Compile the AOT compiler from disk
+  let aot_src = file_read "src/iris-programs/compiler/aot_compile.iris" in
+  let aot_m = compile_source_json aot_src in
+
+  -- Compile the ELF wrapper from disk
+  let elf_src = file_read "src/iris-programs/compiler/elf_wrapper.iris" in
+  let elf_m = compile_source_json elf_src in
+
+  -- Compile the native runtime from disk
+  let rt_src = file_read "src/iris-programs/compiler/native_runtime.iris" in
+  let rt_m = compile_source_json rt_src in
+
+  -- Get the runtime bytes
+  let runtime_bytes = module_eval (rt_m.0) 0 () in
+
+  -- Run the AOT compiler on the target graph
+  let code = module_eval (aot_m.0) 0 (target,) in
+
+  -- Wrap in ELF
+  let binary = module_eval (elf_m.0) 0 (code, n_args) in
+
+  -- Write to output file
+  file_write_bytes output_path binary
