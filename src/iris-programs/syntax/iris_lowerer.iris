@@ -177,8 +177,41 @@ let lower ast src =
                   -- result.1
                   let extract = (18, 1, list_append mt fold_a) in
                   (13, param_hash, list_append mt extract, 0)
+                else if n_pp == 2 then
+                  -- 2-arg tail recursion: let rec f a b = if cond then base else f(new_a)(new_b)
+                  -- Trampoline state: (done_flag, a, b)
+                  -- \a b -> (fold (0, a, b) (\st _i -> if st.0==1 then st else
+                  --   let a = st.1 in let b = st.2 in
+                  --   if cond then (1, base, 0) else (0, new_a, new_b)) 1000000).1
+                  let p0_hash = (list_nth prior_params 0).1 in
+                  let p1_hash = (list_nth prior_params 1).1 in
+                  let cond_ast = (prior_body.2).0 in
+                  let base_ast = (prior_body.2).1 in
+                  let else_br = (prior_body.2).2 in
+                  -- else branch: Apply(Apply(Var(f), new_a), new_b)
+                  let inner_app = (else_br.2).0 in
+                  let rec_arg1 = (inner_app.2).1 in  -- new_a
+                  let rec_arg2 = (else_br.2).1 in    -- new_b
+                  let st_h = 295 in
+                  let st_0 = (18, 0, list_append mt (4, st_h, mt)) in
+                  let st_1 = (18, 1, list_append mt (4, st_h, mt)) in
+                  let st_2 = (18, 2, list_append mt (4, st_h, mt)) in
+                  let done_ck = (10, 5, (st_0, (0, 1, mt))) in
+                  let done_r = (17, 0, list_append (list_append (list_append mt (0, 1, mt)) base_ast) (0, 0, mt)) in
+                  let cont_r = (17, 0, list_append (list_append (list_append mt (0, 0, mt)) rec_arg1) rec_arg2) in
+                  let inner_if = (15, 0, (cond_ast, done_r, cont_r)) in
+                  let let_p1 = (14, p1_hash, (st_2, inner_if)) in
+                  let let_p0 = (14, p0_hash, (st_1, let_p1)) in
+                  let step_body = (15, 0, (done_ck, (4, st_h, mt), let_p0)) in
+                  let step_fn = (13, st_h, list_append mt step_body, 232) in
+                  let init_t = (17, 0, list_append (list_append (list_append mt (0, 0, mt)) (4, p0_hash, mt)) (4, p1_hash, mt)) in
+                  let fold_a = (12, 0, ((12, 0, ((12, 0, ((4, 421, mt), init_t)), step_fn)), (0, 1000000, mt))) in
+                  let extract = (18, 1, list_append mt fold_a) in
+                  -- Wrap in \a -> \b -> extract (curried)
+                  let inner_lam = (13, p1_hash, list_append mt extract, 0) in
+                  (13, p0_hash, list_append mt inner_lam, 0)
                 else
-                  -- Multi-param tail rec: fall through to simple lambda for now
+                  -- 3+ param tail rec: fall through to simple lambda
                   fold prior_body
                     (\inner j ->
                       let rj = n_pp - 1 - j in
