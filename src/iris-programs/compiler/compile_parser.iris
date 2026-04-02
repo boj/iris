@@ -1,0 +1,116 @@
+-- compile_tokenizer.iris — Compile the tokenizer to bytecodes.
+-- Uses self_graph injection + iterative (JIT-accelerated) compiler.
+
+let ws_push stack item = (item, stack)
+
+let compile_graph pg start_nid =
+  let init_state = (((0, start_nid), ()), (), (), 0) in
+  let final_state = fold init_state (\state step ->
+    let ws = state.0 in
+    let bc = state.1 in
+    let env = state.2 in
+    let ns = state.3 in
+    if ws == () then state
+    else
+      let item = ws.0 in
+      let rest = ws.1 in
+      let tag = item.0 in
+      if tag == 0 then
+        let nid = item.1 in
+        let kind = graph_get_kind pg nid in
+        if kind == 5 then
+          let tt = graph_get_lit_type_tag pg nid in
+          let lv = graph_get_lit_value pg nid in
+          if tt == 255 then
+            let s = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len env then s else let e = list_nth env i in if e.0 == lv then e.1 else s) (list_len env) in
+            (rest, list_append bc (14, if s >= 0 then s else lv), env, ns)
+          else (rest, list_append bc (1, lv), env, ns)
+        else if kind == 0 then
+          let op = graph_get_prim_op pg nid in
+          let ch = graph_outgoing pg nid in
+          let nc = list_len ch in
+          let bop = if op == 0 then 2 else if op == 1 then 3 else if op == 2 then 4 else if op == 3 then 5 else if op == 4 then 6 else if op == 32 then 8 else if op == 33 then 11 else if op == 34 then 9 else if op == 35 then 10 else if op == 36 then 12 else if op == 37 then 13 else 0 in
+          if nc == 2 then
+            if bop >= 2 then
+              (ws_push (ws_push (ws_push rest (1, bop)) (0, list_nth ch 1)) (0, list_nth ch 0), bc, env, ns)
+            else (ws_push (ws_push (ws_push rest (2, op, nc)) (0, list_nth ch 1)) (0, list_nth ch 0), bc, env, ns)
+          else if nc == 1 then (ws_push (ws_push rest (2, op, 1)) (0, list_nth ch 0), bc, env, ns)
+          else (rest, bc, env, ns)
+        else if kind == 17 then
+          let ch = graph_outgoing pg nid in
+          (ws_push (ws_push rest (3, list_nth ch 1, list_nth ch 2)) (0, list_nth ch 0), bc, env, ns)
+        else if kind == 11 then
+          let ch = graph_outgoing pg nid in
+          let nc = list_len ch in
+          let w = fold (ws_push rest (4, nc)) (\w i -> if i >= nc then w else ws_push w (0, list_nth ch (nc - 1 - i))) nc in
+          (w, bc, env, ns)
+        else if kind == 13 then
+          let ch = graph_outgoing pg nid in
+          let fi = graph_get_field_index pg nid in
+          (ws_push (ws_push rest (5, fi)) (0, list_nth ch 0), bc, env, ns)
+        else if kind == 2 then
+          let ch = graph_outgoing pg nid in
+          let b = bitand (graph_get_binder pg nid) 255 in
+          (ws_push rest (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1)
+        else if kind == 3 then
+          let ch = graph_outgoing pg nid in
+          let b = bitand (graph_get_binder pg nid) 255 in
+          (ws_push (ws_push (ws_push rest (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1)
+        else if kind == 1 then
+          let ch = graph_outgoing pg nid in
+          let f = list_nth ch 0 in
+          let a = list_nth ch 1 in
+          if graph_get_kind pg f == 2 then
+            let b = bitand (graph_get_binder pg f) 255 in
+            let bd = list_nth (graph_outgoing pg f) 0 in
+            (ws_push (ws_push (ws_push rest (0, bd)) (6, ns)) (0, a), bc, list_append env (b, ns), ns + 1)
+          else (ws_push (ws_push rest (0, a)) (0, f), bc, env, ns)
+        else if kind == 8 then
+          let ch = graph_outgoing pg nid in
+          let step = list_nth ch 1 in
+          let sc = graph_outgoing pg step in
+          let ob = bitand (graph_get_binder pg step) 255 in
+          let body = list_nth sc 0 in
+          let ik = graph_get_kind pg body in
+          let ab = if ik == 2 then list_nth (graph_outgoing pg body) 0 else body in
+          let ib = if ik == 2 then bitand (graph_get_binder pg body) 255 else 0 in
+          let e2 = list_append env (ob, ns) in
+          let e3 = if ik == 2 then list_append e2 (ib, ns + 1) else e2 in
+          (ws_push (ws_push (ws_push (ws_push (ws_push rest (8, 0)) (0, ab)) (7, ns, ns + 1)) (0, list_nth ch 2)) (0, list_nth ch 0), bc, e3, ns + 2)
+        else if kind == 16 then
+          let ch = graph_outgoing pg nid in
+          let b = bitand (graph_get_binder pg nid) 255 in
+          (ws_push (ws_push (ws_push rest (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1)
+        else (rest, list_append bc (1, 0), env, ns)
+      else if tag == 1 then (rest, list_append bc (item.1), env, ns)
+      else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), env, ns)
+      else if tag == 3 then (ws_push rest (0, item.1), bc, env, ns)
+      else if tag == 4 then (rest, list_concat bc (18, item.1), env, ns)
+      else if tag == 5 then (rest, list_concat bc (19, item.1), env, ns)
+      else if tag == 6 then (rest, list_concat bc (15, item.1), env, ns)
+      else if tag == 7 then
+        (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), env, ns)
+      else if tag == 8 then (rest, list_append bc 26, env, ns)
+      else (rest, bc, env, ns)
+  ) 500000 in
+  list_append (final_state.1) 0
+
+let main x =
+  let source = file_read "src/iris-programs/syntax/iris_parser.iris" in
+  let lines = str_split source "\n" in
+  let n = list_len lines in
+  let dl = fold 0 (\p i -> if p > 0 then p else if i >= n then p else if str_ends_with (list_nth lines i) "=" then i else p) n in
+  let header = fold "" (\a i -> if i > dl then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
+  let body = fold "" (\a i -> if i <= dl then a else if i >= n then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
+  let wrapped = str_concat header (str_concat "  (self_graph,\n" (str_concat body ")")) in
+  let m = compile_source wrapped in
+  let nb = list_len (m.1) in
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let test_src = "let x = 1" in
+  let test_tokens = module_eval (tok_m.0) 0 test_src in
+  let result = module_eval (m.0) (nb - 1) (test_tokens, test_src) in
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  let body_node = list_nth (graph_outgoing pg root) 1 in
+  let bytecodes = compile_graph pg body_node in
+  (tuple_len bytecodes, bytecodes)
