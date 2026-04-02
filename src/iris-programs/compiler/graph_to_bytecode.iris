@@ -542,24 +542,99 @@ let rec compile_node pg nid env ns ia va ib vb =
           else ob in
           if actual_body == 0 - 1 then (rb.0, rb.1, rb.2)
           else
+            -- For the fold body: acc and idx are the two parameters.
+            -- Compile with probes that distinguish acc from idx from constants.
+            -- acc starts at base_val (va=base_val) and changes each iteration.
+            -- idx starts at 0 and increments.
+            -- Use probes: ia=0, va=body_at(acc=base_val, idx=0),
+            --             ib=1, vb=body_at(acc=base_val+step, idx=1)
+            -- For acc+1: body(base=0, idx=0)=0+1=1. body(base=1, idx=1)=1+1=2.
+            -- So va=1, vb=2. acc produces (0, 1) → (base_val, base_val+1).
+            -- For acc+i: body(0,0)=0, body(1,1)=2.
+            -- Use probes that make acc=(base_val, base_val+1) and idx=(0, 1).
+            -- Compute: body_va = eval with acc=base_val, idx=0.
+            -- We can't evaluate the body independently. But we know:
+            -- f(1) = step(base_val, 0) = body_at(base_val, 0).
+            -- f(2) = step(step(base_val, 0), 1) = step(f(1), 1).
+            -- For single-step: body_va = f(1) when base is base_val.
+            -- body_vb: harder to determine.
+            -- SIMPLE: use base_val and base_val+1 as acc probes, 0 and 1 as idx probes.
+            -- body(acc=base_val, idx=0): for acc+1 → base_val+1.
+            -- body(acc=base_val+1, idx=1): for acc+1 → base_val+2.
+            -- So body_va = base_val+1, body_vb = base_val+2. But what IS base_val+1?
+            -- We know f(1) = step(base_val, 0). For simple folds, f(1) IS the body output
+            -- at (acc=base_val, idx=0). So body_va = f(1) when limit >= 1.
+            -- Similarly, f(2) = step(f(1), 1). So body_vb at (acc=f(1), idx=1) = f(2).
+            -- But the ACC value changes between iterations!
+            --
+            -- KEY INSIGHT: For the fold body, acc and idx are INDEPENDENT parameters.
+            -- They're NOT the same as the function's input n.
+            -- So we need different probes. Let the Prim decomposition handle it:
+            -- acc varies (0→1), idx varies (0→1), constant stays constant.
+            -- body(acc=0, idx=0) = body_at_00
+            -- body(acc=1, idx=0) = body_at_10
+            -- body(acc=0, idx=1) = body_at_01
+            --
+            -- Since we can't evaluate the body independently, use the FULL function:
+            -- f(1) = body(base_val, 0) → body with acc=base_val, idx=0
+            -- We don't have separate control over acc and idx.
+            --
+            -- PRAGMATIC: just use env with acc and idx pre-registered.
+            -- Find the Lit nodes and assign:
+            --   Lits that are children of the Prim at the SAME position as the
+            --   accumulator parameter → acc_slot
+            --   Other varying Lits → idx_slot
+            --   Constants → not registered
+            --
+            -- Since we can't distinguish, use the fold body's f(1) to help:
+            -- f(1) = body(base_val, 0). For acc+1: f(1) = base_val + 1 = 0+1 = 1.
+            -- For acc+i: f(1) = base_val + 0 = 0.
+            -- body_va at (acc=base_val, idx=0) = f(1).
+            -- body_va at (acc=base_val+1, idx=1) = f(2)-f(1)+f(1)... not simple.
+            --
+            -- SIMPLE FIX: don't pre-register fold body Lits. Instead, pass non-zero
+            -- probes and let the Prim decomposition handle it.
+            -- For acc+1: pass (0, 1, 1, 2) meaning body produces 1 at "input 0" and 2 at "input 1".
+            -- The acc InputRef produces (0, 1) → detected as varying.
+            -- The constant 1 produces (1, 1) → detected as constant.
+            -- But what are these "inputs"? They're the accumulator values.
+            -- For the fold body, the "input" is acc, and idx is another parameter.
+            -- With (ia=0, va=1, ib=1, vb=2) for `acc + 1`:
+            --   add(acc, 1). acc varies 0→1. 1 is constant.
+            --   Prim: both Lit. c_left_ir = va - ia = 1 - 0 = 1.
+            --   check: add(ib, 1) = 1+1 = 2 = vb ✓. Left=IR, right=const=1. Correct!
+            -- Determine if the fold body uses idx by checking increments.
+            -- If f(k+1) - f(k) is constant: body doesn't use idx (e.g., acc + C).
+            -- If increments grow: body uses idx (e.g., acc + i).
+            let f1 = graph_eval pg 1 in
+            let f2 = graph_eval pg 2 in
+            let f3 = graph_eval pg 3 in
+            let d1 = f2 - f1 in
+            let d2 = f3 - f2 in
+            let uses_idx = if d1 == d2 then 0 else 1 in
+            -- Pre-register fold parameters
             let body_lits = find_lit_nodes pg actual_body in
             let nlits = list_len body_lits in
-            let env_fold = fold (rl.1) (\e i ->
-              if i >= nlits then e
-              else let lid = list_nth body_lits i in
-                let already = fold 0 (\found j ->
-                  if found == 1 then 1
-                  else if j >= list_len e then 0
-                  else let en = list_nth e j in if en.0 == lid then 1 else 0
-                ) (list_len e) in
-                if already == 1 then e
-                else
-                  let added = list_len e - list_len (rl.1) in
-                  if added == 0 then list_append e (lid, acc_slot)
-                  else if added == 1 then list_append e (lid, idx_slot)
+            let env_fold = if uses_idx == 1 then
+              -- Both acc and idx used: register first 2 Lits
+              fold () (\e i ->
+                if i >= nlits then e
+                else let lid = list_nth body_lits i in
+                  let na = list_len e in
+                  if na == 0 then list_append e (lid, acc_slot)
+                  else if na == 1 then list_append e (lid, idx_slot)
                   else e
-            ) (rl.1) in
-            let rbd = compile_node pg actual_body env_fold (idx_slot + 1) 0 0 0 0 in
+              ) nlits
+            else
+              -- Only acc used: register just the first Lit
+              if nlits >= 1 then
+                list_append () (list_nth body_lits 0, acc_slot)
+              else ()
+            in
+            -- Body probes: body(acc=0, idx=0) = f(1) (one iteration from base=0).
+            -- body(acc=1, idx=1) ≈ f(2) (second iteration result).
+            -- These let the Prim decomposition detect constants correctly.
+            let rbd = compile_node pg actual_body env_fold (idx_slot + 1) 0 f1 1 f2 in
             let bl = list_len (rbd.0) in
             let fc = list_concat (list_concat (rb.0) (rl.0)) (25, bl + 6) in
             let fc2 = list_concat (list_concat (list_concat fc (15, idx_slot)) (15, acc_slot)) (14, acc_slot) in
