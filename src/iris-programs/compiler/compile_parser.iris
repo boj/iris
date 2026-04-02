@@ -130,29 +130,26 @@ let compile_graph pg start_nid =
         -- bc is replaced by assembled bytecodes (else_bc was the current bc)
         (rest, a4, env, ns, rest_segs)
       else (rest, bc, env, ns, segs)
-  ) 500000 in
+  ) 5000000 in
   list_concat (final_state.1) (0,)
+
 
 let main x =
   let source = file_read "src/iris-programs/syntax/iris_parser.iris" in
-  let lines = str_split source "\n" in
-  let n = list_len lines in
-  let dl = fold 0 (\p i -> if p > 0 then p else if i >= n then p else if str_ends_with (list_nth lines i) "=" then i else p) n in
-  let header = fold "" (\a i -> if i > dl then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
-  let body = fold "" (\a i -> if i <= dl then a else if i >= n then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
-  let wrapped = str_concat header (str_concat "  (self_graph,\n" (str_concat body ")")) in
-  let m = compile_source wrapped in
+  let slen = str_len source in
+  -- Find first "= " and inject (self_graph, ...)
+  let pos = fold (0 - 1) (\p i ->
+    if p >= 0 then p else if i >= slen - 2 then p
+    else let c1 = char_at source i in let c2 = char_at source (i + 1) in if c1 == 61 then if c2 == 10 then i else p else p
+  ) slen in
+  let injected = str_concat (str_slice source 0 pos) (str_concat "=\n  (self_graph,\n" (str_concat (str_trim (str_slice source (pos + 2) slen)) ")")) in
+  let m = compile_source injected in
   let nb = list_len (m.1) in
   let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
-  let test_tokens = module_eval (tok_m.0) 0 "let x = 1" in
-  let result = module_eval (m.0) (nb - 1) (test_tokens, "let x = 1") in
+  let test_src = "let x = 1" in
+  let result = module_eval (m.0) (nb - 1) (module_eval (tok_m.0) 0 test_src, test_src) in
   let pg = result.0 in
   let root = graph_get_root pg in
-  let rk = graph_get_kind pg root in
-  -- Navigate: if root is Lambda, go to body; if Tuple, take child 1
-  let tup_node = if rk == 2 then list_nth (graph_outgoing pg root) 0 else root in
-  let body_node = if graph_get_kind pg tup_node == 11 then
-    list_nth (graph_outgoing pg tup_node) 1
-  else tup_node in
+  let body_node = list_nth (graph_outgoing pg root) 1 in
   let bytecodes = compile_graph pg body_node in
   (tuple_len bytecodes, bytecodes)

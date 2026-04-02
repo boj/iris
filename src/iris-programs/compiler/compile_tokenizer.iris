@@ -133,15 +133,17 @@ let compile_graph pg start_nid =
   ) 500000 in
   list_concat (final_state.1) (0,)
 
+
 let main x =
   let source = file_read "src/iris-programs/syntax/tokenizer.iris" in
-  let lines = str_split source "\n" in
-  let n = list_len lines in
-  let dl = fold 0 (\p i -> if p > 0 then p else if i >= n then p else if str_ends_with (list_nth lines i) "=" then i else p) n in
-  let header = fold "" (\a i -> if i > dl then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
-  let body = fold "" (\a i -> if i <= dl then a else if i >= n then a else str_concat (str_concat a (list_nth lines i)) "\n") n in
-  let wrapped = str_concat header (str_concat "  (self_graph,\n" (str_concat body ")")) in
-  let m = compile_source wrapped in
+  let slen = str_len source in
+  -- Find first "= " and inject (self_graph, ...)
+  let pos = fold (0 - 1) (\p i ->
+    if p >= 0 then p else if i >= slen - 2 then p
+    else let c1 = char_at source i in let c2 = char_at source (i + 1) in if c1 == 61 then if c2 == 10 then i else p else p
+  ) slen in
+  let injected = str_concat (str_slice source 0 pos) (str_concat "=\n  (self_graph,\n" (str_concat (str_trim (str_slice source (pos + 2) slen)) ")")) in
+  let m = compile_source injected in
   let nb = list_len (m.1) in
   let result = module_eval (m.0) (nb - 1) "let x = 1" in
   let pg = result.0 in
