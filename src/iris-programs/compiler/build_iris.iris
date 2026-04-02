@@ -1,0 +1,146 @@
+-- build_iris.iris — Build the self-hosting iris binary.
+--
+-- Produces a single native x86-64 ELF binary that:
+-- 1. Reads an IRIS source file
+-- 2. Tokenizes it (using embedded tokenizer bytecodes)
+-- 3. Parses it (using embedded parser bytecodes)
+-- 4. Compiles AST to bytecodes (using embedded compiler bytecodes)
+-- 5. Executes the bytecodes (using the native VM)
+-- 6. Prints the result
+--
+-- All pipeline stages run as bytecodes in the native VM.
+-- No external dependencies. No stage0 needed at runtime.
+--
+-- Usage: iris-stage0 run build_iris.iris -o iris
+--
+-- The build process:
+-- 1. Load pre-extracted pipeline bytecodes (from extract_pipeline.iris)
+-- 2. Load the native VM (from native_vm.iris)
+-- 3. Load the ELF builder components (from elf_wrapper.iris)
+-- 4. Assemble: startup + VM + pipeline bytecodes + data → ELF
+-- 5. Output the binary
+
+-- For now: build a binary that compiles and runs a SPECIFIC program.
+-- The pipeline bytecodes will be plugged in once extract_pipeline.iris finishes.
+
+-- Helper: encode 64-bit LE
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+-- ELF header (64 bytes)
+let elf_header entry =
+  bytes_from_ints (
+    0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 0, 0x3e, 0, 1, 0, 0, 0,
+    bitand entry 255, bitand (shr entry 8) 255, bitand (shr entry 16) 255, bitand (shr entry 24) 255, 0, 0, 0, 0,
+    0x40, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 0
+  )
+
+-- Program header (56 bytes)
+let prog_header file_size mem_size =
+  let fs0 = bitand file_size 255 in let fs1 = bitand (shr file_size 8) 255 in
+  let fs2 = bitand (shr file_size 16) 255 in let fs3 = bitand (shr file_size 24) 255 in
+  let ms0 = bitand mem_size 255 in let ms1 = bitand (shr mem_size 8) 255 in
+  let ms2 = bitand (shr mem_size 16) 255 in let ms3 = bitand (shr mem_size 24) 255 in
+  bytes_from_ints (
+    1, 0, 0, 0, 5, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    fs0, fs1, fs2, fs3, 0, 0, 0, 0,
+    ms0, ms1, ms2, ms3, 0, 0, 0, 0,
+    0, 0x10, 0, 0, 0, 0, 0, 0
+  )
+
+-- Emit bytecode data as tuple in memory
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in
+  fold header (\acc i ->
+    if i >= n then acc
+    else bytes_concat acc (le64 (tuple_get bc i))
+  ) n
+
+-- Main: assemble the iris binary
+let main output_path arg =
+  -- Load components
+  let elf_m = compile_source (file_read "src/iris-programs/compiler/elf_wrapper.iris") in
+  let vm_m = compile_source (file_read "src/iris-programs/compiler/native_vm.iris") in
+
+  -- Get ELF builder components
+  let emit_atoi = module_eval (elf_m.0) 8 () in
+  let emit_print_and_exit = module_eval (elf_m.0) 9 () in
+
+  -- Get native VM
+  let vm_code = module_eval (vm_m.0) 1 () in
+  let vm_size = bytes_len vm_code in
+
+  -- For now: embed a test program's bytecodes
+  -- This will be replaced with the pipeline bytecodes
+  -- once extract_pipeline.iris produces them
+  let bc = (14, 0, 1, 1, 2, 0) in  -- n + 1
+  let bc_data = emit_bc_data bc in
+  let bc_size = bytes_len bc_data in
+
+  -- Build startup stub
+  let header_total = 120 in
+  let setup = bytes_from_ints (
+    0x48, 0x89, 0xe5,
+    0x48, 0x83, 0xec, 0x40,
+    -- Init heap: sys_brk
+    0x48, 0x31, 0xff,
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,
+    0x0f, 0x05,
+    0x49, 0x89, 0xc7,
+    0x48, 0x89, 0xc7,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04,
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,
+    0x0f, 0x05,
+    -- Parse argv[1]
+    0x48, 0x8b, 0x7d, 0x10
+  ) in
+
+  let atoi_code = emit_atoi in
+  let setup_vm = bytes_from_ints (0x48, 0x89, 0xc6) in
+
+  -- Compute layout
+  let stub_prefix_size = bytes_len setup + bytes_len atoi_code + bytes_len setup_vm + 10 + 5 in
+  let post_call = bytes_concat (bytes_from_ints (0x49, 0x89, 0xc4, 0x48, 0x83, 0xec, 0x20)) emit_print_and_exit in
+  let stub_size = stub_prefix_size + bytes_len post_call in
+  let vm_offset = header_total + stub_size in
+  -- Align bytecode data to even address
+  let raw_bc_offset = vm_offset + vm_size in
+  let bc_pad = raw_bc_offset % 2 in
+  let bc_offset = raw_bc_offset + bc_pad in
+  let file_size = bc_offset + bc_size in
+  let mem_size = file_size + 65536 in
+
+  -- Bytecode pointer
+  let bc_vaddr = 4194304 + bc_offset in
+  let load_bc = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (bc_vaddr + 1)) in
+
+  -- Call VM
+  let call_rel = vm_offset - header_total - stub_prefix_size in
+  let call_vm = bytes_from_ints (0xe8,
+    bitand call_rel 255, bitand (shr call_rel 8) 255,
+    bitand (shr call_rel 16) 255, bitand (shr call_rel 24) 255) in
+
+  let stub = bytes_concat setup (bytes_concat atoi_code (bytes_concat setup_vm
+    (bytes_concat load_bc (bytes_concat call_vm post_call)))) in
+
+  -- Assemble
+  let ehdr = elf_header (4194304 + header_total) in
+  let phdr = prog_header file_size mem_size in
+  let pad = if bc_pad == 1 then bytes_from_ints (0x90) else bytes_from_ints () in
+  let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub
+    (bytes_concat vm_code (bytes_concat pad bc_data)))) in
+
+  -- Output as Bytes (pipe through python to write)
+  binary

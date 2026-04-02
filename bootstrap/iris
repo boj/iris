@@ -1,55 +1,40 @@
 #!/usr/bin/env bash
-# iris — IRIS compiler and runtime
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 STAGE0="$DIR/iris-stage0"
+PROJECT="$(cd "$DIR/.." && pwd)"
 
 cmd="${1:-help}"
 shift || true
 
 case "$cmd" in
   run)
-    source="${1:?Usage: iris run <source.iris> [args...]}"
-    shift
-    "$STAGE0" run "$source" "$@"
+    "$STAGE0" run "$@"
     ;;
   build)
     source="${1:?Usage: iris build <source.iris> -o <output>}"
-    shift
-    "$STAGE0" build "$source" "$@"
+    shift; output=""
+    while [ $# -gt 0 ]; do case "$1" in -o) output="$2"; shift 2 ;; *) shift ;; esac; done
+    output="${output:?Usage: iris build <source.iris> -o <output>}"
+    cd "$PROJECT"
+    "$STAGE0" run src/iris-programs/compiler/iris_native_compile.iris "$source" 0 2>&1 | \
+      nix-shell -p python3 --run 'python3 -c "
+import sys, re
+data = sys.stdin.read()
+m = re.search(r\"Bytes\(\[([0-9, \n]+)\]\)\", data)
+if m:
+    nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
+    sys.stdout.buffer.write(bytes(nums))
+else:
+    print(\"Error:\", data[:500], file=sys.stderr)
+    sys.exit(1)
+"' > "$output"
+    chmod +x "$output"
+    echo "$source -> $output ($(wc -c < "$output") bytes)"
     ;;
-  compile)
-    "$STAGE0" compile "$@"
-    ;;
-  test)
-    "$STAGE0" test "$@"
-    ;;
-  prove)
-    source="${1:?Usage: iris prove <source.iris>}"
-    echo "[prove] Compiling $source..."
-    "$STAGE0" compile "$source" -o /tmp/iris_prove_module.json
-    echo "[prove] Checking proof obligations..."
-    # TODO: launch Lean kernel server, send proof requests
-    echo "[prove] Lean kernel integration pending (IPC protocol defined in lean/IrisKernelServer.lean)"
-    ;;
-  version)
-    echo "IRIS compiler v0.2.0"
-    echo "Bootstrap: iris-stage0 (frozen evaluator + JIT)"
-    echo "Native VM: 24 opcodes, 1801 bytes x86-64"
-    echo "Pipeline: tokenizer + parser + lowerer (bootstrap JSONs)"
-    echo "Lean kernel: lean/IrisKernelServer.lean (20 inference rules)"
-    ;;
-  help|*)
-    echo "IRIS — The IRIS Programming Language"
-    echo ""
-    echo "Usage: iris <command> [args]"
-    echo ""
-    echo "Commands:"
-    echo "  run <source.iris> [args]         Compile and execute"
-    echo "  build <source.iris> -o <binary>  Compile to native binary"  
-    echo "  compile <source.iris> -o <json>  Compile to JSON module"
-    echo "  test <dir>                       Run test suite"
-    echo "  prove <source.iris>              Verify with Lean kernel"
-    echo "  version                          Show version"
-    ;;
+  compile) "$STAGE0" compile "$@" ;;
+  test) "$STAGE0" test "$@" ;;
+  prove) echo "[prove] Lean kernel verification pending." ;;
+  version) echo "IRIS compiler v0.3.0 — source → bytecodes → native x86-64" ;;
+  help|*) echo "Usage: iris {run|build|compile|test|prove|version} [args]" ;;
 esac

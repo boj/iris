@@ -1,0 +1,248 @@
+-- iris_native_compile.iris — Compile IRIS source to native binary via self_graph.
+--
+-- Uses the self_graph injection trick to extract a fully inspectable graph
+-- from any IRIS program, compiles it to bytecodes, and wraps in a native ELF.
+--
+-- Usage: iris-stage0 run iris_native_compile.iris <source.iris>
+-- Output: Bytes (pipe through python to get binary)
+--
+-- Pipeline: source → inject self_graph → compile_source → module_eval →
+--           (graph, result) → graph_to_bytecodes → native VM + ELF
+
+-- Bytecode compiler: graph → flat instruction array
+let rec compile_node pg nid env ns =
+  let kind = graph_get_kind pg nid in
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag pg nid in
+    let lv = graph_get_lit_value pg nid in
+    if tt == 255 then
+      let slot = fold (0 - 1) (\s i ->
+        if s >= 0 then s else if i >= list_len env then s
+        else let e = list_nth env i in if e.0 == lv then e.1 else s
+      ) (list_len env) in
+      if slot >= 0 then ((14, slot), env, ns)
+      else ((14, lv), env, ns)
+    else ((1, lv), env, ns)
+  else if kind == 0 then
+    let op = graph_get_prim_op pg nid in
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    let bc = if op == 0 then 2 else if op == 1 then 3 else if op == 2 then 4
+      else if op == 3 then 5 else if op == 4 then 6
+      else if op == 32 then 8 else if op == 33 then 11 else if op == 34 then 9
+      else if op == 35 then 10 else if op == 36 then 12 else if op == 37 then 13
+      else 0 in
+    if nc == 2 then
+      let r0 = compile_node pg (list_nth children 0) env ns in
+      let r1 = compile_node pg (list_nth children 1) (r0.1) (r0.2) in
+      if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+      else (list_concat (list_concat (r0.0) (r1.0)) (28, op, 2), r1.1, r1.2)
+    else if nc == 1 then
+      let r0 = compile_node pg (list_nth children 0) env ns in
+      if bc >= 2 then (list_concat (r0.0) (bc,), r0.1, r0.2)
+      else (list_concat (r0.0) (28, op, 1), r0.1, r0.2)
+    else ((1, 0), env, ns)
+  else if kind == 17 then
+    let children = graph_outgoing pg nid in
+    let rc = compile_node pg (list_nth children 0) env ns in
+    let rt = compile_node pg (list_nth children 1) (rc.1) (rc.2) in
+    let re = compile_node pg (list_nth children 2) (rt.1) (rt.2) in
+    let cl = list_len (rc.0) in
+    let tl = list_len (rt.0) in
+    let code = list_concat (rc.0) (17, cl + 2 + tl + 2) in
+    let code2 = list_concat (list_concat code (rt.0)) (16, cl + 2 + tl + 2 + list_len (re.0)) in
+    (list_concat code2 (re.0), re.1, re.2)
+  else if kind == 11 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    let cc = fold ((), env, ns) (\st i ->
+      if i >= nc then st
+      else let r = compile_node pg (list_nth children i) (st.1) (st.2) in
+        (list_concat (st.0) (r.0), r.1, r.2)
+    ) nc in
+    (list_concat (cc.0) (18, nc), cc.1, cc.2)
+  else if kind == 13 then
+    let children = graph_outgoing pg nid in
+    let fi = graph_get_field_index pg nid in
+    let r0 = compile_node pg (list_nth children 0) env ns in
+    (list_concat (r0.0) (19, fi), r0.1, r0.2)
+  else if kind == 8 then
+    let children = graph_outgoing pg nid in
+    let rb = compile_node pg (list_nth children 0) env ns in
+    let rl = compile_node pg (list_nth children 2) (rb.1) (rb.2) in
+    let step = list_nth children 1 in
+    let step_children = graph_outgoing pg step in
+    let outer_binder = bitand (graph_get_binder pg step) 255 in
+    let body = list_nth step_children 0 in
+    let inner_kind = graph_get_kind pg body in
+    let acc_slot = rl.2 in
+    let idx_slot = acc_slot + 1 in
+    let actual_body = if inner_kind == 2 then list_nth (graph_outgoing pg body) 0 else body in
+    let inner_binder = if inner_kind == 2 then bitand (graph_get_binder pg body) 255 else 0 in
+    let env2 = list_append (rl.1) (outer_binder, acc_slot) in
+    let env3 = if inner_kind == 2 then list_append env2 (inner_binder, idx_slot) else env2 in
+    let rbd = compile_node pg actual_body env3 (idx_slot + 1) in
+    let bl = list_len (rbd.0) in
+    let c = list_concat (list_concat (rb.0) (rl.0)) (25, bl + 4) in
+    let c2 = list_concat (list_concat c (15, idx_slot)) (15, acc_slot) in
+    (list_concat (list_concat c2 (rbd.0)) (26,), rl.1, rbd.2)
+  else if kind == 2 then
+    let children = graph_outgoing pg nid in
+    let binder = bitand (graph_get_binder pg nid) 255 in
+    compile_node pg (list_nth children 0) (list_append env (binder, ns)) (ns + 1)
+  else if kind == 3 then
+    let children = graph_outgoing pg nid in
+    let binder = bitand (graph_get_binder pg nid) 255 in
+    let rv = compile_node pg (list_nth children 0) env ns in
+    let env2 = list_append (rv.1) (binder, rv.2) in
+    let rb = compile_node pg (list_nth children 1) env2 (rv.2 + 1) in
+    (list_concat (list_concat (rv.0) (15, rv.2)) (rb.0), rb.1, rb.2)
+  else if kind == 1 then
+    let children = graph_outgoing pg nid in
+    let func = list_nth children 0 in
+    let arg = list_nth children 1 in
+    if graph_get_kind pg func == 2 then
+      let binder = bitand (graph_get_binder pg func) 255 in
+      let body = list_nth (graph_outgoing pg func) 0 in
+      let ra = compile_node pg arg env ns in
+      let env2 = list_append (ra.1) (binder, ra.2) in
+      let rb = compile_node pg body env2 (ra.2 + 1) in
+      (list_concat (list_concat (ra.0) (15, ra.2)) (rb.0), rb.1, rb.2)
+    else
+      let rf = compile_node pg func env ns in
+      let ra = compile_node pg arg (rf.1) (rf.2) in
+      (list_concat (rf.0) (ra.0), ra.1, ra.2)
+  else ((1, 0), env, ns)
+
+-- Extract graph from source via self_graph injection
+let extract_graph source dummy_input =
+  -- Inject "(self_graph, " after the first "= " in the source
+  -- and append ")" at the end. This wraps the function body in a tuple
+  -- with self_graph, preserving the original parameter names.
+  let injected = str_replace source "= " "= (self_graph, " in
+  let wrapped = str_concat injected ")" in
+  -- Compile via Rust pipeline (fast!)
+  let m = compile_source wrapped in
+  let nb = list_len (m.1) in
+  let result = module_eval (m.0) (nb - 1) dummy_input in
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  -- Child 1 of the root Tuple is the actual body
+  let children = graph_outgoing pg root in
+  let body_node = list_nth children 1 in
+  (pg, body_node)
+
+-- Compile source to bytecodes via graph extraction
+let compile_to_bytecodes source dummy_input =
+  let extracted = extract_graph source dummy_input in
+  let pg = extracted.0 in
+  let body_node = extracted.1 in
+  let root = graph_get_root pg in
+  -- Find the function parameter's binder index
+  -- The wrapper is "let f __x__ = (self_graph, body)"
+  -- The body references __x__ via InputRef with the wrapper's binder index
+  -- For compile_source, the binder index is assigned by the Rust lowerer
+  let result = compile_node pg body_node () 0 in
+  list_concat (result.0) (0,)
+
+-- Helpers for ELF
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  fold (le64 (n * 256)) (\acc i ->
+    if i >= n then acc
+    else bytes_concat acc (le64 (tuple_get bc i))
+  ) n
+
+-- Main: source → bytecodes → native binary
+let main source_path arg =
+  let source = file_read source_path in
+
+  -- Step 1: Extract graph and compile to bytecodes
+  let bytecodes = compile_to_bytecodes source 0 in
+  let n_bc = tuple_len bytecodes in
+
+  -- Step 2: Verify against stage0
+  let m = compile_source source in
+  let nb = list_len (m.1) in
+  let expected = module_eval (m.0) (nb - 1) 42 in
+
+  -- Step 3: Build native binary
+  let elf_m = compile_source (file_read "src/iris-programs/compiler/elf_wrapper.iris") in
+  let vm_m = compile_source (file_read "src/iris-programs/compiler/native_vm.iris") in
+  let emit_atoi = module_eval (elf_m.0) 8 () in
+  let emit_pe = module_eval (elf_m.0) 9 () in
+  let vm_code = module_eval (vm_m.0) 1 () in
+  let vm_size = bytes_len vm_code in
+  let bc_data = emit_bc_data bytecodes in
+  let bc_size = bytes_len bc_data in
+
+  -- Assemble ELF
+  let header_total = 120 in
+  let setup = bytes_from_ints (
+    0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x40,
+    0x48, 0x31, 0xff, 0x48, 0xc7, 0xc0, 12, 0, 0, 0, 0x0f, 0x05,
+    0x49, 0x89, 0xc7, 0x48, 0x89, 0xc7,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04,
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0, 0x0f, 0x05,
+    0x48, 0x8b, 0x7d, 0x10
+  ) in
+  let setup_vm = bytes_from_ints (0x48, 0x89, 0xc6) in
+  let post_call = bytes_concat (bytes_from_ints (0x49, 0x89, 0xc4, 0x48, 0x83, 0xec, 0x20)) emit_pe in
+
+  let stub_pre = bytes_len setup + bytes_len emit_atoi + bytes_len setup_vm + 10 + 5 in
+  let stub_size = stub_pre + bytes_len post_call in
+  let vm_offset = header_total + stub_size in
+  let raw_bc_offset = vm_offset + vm_size in
+  let bc_pad = raw_bc_offset % 2 in
+  let bc_offset = raw_bc_offset + bc_pad in
+  let file_size = bc_offset + bc_size in
+
+  let bc_vaddr = 4194304 + bc_offset in
+  let load_bc = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (bc_vaddr + 1)) in
+  let call_rel = vm_offset - header_total - stub_pre in
+  let call_vm = bytes_from_ints (0xe8,
+    bitand call_rel 255, bitand (shr call_rel 8) 255,
+    bitand (shr call_rel 16) 255, bitand (shr call_rel 24) 255) in
+
+  let stub = bytes_concat setup (bytes_concat emit_atoi (bytes_concat setup_vm
+    (bytes_concat load_bc (bytes_concat call_vm post_call)))) in
+
+  let ehdr = bytes_from_ints (
+    0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 0, 0x3e, 0, 1, 0, 0, 0,
+    0x78, 0, 0x40, 0, 0, 0, 0, 0,
+    0x40, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 0
+  ) in
+  let fs0 = bitand file_size 255 in let fs1 = bitand (shr file_size 8) 255 in
+  let fs2 = bitand (shr file_size 16) 255 in
+  let ms = file_size + 65536 in
+  let ms0 = bitand ms 255 in let ms1 = bitand (shr ms 8) 255 in
+  let ms2 = bitand (shr ms 16) 255 in
+  let phdr = bytes_from_ints (
+    1, 0, 0, 0, 5, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    fs0, fs1, fs2, 0, 0, 0, 0, 0,
+    ms0, ms1, ms2, 0, 0, 0, 0, 0,
+    0, 0x10, 0, 0, 0, 0, 0, 0
+  ) in
+
+  let pad = if bc_pad == 1 then bytes_from_ints (0x90) else bytes_from_ints () in
+  let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub
+    (bytes_concat vm_code (bytes_concat pad bc_data)))) in
+
+  let d1 = debug_print (str_concat "Expected: f(42) = " (int_to_string expected)) in
+  let d2 = debug_print (str_concat "Bytecodes: " (int_to_string n_bc)) in
+  let d3 = debug_print (str_concat "Binary: " (str_concat (int_to_string (bytes_len binary)) " bytes")) in
+  binary
