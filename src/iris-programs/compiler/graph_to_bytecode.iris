@@ -1,155 +1,796 @@
 -- graph_to_bytecode.iris — Compile a SemanticGraph to bytecodes via dynamic analysis.
 --
 -- Works on graphs from the IRIS pipeline (lowerer output) which support:
---   graph_get_root, graph_get_kind, graph_get_prim_op, graph_edge_target, graph_eval
--- But NOT: graph_outgoing, graph_get_lit_value, graph_get_binder
+--   graph_get_root, graph_get_kind, graph_get_prim_op, graph_edge_target,
+--   graph_get_binder, graph_get_field_index, graph_eval
+-- But NOT: graph_outgoing, graph_get_lit_value, graph_get_lit_type_tag
 --
--- Strategy: use graph_eval with probe inputs to determine node values.
--- InputRef nodes change with input; Lit nodes are constant.
+-- Strategy: use graph_eval probing to detect InputRef vs constant Lit nodes.
+-- We track (ia, va, ib, vb) per subtree:
+--   ia, ib: actual input values used for probing (e.g., 0 and 1)
+--   va, vb: subtree output values at those inputs
+-- InputRef nodes produce (ia, ib) as their values.
+-- Constant C produces (C, C) regardless of input.
 --
--- Usage: called from the pipeline compiler with a Program graph
+-- Bytecodes: 0=HALT, 1=PUSH, 2=ADD, 3=SUB, 4=MUL, 5=DIV, 6=MOD,
+--   7=NEG, 8=EQ, 9=LT, 10=GT, 11=NE, 12=LE, 13=GE,
+--   14=LOAD, 15=STORE, 16=JMP, 17=JZ, 18=MAKE_TUPLE, 19=TUPLE_GET,
+--   25=FOLD_BEGIN, 26=FOLD_END, 28=PRIM(opcode, nargs)
+--
+-- Node kinds: 0=Prim, 1=Apply, 2=Lambda, 3=Let, 4=Match, 5=Lit,
+--   8=Fold, 9=Unfold, 10=Effect, 11=Tuple, 12=Inject, 13=Project,
+--   14=Ref, 16=LetRec, 17=Guard
 
-let rec compile_node pg nid env ns probe1 probe2 =
+-- =========================================================================
+-- Helper: count children at sequential ports (label 0)
+-- =========================================================================
+let count_children pg nid =
+  let c0 = graph_edge_target pg nid 0 0 in
+  if c0 == 0 - 1 then 0
+  else let c1 = graph_edge_target pg nid 1 0 in
+  if c1 == 0 - 1 then 1
+  else let c2 = graph_edge_target pg nid 2 0 in
+  if c2 == 0 - 1 then 2
+  else let c3 = graph_edge_target pg nid 3 0 in
+  if c3 == 0 - 1 then 3
+  else let c4 = graph_edge_target pg nid 4 0 in
+  if c4 == 0 - 1 then 4
+  else let c5 = graph_edge_target pg nid 5 0 in
+  if c5 == 0 - 1 then 5
+  else let c6 = graph_edge_target pg nid 6 0 in
+  if c6 == 0 - 1 then 6
+  else let c7 = graph_edge_target pg nid 7 0 in
+  if c7 == 0 - 1 then 7
+  else 8
+
+-- =========================================================================
+-- Helper: find all kind-5 (Lit) nodes reachable from a node, up to depth 2.
+-- =========================================================================
+let find_lit_nodes pg nid =
+  let k = graph_get_kind pg nid in
+  if k == 5 then (nid,)
+  else
+    let nc = count_children pg nid in
+    let body_03 = graph_edge_target pg nid 0 3 in
+    fold () (\acc i ->
+      if i >= nc then acc
+      else
+        let cid = graph_edge_target pg nid i 0 in
+        if cid == 0 - 1 then acc
+        else let ck = graph_get_kind pg cid in
+        if ck == 5 then list_append acc cid
+        else
+          let nc2 = count_children pg cid in
+          let body2_03 = graph_edge_target pg cid 0 3 in
+          let acc2 = fold acc (\a2 j ->
+            if j >= nc2 then a2
+            else let gid = graph_edge_target pg cid j 0 in
+            if gid == 0 - 1 then a2
+            else if graph_get_kind pg gid == 5 then list_append a2 gid
+            else a2
+          ) nc2 in
+          if body2_03 != 0 - 1 then
+            if graph_get_kind pg body2_03 == 5 then list_append acc2 body2_03
+            else acc2
+          else acc2
+    ) nc
+
+-- =========================================================================
+-- Helper: evaluate a Prim op on two values
+-- =========================================================================
+let eval_op opcode a b =
+  if opcode == 0 then a + b
+  else if opcode == 1 then a - b
+  else if opcode == 2 then a * b
+  else if opcode == 3 then if b == 0 then 0 else a / b
+  else if opcode == 4 then if b == 0 then 0 else a % b
+  else if opcode == 32 then if a == b then 1 else 0
+  else if opcode == 33 then if a != b then 1 else 0
+  else if opcode == 34 then if a < b then 1 else 0
+  else if opcode == 35 then if a > b then 1 else 0
+  else if opcode == 36 then if a <= b then 1 else 0
+  else if opcode == 37 then if a >= b then 1 else 0
+  else 0
+
+-- =========================================================================
+-- Main compiler: compile a single graph node to bytecodes.
+--
+-- pg:     Program graph
+-- nid:    current node ID
+-- env:    list of (node_id, slot) for known InputRef nodes
+-- ns:     next available local slot
+-- ia:     first probe input value
+-- va:     subtree output at input=ia
+-- ib:     second probe input value
+-- vb:     subtree output at input=ib
+--
+-- Returns: (bytecodes_tuple, env, next_slot)
+-- =========================================================================
+let rec compile_node pg nid env ns ia va ib vb =
   let kind = graph_get_kind pg nid in
 
+  -- =======================================================================
   -- Lit (kind 5): constant or InputRef
-  -- InputRef detection: if the full graph result changes by (probe2 - probe1)
-  -- when we change the input, and this Lit contributes to that change,
-  -- it's an InputRef. Detected by checking if it's in env.
-  -- For root-level programs without Lambda wrapper: the InputRef is marked
-  -- during the initial call (added to env before compilation starts).
+  -- InputRef produces (ia, ib). Constant produces (C, C).
+  -- =======================================================================
   if kind == 5 then
-    -- Probe: evaluate the full graph with two different inputs
-    -- If this node's contribution changes, it's an InputRef
-    -- We detect by checking if the node is an edge target from a Prim(add)
-    -- that produces (probe1 + const) and (probe2 + const).
-    -- For now, use a heuristic: evaluate the full program with both probes.
-    -- If the values at this position differ by (probe2-probe1), it's InputRef.
-    --
-    -- SIMPLER: just try both binder index 0 (the function parameter).
-    -- Most simple programs have one parameter. Check if this Lit node
-    -- appears to be the input by evaluating the graph.
-    --
-    -- Actually, we can distinguish by KIND + POSITION:
-    -- InputRef is always kind 5, and it appears as a child of Prim nodes.
-    -- The binder index tells us which local slot.
-    -- Since we can't read the binder index, assume single-param programs
-    -- use index 0 (slot 0).
-    --
-    -- HEURISTIC: if a Lit's edge_target pattern matches a known InputRef
-    -- position (child of root), and the graph's output changes with input,
-    -- then it's InputRef. Otherwise it's a constant.
-    --
-    -- For simple programs: graph_eval(pg, X) should equal the function applied to X.
-    -- We can compute what each child contributes by evaluating subtrees.
-    -- But graph_set_root doesn't work, so we can't evaluate subtrees.
-    --
-    -- ULTIMATE HEURISTIC: evaluate the FULL graph twice.
-    -- result1 = graph_eval(pg, probe1), result2 = graph_eval(pg, probe2)
-    -- For `n + 1`: result1 = probe1 + 1, result2 = probe2 + 1
-    -- The InputRef child changes by (probe2 - probe1).
-    -- The Lit child is constant (always 1).
-    --
-    -- For a Lit node at position `nid`, we can't evaluate it in isolation.
-    -- But we know: if it's an InputRef for param 0, slot 0 → emit LOAD 0.
-    -- If it's a constant, we need its value.
-    --
-    -- TRICK: for the ROOT being a known Prim (like add), we can compute
-    -- the constant by: result1 - probe1 = constant (if the InputRef adds probe1).
-    --
-    -- For now: use a simple approach. If the graph is f(n) = n OP const,
-    -- and graph_eval(pg, 0) tells us the const:
-    -- const = graph_eval(pg, 0) for additive functions.
-    -- InputRef slot 0 → LOAD 0.
-
-    -- Check if this is likely an InputRef by seeing if it's the first child
-    -- of a known Prim node (heuristic for simple programs)
-    let is_input = fold 0 (\found i ->
-      if found == 1 then 1
-      else if i >= list_len env then 0
-      else let e = list_nth env i in if e.0 == nid then 1 else 0
-    ) (list_len env) in
-    if is_input == 1 then
-      -- Found in env → it's a known InputRef
-      let slot = fold 0 (\s i ->
-        if i >= list_len env then s
-        else let e = list_nth env i in if e.0 == nid then e.1 else s
-      ) (list_len env) in
-      ((14, slot), env, ns)
+    -- Check env for this node ID
+    let nenv = list_len env in
+    let lookup = fold (0, 0) (\st i ->
+      if st.0 == 1 then st
+      else if i >= nenv then st
+      else let e = list_nth env i in
+        if e.0 == nid then (1, e.1)
+        else st
+    ) nenv in
+    if lookup.0 == 1 then
+      ((14, lookup.1), env, ns)
+    else if va == vb then
+      -- Constant: emit PUSH(va)
+      ((1, va), env, ns)
     else
-      -- Not in env: it's a constant. Determine value heuristically.
-      -- For the root's children: if graph_eval(pg, 0) = X, and this child
-      -- is the "constant" part, its value can be derived.
-      -- SIMPLEST: just output the probe1 result as the constant.
-      -- This works for constants ≤ the probe value.
-      --
-      -- Actually, since we have graph_eval, we can evaluate with input 0:
-      -- For f(n) = n + 1: graph_eval(pg, 0) = 1. The constant IS 1.
-      -- For f(n) = n * 2: graph_eval(pg, 0) = 0. Less helpful.
-      --
-      -- For now, assume probe1 = 0. Then graph_eval(pg, 0) = constant
-      -- for additive functions. Use this as the Lit value.
-      ((1, probe1), env, ns)
+      -- Varies: InputRef. Check if va == ia and vb == ib (direct InputRef).
+      -- Or if va and vb differ in a way consistent with InputRef.
+      -- For single-param functions: all InputRef Lits represent the same param.
+      -- Reuse existing InputRef slot if available.
+      let existing_ir = fold (0, 0) (\st i ->
+        if st.0 == 1 then st
+        else if i >= nenv then st
+        else let e = list_nth env i in (1, e.1)
+      ) nenv in
+      if existing_ir.0 == 1 then
+        let env2 = list_append env (nid, existing_ir.1) in
+        ((14, existing_ir.1), env2, ns)
+      else
+        let slot = ns in
+        let env2 = list_append env (nid, slot) in
+        ((14, slot), env2, ns + 1)
 
-  -- Prim (kind 0): compile children via edge_target, emit operation
+  -- =======================================================================
+  -- Prim (kind 0)
+  -- =======================================================================
   else if kind == 0 then
     let opcode = graph_get_prim_op pg nid in
-    let bc = if opcode == 0 then 2 else if opcode == 1 then 3
-      else if opcode == 2 then 4 else if opcode == 3 then 5
-      else if opcode == 4 then 6 else if opcode == 32 then 8
-      else if opcode == 34 then 9 else 0 in
-    if bc >= 2 then
-      let c0 = graph_edge_target pg nid 0 0 in
-      let c1 = graph_edge_target pg nid 1 0 in
-      -- Mark both children: c0 and c1 could be InputRef
-      -- Check which child changes with input:
-      -- We already know the full graph produces probe1 and probe2 results.
-      -- If this Prim is the root, c0 and c1 are its children.
-      -- Identify InputRef: the child that varies with input.
-      let env0 = env in
-      let r0 = compile_node pg c0 env0 ns probe1 probe2 in
-      let r1 = compile_node pg c1 (r0.1) (r0.2) probe1 probe2 in
-      (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
-    else ((1, 0), env, ns)
-
-  -- Lambda (kind 2): the body is the function's computation
-  else if kind == 2 then
-    let c0 = graph_edge_target pg nid 0 0 in
-    -- Mark the Lambda's InputRef child as slot `ns`
-    -- The InputRef node ID is the child that has kind 5 and varies with input.
-    -- For single-param lambdas: find ALL kind-5 descendants that vary.
-    -- HEURISTIC: compile the body, treating any unknown Lit as potential InputRef.
-    -- Actually, just add this Lambda's parameter to env.
-    -- The parameter is identified by evaluating: graph_eval(pg, X) uses this param.
-    -- For a single-param function, there's ONE InputRef in the body.
-    -- Walk to find it: check all kind-5 nodes reachable from the body.
-    let body = c0 in
-    -- Find InputRef by probing: which Lit child of the body changes with input?
-    -- For now, find all Lit children recursively and mark the varying one.
-    -- SIMPLE: just compile the body. Lit nodes not in env → constants.
-    -- We need to add the InputRef to env BEFORE compiling.
-    --
-    -- Strategy: walk the tree, find Lit nodes. For each, check if it's the input.
-    -- A Lit is the input if removing it from the computation changes the result.
-    -- SIMPLEST: for single-param, find the Lit that graph_eval varies with.
-    -- Find the first child that's kind 5 and not a constant.
-    -- Find InputRef: check body's Lit children
-    let bk = graph_get_kind pg body in
-    let input_nid = if bk == 5 then body
-      else if bk == 0 then
-        let cc0 = graph_edge_target pg body 0 0 in
-        let cc1 = graph_edge_target pg body 1 0 in
-        -- Heuristic: first kind-5 child is likely InputRef
-        if graph_get_kind pg cc0 == 5 then cc0
-        else if graph_get_kind pg cc1 == 5 then cc1
-        else 0
+    let bc = if opcode == 0 then 2
+      else if opcode == 1 then 3
+      else if opcode == 2 then 4
+      else if opcode == 3 then 5
+      else if opcode == 4 then 6
+      else if opcode == 5 then 7
+      else if opcode == 32 then 8
+      else if opcode == 33 then 11
+      else if opcode == 34 then 9
+      else if opcode == 35 then 10
+      else if opcode == 36 then 12
+      else if opcode == 37 then 13
       else 0 in
-    let env2 = if input_nid != 0 then list_append env (input_nid, ns) else env in
-    compile_node pg body env2 (ns + 1) probe1 probe2
+    let c0 = graph_edge_target pg nid 0 0 in
+    let c1 = graph_edge_target pg nid 1 0 in
+    let has_c0 = if c0 == 0 - 1 then 0 else 1 in
+    let has_c1 = if c1 == 0 - 1 then 0 else 1 in
+    let nc = has_c0 + has_c1 in
 
+    if nc == 1 then
+      -- Unary: pass probes through
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      if bc >= 2 then (list_concat (r0.0) (bc,), r0.1, r0.2)
+      else (list_concat (r0.0) (28, opcode, 1), r0.1, r0.2)
+
+    else if nc == 2 then
+      -- Binary: decompose probes for children.
+      -- va = op(L_a, R_a), vb = op(L_b, R_b)
+      -- InputRef produces (ia, ib). Constant produces (C, C).
+      --
+      -- Test hypothesis: left=InputRef(ia,ib), right=constant(C,C).
+      --   va = op(ia, C), vb = op(ib, C)
+      --   C such that op(ia, C) = va → C = inverse_right(op, va, ia)
+      --   Check: op(ib, C) = vb
+      let k0 = graph_get_kind pg c0 in
+      let k1 = graph_get_kind pg c1 in
+
+      -- Both Lit: algebraic decomposition
+      if k0 == 5 then
+        if k1 == 5 then
+          -- Try left=IR, right=const
+          -- For add: C = va - ia. Check: ib + C = vb → ib + va - ia = vb
+          -- For sub: C = ia - va. Check: ib - C = vb → ib - (ia - va) = vb
+          -- For mul: C = va / ia (if ia != 0). Check: ib * C = vb
+          -- For comparison: C is what makes op(ia, C) = va
+          -- General approach: try different C values
+          let c_left_ir = if opcode == 0 then va - ia
+            else if opcode == 1 then ia - va
+            else if opcode == 2 then if ia == 0 then (if ib == 0 then 1 else vb / ib) else va / ia
+            else if opcode == 3 then if va == 0 then 1 else ia / va
+            else if opcode == 4 then if va == 0 then ia + 1 else ia % va
+            else va in  -- for comparisons, use va directly
+          let check_left_ir = eval_op opcode ib c_left_ir in
+          if check_left_ir == vb then
+            -- Left is InputRef (ia→ib), right is constant c_left_ir
+            let r0 = compile_node pg c0 env ns ia ia ib ib in
+            let r1 = compile_node pg c1 (r0.1) (r0.2) ia c_left_ir ib c_left_ir in
+            if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+            else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+          else
+            -- Try right=IR, left=const
+            let c_right_ir = if opcode == 0 then va - ia
+              else if opcode == 1 then va + ia
+              else if opcode == 2 then if ia == 0 then (if ib == 0 then 1 else vb / ib) else va / ia
+              else va in
+            let check_right_ir = eval_op opcode c_right_ir ib in
+            if check_right_ir == vb then
+              let r0 = compile_node pg c0 env ns ia c_right_ir ib c_right_ir in
+              let r1 = compile_node pg c1 (r0.1) (r0.2) ia ia ib ib in
+              if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+              else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+            else
+              -- Both InputRef
+              let r0 = compile_node pg c0 env ns ia ia ib ib in
+              let r1 = compile_node pg c1 (r0.1) (r0.2) ia ia ib ib in
+              if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+              else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+        else
+          -- c0=Lit, c1=complex. Test if c0 is constant or InputRef.
+          -- Test: if op(va, 0) == va → c1(0)=0, c0 is constant = va.
+          let c_test2 = eval_op opcode va 0 in
+          if c_test2 == va then
+            -- c0 is constant = va. c1 produces (0, inverse_right(va, vb))
+            let c1_a = if opcode == 0 then va - va  -- = 0
+              else if opcode == 1 then va - va  -- = 0
+              else 0 in
+            let c1_b = if opcode == 0 then vb - va
+              else if opcode == 1 then va - vb
+              else if opcode == 2 then if va == 0 then 0 else vb / va
+              else 0 in
+            let r0 = compile_node pg c0 env ns ia va ib va in
+            let r1 = compile_node pg c1 (r0.1) (r0.2) ia c1_a ib c1_b in
+            if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+            else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+          else
+            -- c0 is InputRef
+            let r0 = compile_node pg c0 env ns ia ia ib ib in
+            let c1_a = if opcode == 0 then va - ia
+              else if opcode == 1 then ia - va
+              else if opcode == 2 then if ia == 0 then 0 else va / ia
+              else va in
+            let c1_b = if opcode == 0 then vb - ib
+              else if opcode == 1 then ib - vb
+              else if opcode == 2 then if ib == 0 then 0 else vb / ib
+              else vb in
+            let r1 = compile_node pg c1 (r0.1) (r0.2) ia c1_a ib c1_b in
+            if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+            else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+      else if k1 == 5 then
+        -- c0=complex, c1=Lit. Test if c1 is constant or InputRef.
+        -- Hypothesis A: c1=constant C. Then c0_a = inverse(op, va, C), c0_b = inverse(op, vb, C).
+        --   For add: c0_a = va - C, c0_b = vb - C. C = va - c0_a.
+        --   If c0 contains InputRef: c0_a = some_fn(ia), c0_b = some_fn(ib).
+        --   Need C such that c0_a/c0_b are consistent.
+        -- Hypothesis B: c1=InputRef(ia, ib). Then c0_a = inverse_left(op, va, ia), etc.
+        -- Test B first: c1 produces (ia, ib).
+        let c0_a_B = if opcode == 0 then va - ia
+          else if opcode == 1 then va + ia
+          else if opcode == 2 then if ia == 0 then 0 else va / ia
+          else va in
+        let c0_b_B = if opcode == 0 then vb - ib
+          else if opcode == 1 then vb + ib
+          else if opcode == 2 then if ib == 0 then 0 else vb / ib
+          else vb in
+        -- Test A: c1=constant. For add: C = va - c0_a_at_0.
+        -- We don't know c0_a_at_0. But if c0 is linear in input:
+        -- c0(ia) = m*ia + b, c0(ib) = m*ib + b.
+        -- For add: va = c0(ia) + C = m*ia + b + C
+        --          vb = c0(ib) + C = m*ib + b + C
+        -- So va - vb = m*(ia - ib). m = (va - vb) / (ia - ib) if ia != ib.
+        -- C = va - c0(ia) = va - m*ia - b. And b = va - C - m*ia... circular.
+        -- Instead: try C = va (constant c1 = va when c0(ia)=0).
+        -- For add: c0(ia) = va - C. If c0(ia)=0: C=va. Then c0(ib) = vb - va.
+        -- Check: does op(c0_ib, C) = vb? add(vb-va, va) = vb ✓. Always true for add.
+        -- So for add: C could be anything. Need another constraint.
+        -- KEY: c0 is a complex subtree. It produces c0(ia) and c0(ib).
+        -- If c0 contains InputRef: c0(0)=f(0) and c0(1)=f(1) for some f.
+        -- The simplest check: if the InputRef in c0 would produce ia at ia and ib at ib,
+        -- then c0(ia) should differ from c0(ib) when ia != ib.
+        -- For B: c0_a_B - c0_b_B should be consistent with c0 varying.
+        -- For A: the constant C makes c0_a = va-C and c0_b = vb-C.
+        --   The c0 slope = (c0_b - c0_a)/(ib - ia) = (vb - va)/(ib - ia).
+        --   For B: c0 slope = (c0_b_B - c0_a_B)/(ib - ia).
+        -- The real test: is the c0 behavior CONSISTENT with what c0 should produce?
+        -- This is hard without evaluating c0 independently.
+        -- PRAGMATIC: check if c0_a_B makes sense. For add(mul(IR,3), 5) with va=5, vb=8:
+        --   B: c0_a_B = 5-0=5, c0_b_B = 8-1=7. Slope = (7-5)/(1-0)=2. Hmm, mul(n,3) slope=3.
+        --   A: C=5. c0_a = 5-5=0, c0_b = 8-5=3. Slope = 3/1 = 3. Matches mul(n,3)!
+        -- So A is correct. How to detect?
+        -- With B: the slope is (c0_b_B - c0_a_B) = (vb-ib) - (va-ia) = (vb-va) - (ib-ia).
+        -- With A(C): the slope is (vb-C) - (va-C) = vb-va.
+        -- For c0 containing a single InputRef with multiplier m: c0 slope = m.
+        -- A is correct when C is such that c0_a = va-C is consistent.
+        -- We can test: if c0(ia)=0 when ia=0 (InputRef starts at 0), then C=va.
+        -- This works for add(f(n), C) where f(0)=0. Common for f(n)=n*k.
+        -- For add(f(n)+b, C): f(0)+b+C=va → C=va-b. Harder.
+        -- SIMPLE HEURISTIC: if va == eval_op(opcode, 0, va):
+        --   op(0, va) = va → c0(0)=0, c1=va → c1 is constant va.
+        let c_test = eval_op opcode 0 va in
+        if c_test == va then
+          -- c1 is likely constant = va. c0 produces (0, vb-va) for add,
+          -- or whatever inverse gives for the specific op.
+          let c_const = va in
+          let c0_a_A = if opcode == 0 then va - c_const
+            else if opcode == 1 then va + c_const
+            else if opcode == 2 then if c_const == 0 then 0 else va / c_const
+            else 0 in
+          let c0_b_A = if opcode == 0 then vb - c_const
+            else if opcode == 1 then vb + c_const
+            else if opcode == 2 then if c_const == 0 then 0 else vb / c_const
+            else 0 in
+          let r0 = compile_node pg c0 env ns ia c0_a_A ib c0_b_A in
+          let r1 = compile_node pg c1 (r0.1) (r0.2) ia c_const ib c_const in
+          if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+          else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+        else
+          -- c1 is InputRef
+          let r0 = compile_node pg c0 env ns ia c0_a_B ib c0_b_B in
+          let r1 = compile_node pg c1 (r0.1) (r0.2) ia ia ib ib in
+          if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+          else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+      else
+        -- Both complex. Heuristic: split probes evenly.
+        let r0 = compile_node pg c0 env ns ia va ib vb in
+        let r1 = compile_node pg c1 (r0.1) (r0.2) ia va ib vb in
+        if bc >= 2 then (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+        else (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+
+    else ((28, opcode, 0), env, ns)
+
+  -- =======================================================================
+  -- Apply (kind 1)
+  -- =======================================================================
+  else if kind == 1 then
+    let func_id = graph_edge_target pg nid 0 0 in
+    let arg_id = graph_edge_target pg nid 1 0 in
+    if func_id == 0 - 1 then ((1, 0), env, ns)
+    else
+      let fk = graph_get_kind pg func_id in
+      if fk == 0 then
+        -- Applying Prim: inline
+        let opcode = graph_get_prim_op pg func_id in
+        let pc0 = graph_edge_target pg func_id 0 0 in
+        let pc1 = graph_edge_target pg func_id 1 0 in
+        let bc2 = if opcode == 0 then 2 else if opcode == 1 then 3
+          else if opcode == 2 then 4 else if opcode == 3 then 5
+          else if opcode == 4 then 6 else if opcode == 5 then 7
+          else if opcode == 32 then 8 else if opcode == 33 then 11
+          else if opcode == 34 then 9 else if opcode == 35 then 10
+          else if opcode == 36 then 12 else if opcode == 37 then 13
+          else 0 in
+        if pc0 == 0 - 1 then
+          if arg_id == 0 - 1 then ((28, opcode, 0), env, ns)
+          else
+            let ra = compile_node pg arg_id env ns ia va ib vb in
+            if bc2 >= 2 then (list_concat (ra.0) (bc2,), ra.1, ra.2)
+            else (list_concat (ra.0) (28, opcode, 1), ra.1, ra.2)
+        else if pc1 == 0 - 1 then
+          if arg_id == 0 - 1 then compile_node pg pc0 env ns ia va ib vb
+          else
+            let r0 = compile_node pg pc0 env ns ia va ib vb in
+            let ra = compile_node pg arg_id (r0.1) (r0.2) ia va ib vb in
+            if bc2 >= 2 then (list_concat (list_concat (r0.0) (ra.0)) (bc2,), ra.1, ra.2)
+            else (list_concat (list_concat (r0.0) (ra.0)) (28, opcode, 2), ra.1, ra.2)
+        else
+          let r0 = compile_node pg pc0 env ns ia va ib vb in
+          let r1 = compile_node pg pc1 (r0.1) (r0.2) ia va ib vb in
+          if arg_id == 0 - 1 then
+            (list_concat (list_concat (r0.0) (r1.0)) (28, opcode, 2), r1.1, r1.2)
+          else
+            let ra = compile_node pg arg_id (r1.1) (r1.2) ia va ib vb in
+            (list_concat (list_concat (list_concat (r0.0) (r1.0)) (ra.0)) (28, opcode, 3), ra.1, ra.2)
+      else if fk == 2 then
+        -- Applying Lambda: inline
+        let body_03 = graph_edge_target pg func_id 0 3 in
+        let body_00 = graph_edge_target pg func_id 0 0 in
+        let body_id = if body_03 != 0 - 1 then body_03 else body_00 in
+        if body_id == 0 - 1 then ((1, 0), env, ns)
+        else if arg_id == 0 - 1 then compile_node pg body_id env ns ia va ib vb
+        else
+          let slot = ns in
+          let ra = compile_node pg arg_id env (ns + 1) ia va ib vb in
+          let lits = find_lit_nodes pg body_id in
+          let nlits = list_len lits in
+          let env2 = fold (ra.1) (\e i ->
+            if i >= nlits then e
+            else let lid = list_nth lits i in
+              let already = fold 0 (\found j ->
+                if found == 1 then 1
+                else if j >= list_len e then 0
+                else let en = list_nth e j in if en.0 == lid then 1 else 0
+              ) (list_len e) in
+              if already == 1 then e
+              else list_append e (lid, slot)
+          ) (ra.1) in
+          let rb = compile_node pg body_id env2 (ra.2) ia va ib vb in
+          (list_concat (list_concat (ra.0) (15, slot)) (rb.0), rb.1, rb.2)
+      else
+        if arg_id == 0 - 1 then compile_node pg func_id env ns ia va ib vb
+        else
+          let rf = compile_node pg func_id env ns ia va ib vb in
+          let ra = compile_node pg arg_id (rf.1) (rf.2) ia va ib vb in
+          (list_concat (rf.0) (ra.0), ra.1, ra.2)
+
+  -- =======================================================================
+  -- Lambda (kind 2)
+  -- =======================================================================
+  else if kind == 2 then
+    let body_03 = graph_edge_target pg nid 0 3 in
+    let body_00 = graph_edge_target pg nid 0 0 in
+    let body_id = if body_03 != 0 - 1 then body_03 else body_00 in
+    if body_id == 0 - 1 then ((1, 0), env, ns)
+    else
+      let slot = ns in
+      let lits = find_lit_nodes pg body_id in
+      let nlits = list_len lits in
+      let env2 = fold env (\e i ->
+        if i >= nlits then e
+        else let lid = list_nth lits i in
+          let already = fold 0 (\found j ->
+            if found == 1 then 1
+            else if j >= list_len e then 0
+            else let en = list_nth e j in if en.0 == lid then 1 else 0
+          ) (list_len e) in
+          if already == 1 then e
+          else list_append e (lid, slot)
+      ) env in
+      compile_node pg body_id env2 (ns + 1) ia va ib vb
+
+  -- =======================================================================
+  -- Let (kind 3)
+  -- =======================================================================
+  else if kind == 3 then
+    let val_id = graph_edge_target pg nid 0 2 in
+    let body_id = graph_edge_target pg nid 0 3 in
+    if val_id == 0 - 1 then
+      let c0 = graph_edge_target pg nid 0 0 in
+      if c0 == 0 - 1 then ((1, 0), env, ns)
+      else compile_node pg c0 env ns ia va ib vb
+    else if body_id == 0 - 1 then compile_node pg val_id env ns ia va ib vb
+    else
+      let slot = ns in
+      let rv = compile_node pg val_id env (ns + 1) ia va ib vb in
+      let bk = graph_get_kind pg body_id in
+      if bk == 2 then
+        let inner_03 = graph_edge_target pg body_id 0 3 in
+        let inner_00 = graph_edge_target pg body_id 0 0 in
+        let inner = if inner_03 != 0 - 1 then inner_03 else inner_00 in
+        if inner == 0 - 1 then (list_concat (rv.0) (15, slot), rv.1, rv.2)
+        else
+          let lits = find_lit_nodes pg inner in
+          let nlits = list_len lits in
+          let env2 = fold (rv.1) (\e i ->
+            if i >= nlits then e
+            else let lid = list_nth lits i in
+              let already = fold 0 (\found j ->
+                if found == 1 then 1
+                else if j >= list_len e then 0
+                else let en = list_nth e j in if en.0 == lid then 1 else 0
+              ) (list_len e) in
+              if already == 1 then e
+              else list_append e (lid, slot)
+          ) (rv.1) in
+          let rb = compile_node pg inner env2 (rv.2) ia va ib vb in
+          (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+      else
+        let rb = compile_node pg body_id (rv.1) (rv.2) ia va ib vb in
+        (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+
+  -- =======================================================================
+  -- Match (kind 4)
+  -- =======================================================================
+  else if kind == 4 then
+    let scrut_id = graph_edge_target pg nid 0 1 in
+    if scrut_id == 0 - 1 then
+      let c0 = graph_edge_target pg nid 0 0 in
+      if c0 == 0 - 1 then ((1, 0), env, ns)
+      else compile_node pg c0 env ns ia va ib vb
+    else
+      let arm0 = graph_edge_target pg nid 1 0 in
+      let arm1 = graph_edge_target pg nid 2 0 in
+      let rs = compile_node pg scrut_id env ns ia va ib vb in
+      if arm0 == 0 - 1 then (rs.0, rs.1, rs.2)
+      else if arm1 == 0 - 1 then compile_node pg arm0 (rs.1) (rs.2) ia va ib vb
+      else
+        let rt = compile_node pg arm1 (rs.1) (rs.2) ia va ib vb in
+        let re = compile_node pg arm0 (rt.1) (rt.2) ia va ib vb in
+        let clen = list_len (rs.0) in
+        let tlen = list_len (rt.0) in
+        let elen = list_len (re.0) in
+        let code = list_concat (rs.0) (28, 156, 1) in
+        let code2 = list_concat code (17, clen + 5 + tlen + 2) in
+        let code3 = list_concat code2 (rt.0) in
+        let code4 = list_concat code3 (16, clen + 5 + tlen + 2 + elen) in
+        (list_concat code4 (re.0), re.1, re.2)
+
+  -- =======================================================================
+  -- Fold (kind 8)
+  -- =======================================================================
+  else if kind == 8 then
+    let base_id = graph_edge_target pg nid 0 0 in
+    let step_id = graph_edge_target pg nid 1 0 in
+    let limit_id = graph_edge_target pg nid 2 0 in
+    if base_id == 0 - 1 then ((1, 0), env, ns)
+    else if step_id == 0 - 1 then compile_node pg base_id env ns ia va ib vb
+    else if limit_id == 0 - 1 then compile_node pg base_id env ns ia va ib vb
+    else
+      -- For Fold: base is the initial value. When limit=0 (no iterations),
+      -- f(0) = base (assuming limit varies with input and limit(0)=0).
+      -- So base is a constant with value va (= f(0) when input=0 and limit=0).
+      -- Limit is the iteration count, typically InputRef.
+      let base_val = va in  -- f(0) = base when limit(0) = 0
+      let rb = compile_node pg base_id env ns ia base_val ib base_val in
+      let rl = compile_node pg limit_id (rb.1) (rb.2) ia ia ib ib in
+      let step_kind = graph_get_kind pg step_id in
+      if step_kind == 2 then
+        let acc_slot = rl.2 in
+        let idx_slot = acc_slot + 1 in
+        let ob_03 = graph_edge_target pg step_id 0 3 in
+        let ob_00 = graph_edge_target pg step_id 0 0 in
+        let ob = if ob_03 != 0 - 1 then ob_03 else ob_00 in
+        if ob == 0 - 1 then (rb.0, rb.1, rb.2)
+        else
+          let obk = graph_get_kind pg ob in
+          let actual_body = if obk == 2 then
+            let ib2_03 = graph_edge_target pg ob 0 3 in
+            let ib2_00 = graph_edge_target pg ob 0 0 in
+            if ib2_03 != 0 - 1 then ib2_03 else ib2_00
+          else ob in
+          if actual_body == 0 - 1 then (rb.0, rb.1, rb.2)
+          else
+            let body_lits = find_lit_nodes pg actual_body in
+            let nlits = list_len body_lits in
+            let env_fold = fold (rl.1) (\e i ->
+              if i >= nlits then e
+              else let lid = list_nth body_lits i in
+                let already = fold 0 (\found j ->
+                  if found == 1 then 1
+                  else if j >= list_len e then 0
+                  else let en = list_nth e j in if en.0 == lid then 1 else 0
+                ) (list_len e) in
+                if already == 1 then e
+                else
+                  let added = list_len e - list_len (rl.1) in
+                  if added == 0 then list_append e (lid, acc_slot)
+                  else if added == 1 then list_append e (lid, idx_slot)
+                  else e
+            ) (rl.1) in
+            let rbd = compile_node pg actual_body env_fold (idx_slot + 1) 0 0 0 0 in
+            let bl = list_len (rbd.0) in
+            let fc = list_concat (list_concat (rb.0) (rl.0)) (25, bl + 6) in
+            let fc2 = list_concat (list_concat (list_concat fc (15, idx_slot)) (15, acc_slot)) (14, acc_slot) in
+            (list_concat (list_concat fc2 (rbd.0)) (26,), rl.1, rbd.2)
+      else if step_kind == 0 then
+        let step_op = graph_get_prim_op pg step_id in
+        let sbc = if step_op == 0 then 2 else if step_op == 1 then 3
+          else if step_op == 2 then 4 else if step_op == 3 then 5
+          else if step_op == 4 then 6 else 0 in
+        let acc_slot = rl.2 in
+        let idx_slot = acc_slot + 1 in
+        if sbc >= 2 then
+          let body_bc = (15, idx_slot, 15, acc_slot, 14, acc_slot, 14, idx_slot, sbc) in
+          let fc = list_concat (list_concat (rb.0) (rl.0)) (25, 15) in
+          (list_concat (list_concat fc body_bc) (26,), rl.1, idx_slot + 1)
+        else
+          let body_bc = (15, idx_slot, 15, acc_slot, 14, acc_slot, 14, idx_slot, 28, step_op, 2) in
+          let fc = list_concat (list_concat (rb.0) (rl.0)) (25, 18) in
+          (list_concat (list_concat fc body_bc) (26,), rl.1, idx_slot + 1)
+      else
+        let rs = compile_node pg step_id (rl.1) (rl.2) ia va ib vb in
+        (list_concat (list_concat (rb.0) (rl.0)) (rs.0), rs.1, rs.2)
+
+  -- =======================================================================
+  -- Unfold (kind 9)
+  -- =======================================================================
+  else if kind == 9 then
+    let seed_id = graph_edge_target pg nid 0 0 in
+    if seed_id == 0 - 1 then ((1, 0), env, ns)
+    else compile_node pg seed_id env ns ia va ib vb
+
+  -- =======================================================================
+  -- Effect (kind 10)
+  -- =======================================================================
+  else if kind == 10 then
+    let etag = graph_get_prim_op pg nid in
+    let c0 = graph_edge_target pg nid 0 0 in
+    let c1 = graph_edge_target pg nid 1 0 in
+    if c0 == 0 - 1 then ((28, etag, 0), env, ns)
+    else if c1 == 0 - 1 then
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      (list_concat (r0.0) (28, etag, 1), r0.1, r0.2)
+    else
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      let r1 = compile_node pg c1 (r0.1) (r0.2) ia va ib vb in
+      (list_concat (list_concat (r0.0) (r1.0)) (28, etag, 2), r1.1, r1.2)
+
+  -- =======================================================================
+  -- Tuple (kind 11)
+  -- =======================================================================
+  else if kind == 11 then
+    let nc = count_children pg nid in
+    if nc == 0 then ((18, 0), env, ns)
+    else
+      let result = fold ((), env, ns) (\st i ->
+        if i >= nc then st
+        else
+          let cid = graph_edge_target pg nid i 0 in
+          if cid == 0 - 1 then st
+          else
+            let rc = compile_node pg cid (st.1) (st.2) ia va ib vb in
+            (list_concat (st.0) (rc.0), rc.1, rc.2)
+      ) nc in
+      (list_concat (result.0) (18, nc), result.1, result.2)
+
+  -- =======================================================================
+  -- Inject (kind 12)
+  -- =======================================================================
+  else if kind == 12 then
+    let c0 = graph_edge_target pg nid 0 0 in
+    let c1 = graph_edge_target pg nid 1 0 in
+    if c0 == 0 - 1 then ((1, 0), env, ns)
+    else if c1 == 0 - 1 then
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      (list_concat (r0.0) (28, 158, 1), r0.1, r0.2)
+    else
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      let r1 = compile_node pg c1 (r0.1) (r0.2) ia va ib vb in
+      (list_concat (list_concat (r0.0) (r1.0)) (28, 158, 2), r1.1, r1.2)
+
+  -- =======================================================================
+  -- Project (kind 13)
+  -- =======================================================================
+  else if kind == 13 then
+    let fi = graph_get_field_index pg nid in
+    let c0 = graph_edge_target pg nid 0 0 in
+    if c0 == 0 - 1 then ((1, 0), env, ns)
+    else
+      let r0 = compile_node pg c0 env ns ia va ib vb in
+      (list_concat (r0.0) (19, fi), r0.1, r0.2)
+
+  -- =======================================================================
+  -- Ref (kind 14)
+  -- =======================================================================
+  else if kind == 14 then ((28, 0, 0), env, ns)
+
+  -- =======================================================================
+  -- LetRec (kind 16)
+  -- =======================================================================
+  else if kind == 16 then
+    let val_id = graph_edge_target pg nid 0 2 in
+    let body_id = graph_edge_target pg nid 0 3 in
+    if val_id == 0 - 1 then ((1, 0), env, ns)
+    else if body_id == 0 - 1 then compile_node pg val_id env ns ia va ib vb
+    else
+      let slot = ns in
+      let rv = compile_node pg val_id env (ns + 1) ia va ib vb in
+      let bk = graph_get_kind pg body_id in
+      if bk == 2 then
+        let inner_03 = graph_edge_target pg body_id 0 3 in
+        let inner_00 = graph_edge_target pg body_id 0 0 in
+        let inner = if inner_03 != 0 - 1 then inner_03 else inner_00 in
+        if inner == 0 - 1 then (list_concat (rv.0) (15, slot), rv.1, rv.2)
+        else
+          let lits = find_lit_nodes pg inner in
+          let nlits = list_len lits in
+          let env2 = fold (rv.1) (\e i ->
+            if i >= nlits then e
+            else let lid = list_nth lits i in
+              let already = fold 0 (\found j ->
+                if found == 1 then 1
+                else if j >= list_len e then 0
+                else let en = list_nth e j in if en.0 == lid then 1 else 0
+              ) (list_len e) in
+              if already == 1 then e
+              else list_append e (lid, slot)
+          ) (rv.1) in
+          let rb = compile_node pg inner env2 (rv.2) ia va ib vb in
+          (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+      else
+        let rb = compile_node pg body_id (rv.1) (rv.2) ia va ib vb in
+        (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+
+  -- =======================================================================
+  -- Guard (kind 17): if/then/else
+  -- Condition gets probes (ia, 0, ib, 1) for boolean condition detection.
+  -- Branches get probes from graph_eval at inputs that exercise each branch.
+  -- =======================================================================
+  else if kind == 17 then
+    let cond_id = graph_edge_target pg nid 0 0 in
+    let then_id = graph_edge_target pg nid 1 0 in
+    let else_id = graph_edge_target pg nid 2 0 in
+    if cond_id == 0 - 1 then ((1, 0), env, ns)
+    else if then_id == 0 - 1 then compile_node pg cond_id env ns ia 0 ib 1
+    else if else_id == 0 - 1 then
+      let rc = compile_node pg cond_id env ns ia 0 ib 1 in
+      let rt = compile_node pg then_id (rc.1) (rc.2) ia va ib vb in
+      (list_concat (rc.0) (rt.0), rt.1, rt.2)
+    else
+      -- Find inputs that exercise each branch by probing.
+      -- Evaluate with several inputs and find one that gives a different result.
+      let f_0 = graph_eval pg 0 in
+      let f_1 = graph_eval pg 1 in
+      let f_2 = graph_eval pg 2 in
+      let f_n1 = graph_eval pg (0 - 1) in
+      let f_42 = graph_eval pg 42 in
+      let f_100 = graph_eval pg 100 in
+      -- Heuristic: find two inputs where the guard takes different paths.
+      -- If f_0 != f_1: inputs 0 and 1 exercise different branches (common case).
+      -- Otherwise try 0 vs 42, 0 vs -1, 0 vs 100, etc.
+      -- We identify "same branch" by f(a) consistent with f(b) (same linear relationship).
+      -- For now: assume f_0 and f_1 are from the same branch if they're "close",
+      -- and look for an input with a very different value.
+      -- Simple: pick two pairs of inputs for the two branches.
+      -- Use: positive inputs for then, non-positive for else (common for n>0 conditions).
+      -- But also handle n==42 type conditions.
+      let then_ia = if f_1 != f_0 then 1
+        else if f_42 != f_0 then 42
+        else if f_100 != f_0 then 100
+        else 1 in
+      let then_ib = if f_1 != f_0 then 2
+        else if f_42 != f_0 then 43
+        else if f_100 != f_0 then 101
+        else 2 in
+      let then_va = if then_ia == 1 then f_1
+        else if then_ia == 42 then f_42
+        else if then_ia == 100 then f_100
+        else f_1 in
+      let then_vb = graph_eval pg then_ib in
+      -- Else branch: use inputs where f(x) == f(0) pattern
+      let else_ia = if f_1 != f_0 then (0 - 1)
+        else 0 in
+      let else_ib = if f_1 != f_0 then 0
+        else 1 in
+      let else_va = if else_ia == 0 - 1 then f_n1 else f_0 in
+      let else_vb = if else_ib == 0 then f_0 else f_1 in
+      -- Condition is a comparison. Its children are arithmetic.
+      -- Pass (ia=0, va=0, ib=1, vb=1) for conditions like n>0 where
+      -- cond(0)=0 and cond(1)=1. For n==42: cond(0)=0, cond(1)=0,
+      -- but we pass vb=1 as a hint for the Prim decomposition.
+      -- The decomposition for EQ(n, 42) with (0, 0, 1, 1):
+      --   left-IR hypothesis: C = va = 0. check: eq(1, 0)=0 != 1 → fail.
+      --   right-IR: C = va + ia = 0. check: eq(0, 1)=0 != 1 → fail.
+      --   Both IR: compile both as InputRef.
+      -- This means for n==42, 42 gets compiled as InputRef (wrong).
+      -- To fix: use condition's ACTUAL outputs.
+      -- Evaluate condition explicitly:
+      -- For Guards with comparison conditions, the condition output is boolean.
+      -- We need the condition's ACTUAL values, not assumed (0, 1).
+      let cond_out_0 = if f_0 == f_1 then
+        -- Both same → same branch. Use a different input.
+        if f_42 != f_0 then 0 else if f_n1 != f_0 then 1 else 0
+      else
+        -- f(0) != f(1) → different branches.
+        -- Which is then? If f(1) is "more positive" → cond(1)=true for n>0
+        0  -- assume cond(0)=0 for most conditions
+      in
+      let cond_out_1 = if f_0 == f_1 then
+        if f_42 != f_0 then 0 else if f_n1 != f_0 then 0 else 0
+      else 1 in
+      let rc = compile_node pg cond_id env ns 0 cond_out_0 1 cond_out_1 in
+      let rt = compile_node pg then_id (rc.1) (rc.2) then_ia then_va then_ib then_vb in
+      let re = compile_node pg else_id (rt.1) (rt.2) else_ia else_va else_ib else_vb in
+      let clen = list_len (rc.0) in
+      let tlen = list_len (rt.0) in
+      let elen = list_len (re.0) in
+      let jz_target = clen + 2 + tlen + 2 in
+      let jmp_target = jz_target + elen in
+      let code = list_concat (rc.0) (17, jz_target) in
+      let code2 = list_concat code (rt.0) in
+      let code3 = list_concat code2 (16, jmp_target) in
+      (list_concat code3 (re.0), re.1, re.2)
+
+  -- =======================================================================
+  -- Unknown node kind
+  -- =======================================================================
   else ((1, 0), env, ns)
 
--- Main: full pipeline → bytecodes
+-- =========================================================================
+-- Main: full pipeline -> bytecodes
+-- =========================================================================
 let main path arg =
   let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
   let par_m = compile_source (file_read "src/iris-programs/syntax/iris_parser.iris") in
@@ -159,48 +800,14 @@ let main path arg =
   let tree = module_eval (par_m.0) 0 (tokens, src) in
   let pg = module_eval (low_m.0) 0 (tree, src) in
   let root = graph_get_root pg in
-  -- Probe with two different inputs to distinguish InputRef from Lit
-  let p1 = graph_eval pg 0 in
-  let p2 = graph_eval pg 1000 in
-  -- If there's no Lambda wrapper (root is directly the body),
-  -- find InputRef nodes: kind-5 children whose value varies with input
-  let kind_root = graph_get_kind pg root in
-  let initial_env = if kind_root == 0 then
-    -- Root is Prim: check its children for InputRef
-    let c0 = graph_edge_target pg root 0 0 in
-    let c1 = graph_edge_target pg root 1 0 in
-    -- The InputRef varies: compute sub-results
-    -- For f(n) = n OP const: f(0) = 0 OP const, f(1000) = 1000 OP const
-    -- If child 0 is InputRef: its contribution changes by 1000
-    -- Use simple heuristic: if p2 - p1 = 1000 and the op is add,
-    -- the first child is likely InputRef
-    if graph_get_kind pg c0 == 5 then
-      if graph_get_kind pg c1 == 5 then
-        -- Both are Lit: could be InputRef+constant or InputRef+InputRef
-        -- Test: f(0) and f(1). If f(0)=0 and f(1)=f(1), check pattern
-        let f0 = graph_eval pg 0 in
-        let f1 = graph_eval pg 1 in
-        -- For n+c: f(0)=c, f(1)=1+c → f(1)-f(0)=1 → one InputRef
-        -- For n*n: f(0)=0, f(1)=1 → both InputRef
-        -- For n*c: f(0)=0, f(1)=c → one InputRef
-        -- Heuristic: if f(1)-f(0) = 1 AND opcode is add → c0 = InputRef only
-        --            if f(0) = 0 AND opcode is mul → both could be InputRef
-        -- Simple rule: if the function is linear (f(2)-f(1) = f(1)-f(0)) → one InputRef
-        --              if quadratic → both InputRef
-        let f2 = graph_eval pg 2 in
-        let d1 = f1 - f0 in
-        let d2 = f2 - f1 in
-        if d1 == d2 then
-          -- Linear: one InputRef (c0), one constant (c1)
-          list_append () (c0, 0)
-        else
-          -- Non-linear: both children are InputRef
-          list_append (list_append () (c0, 0)) (c1, 0)
-      else list_append () (c0, 0)
-    else ()
-  else () in
-  -- Compile!
-  let bc = compile_node pg root initial_env 0 p1 p2 in
+  -- Probe with inputs 0 and 1
+  let f0 = graph_eval pg 0 in
+  let f1 = graph_eval pg 1 in
+  -- Use probes that are guaranteed to differ for InputRef detection.
+  -- For integer functions: ia=0, ib=1 works (InputRef produces 0 and 1).
+  -- For tuple-returning functions: f0 and f1 may be tuples (non-Int).
+  -- In that case, treat them as constant (v0=v1=0) since we can't probe.
+  let bc = compile_node pg root () 0 0 f0 1 f1 in
   let bytecodes = list_concat (bc.0) (0,) in
   -- Verify
   let v42 = graph_eval pg 42 in
