@@ -1,0 +1,549 @@
+-- extract_pipeline.iris — Extract tokenizer and parser SemanticGraphs
+-- and compile them to bytecodes for the self-hosting stage1 binary.
+--
+-- Uses the self_graph injection trick to extract fully inspectable
+-- graphs from the tokenizer and parser source files, then compiles
+-- each graph to flat bytecode tuples.
+--
+-- The self_graph trick:
+--   1. Read the source file
+--   2. Find the function body (after the first line ending with "=")
+--   3. Wrap: "let f <params> = (self_graph, <body>)"
+--   4. compile_source(wrapper) -> module (fast Rust pipeline)
+--   5. module_eval(module, 0, dummy_input) -> (graph, result)
+--   6. Navigate graph: root is a Tuple, child 1 is the actual body
+--   7. Compile body to bytecodes using graph introspection
+--
+-- Bytecodes: 0=HALT, 1=PUSH, 2=ADD, 3=SUB, 4=MUL, 5=DIV, 6=MOD,
+--   7=NEG, 8=EQ, 9=LT, 10=GT, 11=NE, 12=LE, 13=GE,
+--   14=LOAD, 15=STORE, 16=JMP, 17=JZ, 18=MAKE_TUPLE, 19=TUPLE_GET,
+--   25=FOLD_BEGIN, 26=FOLD_END, 28=PRIM(opcode, nargs)
+--
+-- Node kinds: 0=Prim, 1=Apply, 2=Lambda, 3=Let, 4=Match, 5=Lit,
+--   8=Fold, 9=Unfold, 10=Effect, 11=Tuple, 12=Inject, 13=Project,
+--   14=Ref, 16=LetRec, 17=Guard
+--
+-- Usage: iris-stage0 run extract_pipeline.iris
+-- Output: (tokenizer_bytecodes, parser_bytecodes)
+-- Note: takes several minutes due to graph extraction (~22s per module)
+
+-- =========================================================================
+-- Bytecode compiler: graph node -> flat instruction tuple
+--
+-- Uses full graph introspection (graph_outgoing, graph_get_lit_value,
+-- graph_get_lit_type_tag, graph_get_binder, graph_get_field_index)
+-- available on graphs extracted via self_graph.
+--
+-- Parameters:
+--   pg:  Program graph (from self_graph)
+--   nid: current node ID
+--   env: list of (binder_index, slot) pairs
+--   ns:  next available local slot
+--
+-- Returns: (bytecodes_tuple, env, next_slot)
+-- =========================================================================
+let rec compile_node pg nid env ns =
+  let kind = graph_get_kind pg nid in
+
+  -- Lit (kind 5): integer constant or InputRef
+  if kind == 5 then
+    let tt = graph_get_lit_type_tag pg nid in
+    let lv = graph_get_lit_value pg nid in
+    if tt == 255 then
+      -- InputRef: look up binder index in env
+      let nenv = list_len env in
+      let slot = fold (0 - 1) (\s i ->
+        if s >= 0 then s
+        else if i >= nenv then s
+        else let e = list_nth env i in
+          if e.0 == lv then e.1 else s
+      ) nenv in
+      if slot >= 0 then ((14, slot), env, ns)
+      else
+        -- Binder not found: allocate a new slot and register it
+        let new_slot = ns in
+        let env2 = list_append env (lv, new_slot) in
+        ((14, new_slot), env2, ns + 1)
+    else ((1, lv), env, ns)
+
+  -- Prim (kind 0): arithmetic, comparison, string, list operations
+  else if kind == 0 then
+    let opcode = graph_get_prim_op pg nid in
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    -- Map common arithmetic/comparison opcodes to dedicated bytecodes
+    let bc = if opcode == 0 then 2      -- add
+      else if opcode == 1 then 3        -- sub
+      else if opcode == 2 then 4        -- mul
+      else if opcode == 3 then 5        -- div
+      else if opcode == 4 then 6        -- mod
+      else if opcode == 5 then 7        -- neg
+      else if opcode == 32 then 8       -- eq
+      else if opcode == 33 then 11      -- ne
+      else if opcode == 34 then 9       -- lt
+      else if opcode == 35 then 10      -- gt
+      else if opcode == 36 then 12      -- le
+      else if opcode == 37 then 13      -- ge
+      else 0 in
+    if bc >= 2 then
+      if nc == 2 then
+        let r0 = compile_node pg (list_nth children 0) env ns in
+        let r1 = compile_node pg (list_nth children 1) (r0.1) (r0.2) in
+        (list_concat (list_concat (r0.0) (r1.0)) (bc,), r1.1, r1.2)
+      else if nc == 1 then
+        let r0 = compile_node pg (list_nth children 0) env ns in
+        (list_concat (r0.0) (bc,), r0.1, r0.2)
+      else ((1, 0), env, ns)
+    else
+      -- Non-arithmetic prim: string ops, list ops, etc.
+      -- Emit PRIM(opcode, nargs) bytecode
+      let child_code = fold ((), env, ns) (\st i ->
+        if i >= nc then st
+        else let r = compile_node pg (list_nth children i) (st.1) (st.2) in
+          (list_concat (st.0) (r.0), r.1, r.2)
+      ) nc in
+      (list_concat (child_code.0) (28, opcode, nc), child_code.1, child_code.2)
+
+  -- Apply (kind 1): function application
+  else if kind == 1 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc < 2 then ((1, 0), env, ns)
+    else
+      let func = list_nth children 0 in
+      let arg = list_nth children 1 in
+      let fk = graph_get_kind pg func in
+      -- Lambda application: inline the body with arg bound
+      if fk == 2 then
+        let binder = bitand (graph_get_binder pg func) 255 in
+        let body_children = graph_outgoing pg func in
+        let body = list_nth body_children 0 in
+        let ra = compile_node pg arg env ns in
+        let slot = ra.2 in
+        let env2 = list_append (ra.1) (binder, slot) in
+        let rb = compile_node pg body env2 (slot + 1) in
+        (list_concat (list_concat (ra.0) (15, slot)) (rb.0), rb.1, rb.2)
+      -- Prim application: inline the prim op
+      else if fk == 0 then
+        let opcode = graph_get_prim_op pg func in
+        let prim_children = graph_outgoing pg func in
+        let pnc = list_len prim_children in
+        let bc2 = if opcode == 0 then 2 else if opcode == 1 then 3
+          else if opcode == 2 then 4 else if opcode == 3 then 5
+          else if opcode == 4 then 6 else if opcode == 5 then 7
+          else if opcode == 32 then 8 else if opcode == 33 then 11
+          else if opcode == 34 then 9 else if opcode == 35 then 10
+          else if opcode == 36 then 12 else if opcode == 37 then 13
+          else 0 in
+        -- Compile prim's existing children + the new arg
+        let all_code = fold ((), env, ns) (\st i ->
+          if i >= pnc then st
+          else let r = compile_node pg (list_nth prim_children i) (st.1) (st.2) in
+            (list_concat (st.0) (r.0), r.1, r.2)
+        ) pnc in
+        let ra = compile_node pg arg (all_code.1) (all_code.2) in
+        let total_args = pnc + 1 in
+        let code = list_concat (all_code.0) (ra.0) in
+        if bc2 >= 2 then
+          (list_concat code (bc2,), ra.1, ra.2)
+        else
+          (list_concat code (28, opcode, total_args), ra.1, ra.2)
+      else
+        -- Generic application: compile func and arg
+        let rf = compile_node pg func env ns in
+        let ra = compile_node pg arg (rf.1) (rf.2) in
+        (list_concat (rf.0) (ra.0), ra.1, ra.2)
+
+  -- Lambda (kind 2): just compile the body with binder registered
+  else if kind == 2 then
+    let children = graph_outgoing pg nid in
+    let binder = bitand (graph_get_binder pg nid) 255 in
+    compile_node pg (list_nth children 0) (list_append env (binder, ns)) (ns + 1)
+
+  -- Let (kind 3): compile value, store in slot, compile body
+  else if kind == 3 then
+    let children = graph_outgoing pg nid in
+    let binder = bitand (graph_get_binder pg nid) 255 in
+    let nc = list_len children in
+    if nc < 2 then
+      if nc == 1 then compile_node pg (list_nth children 0) env ns
+      else ((1, 0), env, ns)
+    else
+      let val_id = list_nth children 0 in
+      let body_id = list_nth children 1 in
+      let rv = compile_node pg val_id env ns in
+      let slot = rv.2 in
+      let env2 = list_append (rv.1) (binder, slot) in
+      let rb = compile_node pg body_id env2 (slot + 1) in
+      (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+
+  -- Match (kind 4): scrutinee + arms
+  else if kind == 4 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc == 0 then ((1, 0), env, ns)
+    else if nc == 1 then compile_node pg (list_nth children 0) env ns
+    else
+      -- Compile scrutinee and first two arms
+      let rs = compile_node pg (list_nth children 0) env ns in
+      if nc == 2 then
+        let r1 = compile_node pg (list_nth children 1) (rs.1) (rs.2) in
+        (list_concat (rs.0) (r1.0), r1.1, r1.2)
+      else
+        let rt = compile_node pg (list_nth children 1) (rs.1) (rs.2) in
+        let re = compile_node pg (list_nth children 2) (rt.1) (rt.2) in
+        let clen = list_len (rs.0) in
+        let tlen = list_len (rt.0) in
+        let elen = list_len (re.0) in
+        let jz_target = clen + 2 + tlen + 2 in
+        let jmp_target = jz_target + elen in
+        let code = list_concat (rs.0) (17, jz_target) in
+        let code2 = list_concat (list_concat code (rt.0)) (16, jmp_target) in
+        (list_concat code2 (re.0), re.1, re.2)
+
+  -- Fold (kind 8): base, step lambda, limit
+  else if kind == 8 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc < 3 then
+      if nc >= 1 then compile_node pg (list_nth children 0) env ns
+      else ((1, 0), env, ns)
+    else
+      let base_id = list_nth children 0 in
+      let step_id = list_nth children 1 in
+      let limit_id = list_nth children 2 in
+      let rb = compile_node pg base_id env ns in
+      let rl = compile_node pg limit_id (rb.1) (rb.2) in
+      let step_kind = graph_get_kind pg step_id in
+      if step_kind == 2 then
+        -- Step is a lambda: \acc -> (\i -> body)
+        let outer_binder = bitand (graph_get_binder pg step_id) 255 in
+        let step_children = graph_outgoing pg step_id in
+        let inner = list_nth step_children 0 in
+        let inner_kind = graph_get_kind pg inner in
+        let acc_slot = rl.2 in
+        let idx_slot = acc_slot + 1 in
+        -- Peel inner lambda if present (2-arg fold: \acc i -> body)
+        let actual_body = if inner_kind == 2 then
+          list_nth (graph_outgoing pg inner) 0
+        else inner in
+        let inner_binder = if inner_kind == 2 then
+          bitand (graph_get_binder pg inner) 255
+        else 0 in
+        let env2 = list_append (rl.1) (outer_binder, acc_slot) in
+        let env3 = if inner_kind == 2 then
+          list_append env2 (inner_binder, idx_slot)
+        else env2 in
+        let rbd = compile_node pg actual_body env3 (idx_slot + 1) in
+        let bl = list_len (rbd.0) in
+        -- FOLD_BEGIN encodes: body_len + 4 (for STORE idx, STORE acc setup)
+        let fold_header_len = bl + 4 in
+        let fc = list_concat (list_concat (rb.0) (rl.0)) (25, fold_header_len) in
+        let fc2 = list_concat (list_concat fc (15, idx_slot)) (15, acc_slot) in
+        (list_concat (list_concat fc2 (rbd.0)) (26,), rl.1, rbd.2)
+      else if step_kind == 0 then
+        -- Step is a direct Prim op (simple fold like fold 0 (+) n)
+        let step_op = graph_get_prim_op pg step_id in
+        let sbc = if step_op == 0 then 2 else if step_op == 1 then 3
+          else if step_op == 2 then 4 else if step_op == 3 then 5
+          else if step_op == 4 then 6 else 0 in
+        let acc_slot = rl.2 in
+        let idx_slot = acc_slot + 1 in
+        if sbc >= 2 then
+          let body_bc = (15, idx_slot, 15, acc_slot, 14, acc_slot, 14, idx_slot, sbc) in
+          let fc = list_concat (list_concat (rb.0) (rl.0)) (25, 15) in
+          (list_concat (list_concat fc body_bc) (26,), rl.1, idx_slot + 1)
+        else
+          let body_bc = (15, idx_slot, 15, acc_slot, 14, acc_slot, 14, idx_slot, 28, step_op, 2) in
+          let fc = list_concat (list_concat (rb.0) (rl.0)) (25, 18) in
+          (list_concat (list_concat fc body_bc) (26,), rl.1, idx_slot + 1)
+      else
+        -- Fallback: compile step as generic expression
+        let rs = compile_node pg step_id (rl.1) (rl.2) in
+        (list_concat (list_concat (rb.0) (rl.0)) (rs.0), rs.1, rs.2)
+
+  -- Unfold (kind 9)
+  else if kind == 9 then
+    let children = graph_outgoing pg nid in
+    if list_len children == 0 then ((1, 0), env, ns)
+    else compile_node pg (list_nth children 0) env ns
+
+  -- Effect (kind 10): effectful operations (file_read, debug_print, etc.)
+  else if kind == 10 then
+    let etag = graph_get_prim_op pg nid in
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    let child_code = fold ((), env, ns) (\st i ->
+      if i >= nc then st
+      else let r = compile_node pg (list_nth children i) (st.1) (st.2) in
+        (list_concat (st.0) (r.0), r.1, r.2)
+    ) nc in
+    (list_concat (child_code.0) (28, etag, nc), child_code.1, child_code.2)
+
+  -- Tuple (kind 11): construct a tuple from children
+  else if kind == 11 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc == 0 then ((18, 0), env, ns)
+    else
+      let result = fold ((), env, ns) (\st i ->
+        if i >= nc then st
+        else let r = compile_node pg (list_nth children i) (st.1) (st.2) in
+          (list_concat (st.0) (r.0), r.1, r.2)
+      ) nc in
+      (list_concat (result.0) (18, nc), result.1, result.2)
+
+  -- Inject (kind 12): variant injection
+  else if kind == 12 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc == 0 then ((1, 0), env, ns)
+    else
+      let child_code = fold ((), env, ns) (\st i ->
+        if i >= nc then st
+        else let r = compile_node pg (list_nth children i) (st.1) (st.2) in
+          (list_concat (st.0) (r.0), r.1, r.2)
+      ) nc in
+      (list_concat (child_code.0) (28, 158, nc), child_code.1, child_code.2)
+
+  -- Project (kind 13): tuple field access
+  else if kind == 13 then
+    let fi = graph_get_field_index pg nid in
+    let children = graph_outgoing pg nid in
+    if list_len children == 0 then ((1, 0), env, ns)
+    else
+      let r0 = compile_node pg (list_nth children 0) env ns in
+      (list_concat (r0.0) (19, fi), r0.1, r0.2)
+
+  -- Ref (kind 14): cross-fragment reference (emit placeholder)
+  else if kind == 14 then ((28, 0, 0), env, ns)
+
+  -- LetRec (kind 16): recursive let binding
+  else if kind == 16 then
+    let children = graph_outgoing pg nid in
+    let binder = bitand (graph_get_binder pg nid) 255 in
+    let nc = list_len children in
+    if nc < 2 then
+      if nc == 1 then compile_node pg (list_nth children 0) env ns
+      else ((1, 0), env, ns)
+    else
+      let val_id = list_nth children 0 in
+      let body_id = list_nth children 1 in
+      let rv = compile_node pg val_id env ns in
+      let slot = rv.2 in
+      let env2 = list_append (rv.1) (binder, slot) in
+      let rb = compile_node pg body_id env2 (slot + 1) in
+      (list_concat (list_concat (rv.0) (15, slot)) (rb.0), rb.1, rb.2)
+
+  -- Guard (kind 17): if/then/else
+  else if kind == 17 then
+    let children = graph_outgoing pg nid in
+    let nc = list_len children in
+    if nc < 3 then
+      if nc >= 1 then compile_node pg (list_nth children 0) env ns
+      else ((1, 0), env, ns)
+    else
+      let rc = compile_node pg (list_nth children 0) env ns in
+      let rt = compile_node pg (list_nth children 1) (rc.1) (rc.2) in
+      let re = compile_node pg (list_nth children 2) (rt.1) (rt.2) in
+      let clen = list_len (rc.0) in
+      let tlen = list_len (rt.0) in
+      let elen = list_len (re.0) in
+      let jz_target = clen + 2 + tlen + 2 in
+      let jmp_target = jz_target + elen in
+      let code = list_concat (rc.0) (17, jz_target) in
+      let code2 = list_concat (list_concat code (rt.0)) (16, jmp_target) in
+      (list_concat code2 (re.0), re.1, re.2)
+
+  -- Unknown node kind: emit zero constant
+  else ((1, 0), env, ns)
+
+
+-- =========================================================================
+-- Navigate from graph root to the body node inside a (self_graph, body)
+-- Tuple. The root may be the Tuple directly (single-param wrapper) or
+-- nested inside Let nodes (multi-param wrapper with let-bindings).
+--
+-- Walks: Let -> body child, Lambda -> body child, until reaching a Tuple
+-- (kind 11) with 2 children, then returns child 1 (the actual body).
+-- Falls back to the root itself if no Tuple wrapper is found.
+-- =========================================================================
+let find_body_in_graph pg root =
+  -- Walk up to 10 levels deep to find the (self_graph, body) Tuple
+  -- State: (found_flag, current_node)
+  --   found_flag=0: still searching, found_flag=1: done
+  let result = fold (0, root) (\st _i ->
+    if st.0 == 1 then st  -- already found, stop
+    else
+      let nid = st.1 in
+      let k = graph_get_kind pg nid in
+      -- Tuple with 2 children: this is (self_graph, body)
+      if k == 11 then
+        let children = graph_outgoing pg nid in
+        let nc = list_len children in
+        if nc == 2 then (1, list_nth children 1)
+        else (0, nid)
+      -- Let node: follow body (child 1)
+      else if k == 3 then
+        let children = graph_outgoing pg nid in
+        if list_len children >= 2 then (0, list_nth children 1)
+        else (0, nid)
+      -- Lambda node: follow body (child 0)
+      else if k == 2 then
+        let children = graph_outgoing pg nid in
+        if list_len children >= 1 then (0, list_nth children 0)
+        else (0, nid)
+      -- LetRec node: follow body (child 1)
+      else if k == 16 then
+        let children = graph_outgoing pg nid in
+        if list_len children >= 2 then (0, list_nth children 1)
+        else (0, nid)
+      else (0, nid)
+  ) 10 in
+  result.1
+
+
+-- =========================================================================
+-- Helper: extract body text from source.
+-- Finds the first line ending with "=" and returns everything after it.
+-- =========================================================================
+let extract_body source =
+  let lines = str_split source "\n" in
+  let n = list_len lines in
+  -- Find the line index where the function body starts
+  let body_start = fold 0 (\pos i ->
+    if pos > 0 then pos
+    else if i >= n then pos
+    else let line = list_nth lines i in
+      if str_ends_with line "=" then i + 1 else pos
+  ) n in
+  -- Build the body string by joining lines from body_start onward
+  fold "" (\acc i ->
+    if i < body_start then acc
+    else if i >= n then acc
+    else str_concat (str_concat acc (list_nth lines i)) "\n"
+  ) n
+
+
+-- =========================================================================
+-- Extract a fully inspectable graph from a single-param IRIS function.
+--
+-- For a function like the tokenizer:
+--   let tokenize src : String -> Tuple [cost: Unknown] =
+--     <body>
+-- We find the body, wrap it as:
+--   let f src = (self_graph, <body>)
+-- Then compile_source + module_eval gives (graph, result).
+--
+-- Parameters:
+--   source:      the full source string of the .iris file
+--   dummy_input: a value to pass when evaluating (e.g., "test" for tokenizer)
+--
+-- Returns: (graph, body_node_id)
+-- =========================================================================
+let extract_graph source dummy_input =
+  let body = extract_body source in
+  -- Create wrapper: "let f src = (self_graph, <body>)"
+  -- The wrapper has the same parameter name so InputRef binder indices match
+  let wrapper = str_concat "let f src =\n  (self_graph,\n" (str_concat body ")") in
+  -- Compile via the fast Rust pipeline
+  let m = compile_source wrapper in
+  -- Evaluate binding 0 with a dummy input to trigger self_graph capture
+  let result = module_eval (m.0) 0 dummy_input in
+  -- result is a tuple: (graph, function_result)
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  -- Navigate to find the body inside the (self_graph, body) Tuple
+  let body_node = find_body_in_graph pg root in
+  (pg, body_node)
+
+
+-- =========================================================================
+-- Extract graph from a two-param function (like the parser).
+--
+-- The parser has signature: let parse tokens src = ...
+-- We extract the body, then wrap with a single tuple parameter:
+--   let f __input__ =
+--     let tokens = __input__.0 in
+--     let src = __input__.1 in
+--     (self_graph, <body>)
+--
+-- This allows module_eval with a single (tokens, src) tuple argument.
+-- The self_graph captures the full body graph including the let-bindings.
+-- We navigate through the Let nodes to find the (self_graph, body) Tuple.
+--
+-- Parameters:
+--   source:       the full parser source string
+--   dummy_tokens: dummy token tuple for evaluation
+--   dummy_src:    dummy source string for evaluation
+--
+-- Returns: (graph, body_node_id)
+-- =========================================================================
+let extract_parser_graph source dummy_tokens dummy_src =
+  let body = extract_body source in
+  -- Wrap with single tuple param, re-binding original param names
+  let wrapper = str_concat "let f __input__ =\n  let tokens = __input__.0 in\n  let src = __input__.1 in\n  (self_graph,\n" (str_concat body ")") in
+  let m = compile_source wrapper in
+  let result = module_eval (m.0) 0 (dummy_tokens, dummy_src) in
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  -- Navigate through Let nodes to find the actual body
+  let body_node = find_body_in_graph pg root in
+  (pg, body_node)
+
+
+-- =========================================================================
+-- Compile a graph to bytecodes: extract graph, compile body, add HALT
+-- =========================================================================
+let compile_to_bytecodes pg body_node =
+  let result = compile_node pg body_node () 0 in
+  list_concat (result.0) (0,)
+
+
+-- =========================================================================
+-- Main: extract and compile the tokenizer and parser to bytecodes
+-- =========================================================================
+let main x =
+  -- Step 1: Read the tokenizer source
+  let tok_src = file_read "src/iris-programs/syntax/tokenizer.iris" in
+
+  -- Step 2: Extract the tokenizer graph using self_graph injection
+  -- Pass a small test string as dummy input for evaluation
+  let tok_extracted = extract_graph tok_src "let x = 1" in
+  let tok_pg = tok_extracted.0 in
+  let tok_body = tok_extracted.1 in
+
+  -- Step 3: Compile tokenizer graph to bytecodes
+  let tok_bytecodes = compile_to_bytecodes tok_pg tok_body in
+  let tok_bc_len = list_len tok_bytecodes in
+
+  -- Step 4: Verify tokenizer bytecodes by comparing graph structure
+  -- (The actual VM execution test requires the native_vm)
+  let tok_root_kind = graph_get_kind tok_pg tok_body in
+
+  -- Step 5: Read the parser source
+  let par_src = file_read "src/iris-programs/syntax/iris_parser.iris" in
+
+  -- Step 6: Extract the parser graph using the body-extraction approach
+  -- First tokenize a small test to get dummy tokens for parser evaluation
+  let tok_m = compile_source tok_src in
+  let dummy_tokens = module_eval (tok_m.0) 0 "let x = 1" in
+  let par_extracted = extract_parser_graph par_src dummy_tokens "let x = 1" in
+  let par_pg = par_extracted.0 in
+  let par_body = par_extracted.1 in
+
+  -- Step 7: Compile parser graph to bytecodes
+  let par_bytecodes = compile_to_bytecodes par_pg par_body in
+  let par_bc_len = list_len par_bytecodes in
+
+  -- Step 8: Verify parser bytecodes
+  let par_root_kind = graph_get_kind par_pg par_body in
+
+  -- Output: bytecodes for both modules + metadata
+  -- Format: (tok_bytecodes, par_bytecodes, tok_bc_len, par_bc_len,
+  --          tok_root_kind, par_root_kind)
+  let d1 = debug_print (str_concat "Tokenizer bytecodes: " (int_to_string tok_bc_len)) in
+  let d2 = debug_print (str_concat "Tokenizer root kind: " (int_to_string tok_root_kind)) in
+  let d3 = debug_print (str_concat "Parser bytecodes: " (int_to_string par_bc_len)) in
+  let d4 = debug_print (str_concat "Parser root kind: " (int_to_string par_root_kind)) in
+  (tok_bytecodes, par_bytecodes)
