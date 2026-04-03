@@ -40,7 +40,8 @@ let compile_graph pg start_nid init_env init_ns =
         let cached = cache_lookup nid cache in
         let kind = graph_get_kind pg nid in
         -- Only use cache for pure nodes (not Lambda/Let/Apply/LetRec)
-        let use_cached = if cached < 0 then 0 else if kind == 1 then 0 else if kind == 2 then 0 else if kind == 3 then 0 else if kind == 16 then 0 else 1 in
+        -- Disable caching: shared nodes with slot-dependent values produce wrong results
+        let use_cached = 0 in
         if use_cached == 1 then
           (rest, list_concat bc (14, cached), env, ns, segs, cache)
         else
@@ -48,12 +49,12 @@ let compile_graph pg start_nid init_env init_ns =
             let tt = graph_get_lit_type_tag pg nid in
             let lv = graph_get_lit_value pg nid in
             if tt == 255 then
-              let s = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len env then s else let e = list_nth env i in if e.0 == lv then e.1 else s) (list_len env) in
+              let s = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len env then s else let e = list_nth env i in if e.0 == lv then if e.1 >= 0 then e.1 else s else s) (list_len env) in
               (rest, list_concat bc (14, if s >= 0 then s else lv), env, ns, segs, cache)
             else (rest, list_concat bc (1, lv), env, ns, segs, cache)
           else
             -- Only cache pure computation nodes (not Lambda/Let/Apply/LetRec)
-            let do_cache = if kind == 1 then 0 else if kind == 2 then 0 else if kind == 3 then 0 else if kind == 16 then 0 else 1 in
+            let do_cache = 0 in  -- caching disabled: shared nodes in lambda bodies cause wrong results
             let cs = if do_cache == 1 then ns else 0 - 1 in
             let ns2 = if do_cache == 1 then ns + 1 else ns in
             let rest2 = if do_cache == 1 then ws_push rest (12, nid, cs) else rest in
@@ -121,28 +122,27 @@ let compile_graph pg start_nid init_env init_ns =
                 let w0 = ws_push rest2 (11, env) in
                 (ws_push (ws_push (ws_push w0 (0, bd)) (6, ns2)) (0, a), bc, list_append env (b, ns2), ns2 + 1, segs, cache)
               else if graph_get_kind pg f == 1 then
-                -- Apply(Apply(...), arg) → check for curried lambda application
+                -- Apply(Apply(...), arg2) → check for curried call to deferred Lambda
                 let fch = graph_outgoing pg f in
                 let ff = list_nth fch 0 in
                 let fa = list_nth fch 1 in
                 if graph_get_kind pg ff == 2 then
-                  -- Apply(Apply(Lambda_a, arg1), arg2) → let a=arg1, let b=arg2, body
-                  -- Unwrap: compile arg1, STORE a, then compile Apply(Lambda_b, arg2)
+                  -- Apply(Apply(Lambda_a(body_a), arg1), arg2)
+                  -- body_a is Lambda_b(final_body) for curried 2-arg
                   let b1 = bitand (graph_get_binder pg ff) 255 in
-                  let bd1 = list_nth (graph_outgoing pg ff) 0 in
-                  -- bd1 might be another Lambda (curried 2+ args)
-                  -- Push: compile body_after_first_let, STORE a_slot, compile arg1
-                  -- The body_after_first_let is Apply(bd1, a) = Apply(Lambda_b, arg2)
-                  -- But we need to reconstruct this as: compile arg1, STORE a, compile arg2, STORE b, compile body
-                  -- Simpler: just push a new Apply(bd1, a) node to compile
-                  let w0 = ws_push rest2 (11, env) in
-                  -- Push: compile Apply(bd1, a) which handles the inner lambda
-                  -- But bd1 is a graph node and a is the outer arg. We need to compile:
-                  -- let a_binder = fa (inner arg), then Apply(bd1_body, a_outer_arg)
-                  -- Actually: just compile fa (STORE), then compile the nid again but
-                  -- this time f will be the Lambda after the inner apply resolves.
-                  -- Simplest: compile inner apply as let, then outer arg as another let
-                  (ws_push (ws_push (ws_push (ws_push (ws_push w0 (0, bd1)) (6, ns2 + 1)) (0, a)) (6, ns2)) (0, fa), bc, list_append (list_append env (b1, ns2)) (if graph_get_kind pg bd1 == 2 then bitand (graph_get_binder pg bd1) 255 else 0, ns2 + 1), ns2 + 2, segs, cache)
+                  let body_a = list_nth (graph_outgoing pg ff) 0 in
+                  if graph_get_kind pg body_a == 2 then
+                    -- Curried: Lambda_a(Lambda_b(body)). Inline as: let a=arg1, let b=arg2, body
+                    let b2 = bitand (graph_get_binder pg body_a) 255 in
+                    let final_body = list_nth (graph_outgoing pg body_a) 0 in
+                    let w0 = ws_push rest2 (11, env) in
+                    let env2 = list_append (list_append env (b1, ns2)) (b2, ns2 + 1) in
+                    -- Stack: COMPILE(fa)→STORE(a), COMPILE(a)→STORE(b), COMPILE(final_body)
+                    (ws_push (ws_push (ws_push (ws_push (ws_push w0 (0, final_body)) (6, ns2 + 1)) (0, a)) (6, ns2)) (0, fa), bc, env2, ns2 + 2, segs, cache)
+                  else
+                    -- Single-arg apply: just inline Lambda_a
+                    let w0 = ws_push rest2 (11, env) in
+                    (ws_push (ws_push (ws_push w0 (0, body_a)) (6, ns2)) (0, fa), bc, list_append env (b1, ns2), ns2 + 1, segs, cache)
                 else (ws_push (ws_push rest2 (0, a)) (0, f), bc, env, ns2, segs, cache)
               else (ws_push (ws_push rest2 (0, a)) (0, f), bc, env, ns2, segs, cache)
             else if kind == 8 then
