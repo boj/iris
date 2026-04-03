@@ -244,15 +244,46 @@ let emit_bc_data bc =
       bytes_concat acc (bytes_from_ints chunk)
   ) n_chunks
 
+-- AST-path compiler: tokenize → parse → AST compile (no self_graph needed)
+-- Used for multi-function programs where self_graph leaves Apply nodes unreduced.
+let compile_ast_path source =
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let par_m = compile_source (file_read "src/iris-programs/syntax/iris_parser.iris") in
+  let tokens = module_eval (tok_m.0) 0 source in
+  let tree = module_eval (par_m.0) 0 (tokens, source) in
+  let ac_m = compile_source (file_read "src/iris-programs/compiler/ast_compile_single.iris") in
+  module_eval (ac_m.0) 0 (list_append () tree)
+
+-- Detect if source has multiple top-level let bindings
+let is_multi_func source =
+  let slen = str_len source in
+  let count = fold 0 (\cnt i ->
+    if i >= slen - 4 then cnt
+    else let at = if i == 0 then 1 else if char_at source (i - 1) == 10 then 1 else 0 in
+      if at == 1 then
+        if char_at source i == 108 then if char_at source (i + 1) == 101 then
+          if char_at source (i + 2) == 116 then if char_at source (i + 3) == 32 then cnt + 1
+          else cnt else cnt else cnt else cnt
+      else cnt
+  ) slen in
+  count
+
 -- Main: source → bytecodes → native binary
 let main source_path arg =
-  let raw_source = file_read source_path in
-  -- Transform multi-function programs to single-function
-  let tf_m = compile_source (file_read "src/iris-programs/compiler/multi_func_transform.iris") in
-  let source = module_eval (tf_m.0) 0 raw_source in
+  let source = file_read source_path in
 
-  -- Step 1: Extract graph and compile to bytecodes
-  let bytecodes = compile_to_bytecodes source 0 in
+  -- Step 1: Compile to bytecodes
+  -- Use AST path for multi-function, graph path for single-function
+  let n_funcs = is_multi_func source in
+  let bytecodes = if n_funcs > 1 then
+    -- Multi-function: transform + AST compile (handles curried calls)
+    let tf_m = compile_source (file_read "src/iris-programs/compiler/multi_func_transform.iris") in
+    let transformed = module_eval (tf_m.0) 0 source in
+    compile_ast_path transformed
+  else
+    -- Single-function: graph compile (faster, handles more patterns)
+    compile_to_bytecodes source 0
+  in
   let n_bc = tuple_len bytecodes in
 
   -- Step 2: Verify against stage0
