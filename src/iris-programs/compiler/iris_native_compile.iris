@@ -272,18 +272,10 @@ let is_multi_func source =
 let main source_path arg =
   let source = file_read source_path in
 
-  -- Step 1: Compile to bytecodes
-  -- Use AST path for multi-function, graph path for single-function
-  let n_funcs = is_multi_func source in
-  let bytecodes = if n_funcs > 1 then
-    -- Multi-function: transform + AST compile (handles curried calls)
-    let tf_m = compile_source (file_read "src/iris-programs/compiler/multi_func_transform.iris") in
-    let transformed = module_eval (tf_m.0) 0 source in
-    compile_ast_path transformed
-  else
-    -- Single-function: graph compile (faster, handles more patterns)
-    compile_to_bytecodes source 0
-  in
+  -- Step 1: Transform multi-function to single-function, then graph compile
+  let tf_m = compile_source (file_read "src/iris-programs/compiler/multi_func_transform.iris") in
+  let transformed = module_eval (tf_m.0) 0 source in
+  let bytecodes = compile_to_bytecodes transformed 0 in
   let n_bc = tuple_len bytecodes in
 
   -- Step 2: Verify against stage0
