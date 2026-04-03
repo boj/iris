@@ -172,8 +172,22 @@ let compile_graph pg start_nid init_env init_ns =
       else if tag == 5 then (rest, list_concat bc (19, item.1), env, ns, segs, cache)
       else if tag == 6 then (rest, list_concat bc (15, item.1), env, ns, segs, cache)
       else if tag == 7 then
-        (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), env, ns, segs, cache)
-      else if tag == 8 then (rest, list_concat bc (26,), env, ns, segs, cache)
+        -- FOLD_SETUP: save bc to segments, start fresh (like guard SEG_END)
+        (rest, (), env, ns, ((item.1, item.2, bc), segs), cache)
+      else if tag == 8 then
+        -- FOLD_END: pop segment, compute body_len, assemble fold bytecodes
+        let fold_body_bc = bc in
+        let acc_slot = (segs.0).0 in
+        let idx_slot = (segs.0).1 in
+        let saved_bc = (segs.0).2 in
+        let rest_segs = segs.1 in
+        let body_len = tuple_len fold_body_bc in
+        -- Emit: saved_bc + FOLD_BEGIN(body_len+4) + STORE(idx) + STORE(acc) + body + FOLD_END
+        let fb = list_concat saved_bc (25, body_len + 4) in
+        let fb = list_concat fb (15, idx_slot) in
+        let fb = list_concat fb (15, acc_slot) in
+        let fb = list_concat fb fold_body_bc in
+        (rest, list_concat fb (26,), env, ns, rest_segs, cache)
       else if tag == 9 then (rest, (), env, ns, (bc, segs), cache)
       else if tag == 10 then
         let then_bc = segs.0 in let s1 = segs.1 in let cond_bc = s1.0 in let rest_segs = s1.1 in

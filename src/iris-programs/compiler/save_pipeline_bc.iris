@@ -49,8 +49,12 @@ let compile_graph pg start_nid init_env init_ns max_iter =
       else if tag == 4 then (rest, list_concat bc (18, item.1), env, ns, segs, cache)
       else if tag == 5 then (rest, list_concat bc (19, item.1), env, ns, segs, cache)
       else if tag == 6 then (rest, list_concat bc (15, item.1), env, ns, segs, cache)
-      else if tag == 7 then (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), env, ns, segs, cache)
-      else if tag == 8 then (rest, list_concat bc (26,), env, ns, segs, cache)
+      else if tag == 7 then
+        (rest, (), env, ns, ((item.1, item.2, bc), segs), cache)
+      else if tag == 8 then
+        let fbc = bc in let a_s = (segs.0).0 in let i_s = (segs.0).1 in let sbc = (segs.0).2 in let rs = segs.1 in
+        let bl = tuple_len fbc in
+        (rest, list_concat (list_concat (list_concat (list_concat sbc (25, bl + 4)) (15, i_s)) (15, a_s)) (list_concat fbc (26,)), env, ns, rs, cache)
       else if tag == 9 then (rest, (), env, ns, (bc, segs), cache)
       else if tag == 10 then let then_bc = segs.0 in let s1 = segs.1 in let cond_bc = s1.0 in let rest_segs = s1.1 in let else_bc = bc in
         let tl = tuple_len then_bc in let el = tuple_len else_bc in let cl = tuple_len cond_bc in
