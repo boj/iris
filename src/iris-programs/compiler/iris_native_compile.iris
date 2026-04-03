@@ -72,7 +72,7 @@ let compile_graph pg start_nid init_env init_ns =
                 else if op == 193 then 22  -- list_append → LIST_APPEND
                 else if op == 199 then 27  -- list_range → LIST_RANGE
                 else if op == 206 then 34  -- list_concat → LIST_CONCAT
-                else if op == 194 then 19 else if op == 210 then 19  -- list_nth & tuple_get → TUPLE_GET
+                else if op == 194 then 35 else if op == 210 then 19  -- list_nth & tuple_get → TUPLE_GET
                 else if op == 214 then 21 else if op == 240 then 21  -- tuple_len & list_len → TUPLE_LEN
                 else 0 in
               if nc == 3 then
