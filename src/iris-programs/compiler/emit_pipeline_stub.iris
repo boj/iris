@@ -23,15 +23,7 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let vaddr = 4194304 in  -- 0x400000
   let header_total = 120 in
 
-  -- Helper: emit call rel32 to VM from a given file position
-  let emit_call = \pos ->
-    let rel = vm_offset - pos - 5 in
-    bytes_from_ints (0xe8, bitand rel 255, bitand (shr rel 8) 255,
-      bitand (shr rel 16) 255, bitand (shr rel 24) 255) in
-
-  -- Helper: emit mov rdi, imm64 (load tagged bc pointer)
-  let emit_load_bc = \bc_file_offset ->
-    bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + bc_file_offset + 1)) in
+  -- Helpers inlined below (lambdas don't capture correctly through module_eval)
 
   -- === PART 1: Init heap + build argv[1] as IRIS string ===
   let part1 = bytes_from_ints (
@@ -44,7 +36,7 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x0f, 0x05,                             -- syscall
     0x49, 0x89, 0xc7,                       -- mov r15, rax
     0x48, 0x89, 0xc7,                       -- mov rdi, rax
-    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04, -- add rdi, 64MB
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40, -- add rdi, 1GB
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,
     0x0f, 0x05,
     -- Save argv[1] and argv[2] pointers
@@ -82,27 +74,33 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   ) in
 
   -- === PART 2: Read file via tiny VM program [FILE_READ, HALT] ===
-  let part2 = bytes_from_ints (
-    -- Build bytecodes data on heap: header + [39(FILE_READ), 0(HALT)]
-    0x4c, 0x89, 0xf8,                       -- mov rax, r15
-    0x49, 0xc7, 0x07, 0x00, 0x02, 0x00, 0x00, -- mov qword [r15], 0x200 (count=2)
-    0x49, 0xc7, 0x47, 0x08, 39, 0, 0, 0,    -- mov qword [r15+8], 39
-    0x49, 0xc7, 0x47, 0x10, 0, 0, 0, 0,     -- mov qword [r15+16], 0
-    0x49, 0x83, 0xc7, 0x18,                 -- add r15, 24
-    0x48, 0x83, 0xc8, 0x01,                 -- or rax, 1 (tag)
-    0x48, 0x89, 0xc7,                       -- mov rdi, rax (bc ptr)
-    0x48, 0x8b, 0x75, 0xe0                  -- mov rsi, [rbp-32] (filename)
+  -- Split to avoid bytes_from_ints trailing-zero truncation bug
+  let part2a = bytes_from_ints (0x4c, 0x89, 0xf8) in  -- mov rax, r15
+  let part2b = bytes_from_ints (0x49, 0xc7, 0x07) in  -- mov qword [r15], imm32...
+  let part2c = bytes_from_ints (0x00, 0x02, 0x00, 0x00, 0x49) in  -- ...0x200 + next insn prefix
+  let part2d = bytes_from_ints (0xc7, 0x47, 0x08, 39) in  -- mov qword [r15+8], 39...
+  let part2e = bytes_from_ints (0x00, 0x00, 0x00, 0x49) in  -- ...zeros + next prefix
+  let part2f = bytes_from_ints (0xc7, 0x47, 0x10) in  -- mov qword [r15+16], 0...
+  let part2g = bytes_from_ints (0x00, 0x00, 0x00, 0x00, 0x49) in  -- ...zeros + next prefix
+  let part2h = bytes_from_ints (
+    0x83, 0xc7, 0x18,                       -- add r15, 24
+    0x48, 0x83, 0xc8, 0x01,                 -- or rax, 1
+    0x48, 0x89, 0xc7,                       -- mov rdi, rax
+    0x48, 0x8b, 0x75, 0xe0                  -- mov rsi, [rbp-32]
   ) in
+  let part2 = bytes_concat part2a (bytes_concat part2b (bytes_concat part2c (bytes_concat part2d (bytes_concat part2e (bytes_concat part2f (bytes_concat part2g part2h)))))) in
   -- call VM → rax = source_string
   let pos2 = header_total + bytes_len part1 + bytes_len part2 in
-  let call2 = emit_call pos2 in
+  let rel2 = vm_offset - pos2 - 5 in
+  let call2 = bytes_from_ints (0xe8, bitand rel2 255, bitand (shr rel2 8) 255, bitand (shr rel2 16) 255, bitand (shr rel2 24) 255) in
   let save2 = bytes_from_ints (0x48, 0x89, 0x45, 0xd8) in -- mov [rbp-40], rax
 
   -- === PART 3: Tokenize via VM(tok_bc, source_string) ===
-  let load_tok = emit_load_bc tok_offset in
+  let load_tok = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + tok_offset + 1)) in
   let setup3 = bytes_from_ints (0x48, 0x8b, 0x75, 0xd8) in -- mov rsi, [rbp-40]
   let pos3 = pos2 + 5 + bytes_len save2 + bytes_len load_tok + bytes_len setup3 in
-  let call3 = emit_call pos3 in
+  let rel3 = vm_offset - pos3 - 5 in
+  let call3 = bytes_from_ints (0xe8, bitand rel3 255, bitand (shr rel3 8) 255, bitand (shr rel3 16) 255, bitand (shr rel3 24) 255) in
   let save3 = bytes_from_ints (0x48, 0x89, 0x45, 0xd0) in -- mov [rbp-48], rax (tokens)
 
   -- === PART 4: Build (tokens, source_string) tuple for parser ===
@@ -117,10 +115,11 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
   ) in
   -- Parse via VM(par_bc, tuple)
-  let load_par = emit_load_bc par_offset in
+  let load_par = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + par_offset + 1)) in
   let setup4 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx (tuple)
   let pos4 = pos3 + 5 + bytes_len save3 + bytes_len part4 + bytes_len load_par + bytes_len setup4 in
-  let call4 = emit_call pos4 in
+  let rel4 = vm_offset - pos4 - 5 in
+  let call4 = bytes_from_ints (0xe8, bitand rel4 255, bitand (shr rel4 8) 255, bitand (shr rel4 16) 255, bitand (shr rel4 24) 255) in
   let save4 = bytes_from_ints (0x48, 0x89, 0x45, 0xc8) in -- mov [rbp-56], rax (AST)
 
   -- === PART 5: Wrap AST in 1-element tuple (prevent module_eval unpacking) ===
@@ -133,10 +132,11 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
   ) in
   -- AST compile via VM(ast_bc, wrapped_AST)
-  let load_ast = emit_load_bc ast_offset in
+  let load_ast = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + ast_offset + 1)) in
   let setup5 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx
   let pos5 = pos4 + 5 + bytes_len save4 + bytes_len part5 + bytes_len load_ast + bytes_len setup5 in
-  let call5 = emit_call pos5 in
+  let rel5 = vm_offset - pos5 - 5 in
+  let call5 = bytes_from_ints (0xe8, bitand rel5 255, bitand (shr rel5 8) 255, bitand (shr rel5 16) 255, bitand (shr rel5 24) 255) in
   let save5 = bytes_from_ints (0x48, 0x89, 0x45, 0xc0) in -- mov [rbp-64], rax (user_bc tuple)
 
   -- === PART 6: User bytecodes tuple → already in correct format for VM ===
@@ -157,7 +157,8 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   ) in
   -- call VM → rax = user program result
   let pos6 = pos5 + 5 + bytes_len save5 + bytes_len setup6 + bytes_len atoi_code + bytes_len post_atoi in
-  let call6 = emit_call pos6 in
+  let rel6 = vm_offset - pos6 - 5 in
+  let call6 = bytes_from_ints (0xe8, bitand rel6 255, bitand (shr rel6 8) 255, bitand (shr rel6 16) 255, bitand (shr rel6 24) 255) in
 
   -- Print result and exit
   let pre_exit = bytes_from_ints (

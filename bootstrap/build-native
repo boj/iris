@@ -143,44 +143,35 @@ let le64 v =
 let main x =
   let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
   let nb = list_len (m.1) in
-  module_eval (m.0) 0 ($VM_OFF2, $TOK_OFF2, $PAR_OFF2, $AST_OFF2)
+  module_eval (m.0) 1 ($VM_OFF2, $TOK_OFF2, $PAR_OFF2, $AST_OFF2)
 IRIS
 $STAGE0 run "$TMPDIR/emit_stub_final.iris" 0 | extract_bytes > "$TMPDIR/stub_final.bin"
 
 # Step 4: Build ELF headers
-nix-shell -p python3 --run "python3 -c \"
+cat > "$TMPDIR/gen_headers.py" << EOF
 import struct, sys
-
-header_total = 120
-file_size = $FILE_SIZE
-mem_size = $MEM_SIZE
-entry = 0x400000 + header_total
-
-# ELF header (64 bytes)
 ehdr = bytearray(64)
 ehdr[0:4] = b'\x7fELF'
-ehdr[4] = 2  # 64-bit
-ehdr[5] = 1  # little-endian
-ehdr[6] = 1  # ELF version
-struct.pack_into('<H', ehdr, 16, 2)      # e_type = ET_EXEC
-struct.pack_into('<H', ehdr, 18, 0x3e)   # e_machine = x86_64
-struct.pack_into('<I', ehdr, 20, 1)      # e_version
-struct.pack_into('<Q', ehdr, 24, entry)  # e_entry
-struct.pack_into('<Q', ehdr, 32, 64)     # e_phoff
-struct.pack_into('<H', ehdr, 52, 64)     # e_ehsize
-struct.pack_into('<H', ehdr, 54, 56)     # e_phentsize
-struct.pack_into('<H', ehdr, 56, 1)      # e_phnum
-
-# Program header (56 bytes)
-phdr = struct.pack('<IIQQQQQQ', 1, 7, 0, 0x400000, 0x400000, file_size, mem_size, 0x1000)
-
+ehdr[4] = 2; ehdr[5] = 1; ehdr[6] = 1
+struct.pack_into('<H', ehdr, 16, 2)
+struct.pack_into('<H', ehdr, 18, 0x3e)
+struct.pack_into('<I', ehdr, 20, 1)
+struct.pack_into('<Q', ehdr, 24, 0x400000 + 120)
+struct.pack_into('<Q', ehdr, 32, 64)
+struct.pack_into('<H', ehdr, 52, 64)
+struct.pack_into('<H', ehdr, 54, 56)
+struct.pack_into('<H', ehdr, 56, 1)
+phdr = struct.pack('<IIQQQQQQ', 1, 7, 0, 0x400000, 0x400000, $FILE_SIZE, $MEM_SIZE, 0x1000)
 sys.stdout.buffer.write(bytes(ehdr) + phdr)
-\"" > "$TMPDIR/headers.bin"
+EOF
+nix-shell -p python3 --run "python3 $TMPDIR/gen_headers.py" > "$TMPDIR/headers.bin"
+echo "  Headers: $(wc -c < "$TMPDIR/headers.bin") bytes" >&2
 
 # Step 5: Assemble
 PAD=""
 if [ $TOK_PAD2 -eq 1 ]; then PAD=$(printf '\x90'); fi
 
+echo "  Stub_final: $(wc -c < "$TMPDIR/stub_final.bin") bytes, first: $(nix-shell -p python3 --run "python3 -c \"b=open('$TMPDIR/stub_final.bin','rb').read(); print([hex(x) for x in b[:4]])\"" 2>/dev/null)" >&2
 cat "$TMPDIR/headers.bin" "$TMPDIR/stub_final.bin" "$TMPDIR/vm.bin" > "$OUTPUT"
 if [ -n "$PAD" ]; then printf '\x90' >> "$OUTPUT"; fi
 cat "$TMPDIR/tok.bin" "$TMPDIR/par.bin" "$TMPDIR/ast.bin" >> "$OUTPUT"
