@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# build-native — Build the self-hosting IRIS native binary.
+#
+# Produces a standalone x86-64 ELF binary that:
+#   1. Reads an IRIS source file (argv[1])
+#   2. Tokenizes, parses, compiles to bytecodes (all in native VM)
+#   3. Executes the bytecodes with argv[2] as input
+#   4. Prints the result
+#
+# Usage: bootstrap/build-native [-o output]
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT="$(cd "$DIR/.." && pwd)"
+STAGE0="$DIR/iris-stage0"
+EMITTER="$PROJECT/src/iris-programs/compiler/emit_stage_bc.iris"
+STUB_EMITTER="$PROJECT/src/iris-programs/compiler/emit_pipeline_stub.iris"
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+OUTPUT="${2:-$DIR/iris-native}"
+
+echo "=== Building self-hosting IRIS native binary ==="
+cd "$PROJECT"
+
+# Helper: extract raw bytes from Bytes([...]) output
+extract_bytes() {
+  nix-shell -p python3 --run 'python3 -c "
+import sys, re
+data = sys.stdin.read()
+m = re.search(r\"Bytes\(\[([0-9, \n]+)\]\)\", data)
+if m:
+    nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
+    sys.stdout.buffer.write(bytes(nums))
+else:
+    print(\"Error:\", data[:200], file=sys.stderr); sys.exit(1)
+"'
+}
+
+# Step 1: Compile pipeline stages → bc_data files
+# Use save_pipeline_bc.iris for compilation (JIT-enabled)
+# Then emit_bc_data in a separate step
+SBC="$PROJECT/src/iris-programs/compiler/save_pipeline_bc.iris"
+
+echo -n "  Tokenizer...    "
+$STAGE0 run "$SBC" 10 0 | extract_bytes > "$TMPDIR/tok.bin"
+echo "$(wc -c < "$TMPDIR/tok.bin") bytes"
+
+echo -n "  Parser...       "
+# Parser is too large for single invocation. Compile separately, then emit.
+$STAGE0 run "$SBC" 1 0 > "$TMPDIR/par_raw.txt"
+# Extract bytecodes tuple and emit bc_data in a separate invocation
+PAR_N=$(head -c 20 "$TMPDIR/par_raw.txt" | sed 's/(\([0-9]*\).*/\1/')
+nix-shell -p python3 --run "python3 -c \"
+import sys, struct
+# Parse the tuple from save_pipeline_bc output
+data = open('$TMPDIR/par_raw.txt').read().strip()
+# Format: (27063, (14, 0, 21, ...))
+idx = data.index('(', 1)
+inner = data[idx+1:-2]
+nums = [int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit()]
+# Emit bc_data: header(count<<8) + le64 elements
+count = len(nums)
+out = struct.pack('<Q', count * 256)
+for n in nums:
+    out += struct.pack('<q', n)
+sys.stdout.buffer.write(out)
+\"" > "$TMPDIR/par.bin"
+echo "$PAR_N bytecodes → $(wc -c < "$TMPDIR/par.bin") bytes"
+
+echo -n "  AST compiler... "
+$STAGE0 run "$SBC" 2 0 > "$TMPDIR/ast_raw.txt"
+AST_N=$(head -c 20 "$TMPDIR/ast_raw.txt" | sed 's/(\([0-9]*\).*/\1/')
+nix-shell -p python3 --run "python3 -c \"
+import sys, struct
+data = open('$TMPDIR/ast_raw.txt').read().strip()
+idx = data.index('(', 1)
+inner = data[idx+1:-2]
+nums = [int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit()]
+count = len(nums)
+out = struct.pack('<Q', count * 256)
+for n in nums:
+    out += struct.pack('<q', n)
+sys.stdout.buffer.write(out)
+\"" > "$TMPDIR/ast.bin"
+echo "$AST_N bytecodes → $(wc -c < "$TMPDIR/ast.bin") bytes"
+
+echo -n "  Native VM...    "
+$STAGE0 run "$SBC" 3 0 2>/dev/null | extract_bytes > "$TMPDIR/vm.bin" 2>/dev/null || {
+  # Fallback: get VM from emit_stage_bc
+  $STAGE0 run "$EMITTER" 3 0 | extract_bytes > "$TMPDIR/vm.bin"
+}
+echo "$(wc -c < "$TMPDIR/vm.bin") bytes"
+
+# Step 2: Compute layout and build startup stub
+VM_SIZE=$(wc -c < "$TMPDIR/vm.bin")
+TOK_SIZE=$(wc -c < "$TMPDIR/tok.bin")
+PAR_SIZE=$(wc -c < "$TMPDIR/par.bin")
+AST_SIZE=$(wc -c < "$TMPDIR/ast.bin")
+
+# Stub is ~500 bytes. Compute exact layout:
+# [120 headers] [stub] [vm] [pad?] [tok_data] [par_data] [ast_data]
+STUB_APPROX=600
+HEADER=120
+VM_OFF=$((HEADER + STUB_APPROX))
+RAW_TOK=$((VM_OFF + VM_SIZE))
+TOK_PAD=$((RAW_TOK % 2))
+TOK_OFF=$((RAW_TOK + TOK_PAD))
+PAR_OFF=$((TOK_OFF + TOK_SIZE))
+AST_OFF=$((PAR_OFF + PAR_SIZE))
+
+echo -n "  Startup stub... "
+# Build stub via wrapper that passes 4 args as a single tuple
+cat > "$TMPDIR/emit_stub.iris" << IRIS
+let main x =
+  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
+  let nb = list_len (m.1) in
+  -- emit_stub is binding 1. module_eval unpacks the 4-element tuple as 4 args.
+  module_eval (m.0) 1 ($VM_OFF, $TOK_OFF, $PAR_OFF, $AST_OFF)
+IRIS
+$STAGE0 run "$TMPDIR/emit_stub.iris" 0 | extract_bytes > "$TMPDIR/stub.bin"
+STUB_SIZE=$(wc -c < "$TMPDIR/stub.bin")
+echo "$STUB_SIZE bytes"
+
+# Step 3: Recompute layout with actual stub size
+VM_OFF2=$((HEADER + STUB_SIZE))
+RAW_TOK2=$((VM_OFF2 + VM_SIZE))
+TOK_PAD2=$((RAW_TOK2 % 2))
+TOK_OFF2=$((RAW_TOK2 + TOK_PAD2))
+PAR_OFF2=$((TOK_OFF2 + TOK_SIZE))
+AST_OFF2=$((PAR_OFF2 + PAR_SIZE))
+FILE_SIZE=$((AST_OFF2 + AST_SIZE))
+MEM_SIZE=$((FILE_SIZE + 262144))
+
+# Rebuild stub with correct offsets
+cat > "$TMPDIR/emit_stub_final.iris" << IRIS
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+let main x =
+  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
+  let nb = list_len (m.1) in
+  module_eval (m.0) 0 ($VM_OFF2, $TOK_OFF2, $PAR_OFF2, $AST_OFF2)
+IRIS
+$STAGE0 run "$TMPDIR/emit_stub_final.iris" 0 | extract_bytes > "$TMPDIR/stub_final.bin"
+
+# Step 4: Build ELF headers
+nix-shell -p python3 --run "python3 -c \"
+import struct, sys
+
+header_total = 120
+file_size = $FILE_SIZE
+mem_size = $MEM_SIZE
+entry = 0x400000 + header_total
+
+# ELF header (64 bytes)
+ehdr = bytearray(64)
+ehdr[0:4] = b'\x7fELF'
+ehdr[4] = 2  # 64-bit
+ehdr[5] = 1  # little-endian
+ehdr[6] = 1  # ELF version
+struct.pack_into('<H', ehdr, 16, 2)      # e_type = ET_EXEC
+struct.pack_into('<H', ehdr, 18, 0x3e)   # e_machine = x86_64
+struct.pack_into('<I', ehdr, 20, 1)      # e_version
+struct.pack_into('<Q', ehdr, 24, entry)  # e_entry
+struct.pack_into('<Q', ehdr, 32, 64)     # e_phoff
+struct.pack_into('<H', ehdr, 52, 64)     # e_ehsize
+struct.pack_into('<H', ehdr, 54, 56)     # e_phentsize
+struct.pack_into('<H', ehdr, 56, 1)      # e_phnum
+
+# Program header (56 bytes)
+phdr = struct.pack('<IIQQQQQQ', 1, 7, 0, 0x400000, 0x400000, file_size, mem_size, 0x1000)
+
+sys.stdout.buffer.write(bytes(ehdr) + phdr)
+\"" > "$TMPDIR/headers.bin"
+
+# Step 5: Assemble
+PAD=""
+if [ $TOK_PAD2 -eq 1 ]; then PAD=$(printf '\x90'); fi
+
+cat "$TMPDIR/headers.bin" "$TMPDIR/stub_final.bin" "$TMPDIR/vm.bin" > "$OUTPUT"
+if [ -n "$PAD" ]; then printf '\x90' >> "$OUTPUT"; fi
+cat "$TMPDIR/tok.bin" "$TMPDIR/par.bin" "$TMPDIR/ast.bin" >> "$OUTPUT"
+chmod +x "$OUTPUT"
+
+TOTAL_SIZE=$(wc -c < "$OUTPUT")
+echo ""
+echo "=== Self-hosting binary: $OUTPUT ($TOTAL_SIZE bytes) ==="
+echo "  Stub: $STUB_SIZE  VM: $VM_SIZE  Tok: $TOK_SIZE  Par: $PAR_SIZE  AST: $AST_SIZE"
+echo ""
+echo "Usage: $OUTPUT <source.iris> <arg>"

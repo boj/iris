@@ -121,11 +121,11 @@ let compile_graph pg start_nid =
         let tl = tuple_len then_bc in
         let el = tuple_len else_bc in
         let cl = tuple_len cond_bc in
-        let jz_target = cl + 2 + tl + 2 in
-        let jmp_target = jz_target + el in
-        let assembled = list_concat cond_bc (17, jz_target) in
+        let jz_rel = 2 + tl + 2 in
+        let jmp_rel = 2 + el in
+        let assembled = list_concat cond_bc (17, jz_rel) in
         let a2 = list_concat assembled then_bc in
-        let a3 = list_concat a2 (16, jmp_target) in
+        let a3 = list_concat a2 (16, jmp_rel) in
         let a4 = list_concat a3 else_bc in
         -- bc is replaced by assembled bytecodes (else_bc was the current bc)
         (rest, a4, env, ns, rest_segs)

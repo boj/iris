@@ -1,0 +1,192 @@
+-- assemble_iris.iris — Assemble the self-hosting IRIS native binary.
+-- Takes pre-compiled bytecodes tuples and produces an ELF binary.
+-- Called from the build script after save_pipeline_bc.iris compiles each stage.
+--
+-- Input: (tok_bc_tuple, par_bc_tuple, ast_bc_tuple) as a 3-element tuple
+-- Output: Bytes (the ELF binary)
+
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in
+  let n_chunks = (n + 7) / 8 in
+  fold header (\acc ci ->
+    if ci >= n_chunks then acc
+    else let base = ci * 8 in
+      let chunk = fold () (\ch j ->
+        if j >= 8 then ch else if base + j >= n then ch
+        else let v = tuple_get bc (base + j) in
+          let b0 = bitand v 255 in let v1 = shr v 8 in let b1 = bitand v1 255 in
+          let v2 = shr v1 8 in let b2 = bitand v2 255 in let v3 = shr v2 8 in let b3 = bitand v3 255 in
+          let v4 = shr v3 8 in let b4 = bitand v4 255 in let v5 = shr v4 8 in let b5 = bitand v5 255 in
+          let v6 = shr v5 8 in let b6 = bitand v6 255 in let v7 = shr v6 8 in let b7 = bitand v7 255 in
+          list_concat ch (b0, b1, b2, b3, b4, b5, b6, b7)
+      ) 8 in
+      bytes_concat acc (bytes_from_ints chunk)
+  ) n_chunks
+
+let emit_stub vm_offset tok_offset par_offset ast_offset =
+  let vaddr = 4194304 in
+  let header_total = 120 in
+  let emit_call = \pos ->
+    let rel = vm_offset - pos - 5 in
+    bytes_from_ints (0xe8, bitand rel 255, bitand (shr rel 8) 255,
+      bitand (shr rel 16) 255, bitand (shr rel 24) 255) in
+  let emit_load_bc = \bc_off ->
+    bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + bc_off + 1)) in
+  -- Part 1: init heap + build string from argv[1]
+  let p1 = bytes_from_ints (
+    0x48, 0x89, 0xe5, 0x48, 0x81, 0xec, 0x00, 0x01, 0x00, 0x00,
+    0x48, 0x31, 0xff, 0x48, 0xc7, 0xc0, 12, 0, 0, 0, 0x0f, 0x05,
+    0x49, 0x89, 0xc7, 0x48, 0x89, 0xc7,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04,
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0, 0x0f, 0x05,
+    0x48, 0x8b, 0x75, 0x10, 0x48, 0x89, 0x75, 0xf8,
+    0x48, 0x8b, 0x75, 0x18, 0x48, 0x89, 0x75, 0xf0,
+    0x48, 0x8b, 0x7d, 0xf8,
+    0x48, 0x31, 0xc9, 0x80, 0x3c, 0x0f, 0x00, 0x74, 0x04, 0x48, 0xff, 0xc1, 0xeb, 0xf5,
+    0x48, 0x89, 0x4d, 0xe8, 0x48, 0x8d, 0x41, 0x0f, 0x48, 0x83, 0xe0, 0xf8,
+    0x4c, 0x89, 0xfa, 0x49, 0x01, 0xc7,
+    0x48, 0x8b, 0x4d, 0xe8, 0x48, 0xc1, 0xe1, 0x08, 0x48, 0x83, 0xc9, 0x01, 0x48, 0x89, 0x0a,
+    0x48, 0x8d, 0x7a, 0x08, 0x48, 0x8b, 0x75, 0xf8, 0x48, 0x8b, 0x4d, 0xe8, 0xf3, 0xa4,
+    0x48, 0x83, 0xca, 0x01, 0x48, 0x89, 0x55, 0xe0) in
+  -- Part 2: file read via tiny VM
+  let p2 = bytes_from_ints (
+    0x4c, 0x89, 0xf8,
+    0x49, 0xc7, 0x07, 0x00, 0x02, 0x00, 0x00,
+    0x49, 0xc7, 0x47, 0x08, 39, 0, 0, 0,
+    0x49, 0xc7, 0x47, 0x10, 0, 0, 0, 0,
+    0x49, 0x83, 0xc7, 0x18, 0x48, 0x83, 0xc8, 0x01,
+    0x48, 0x89, 0xc7, 0x48, 0x8b, 0x75, 0xe0) in
+  let pc2 = header_total + bytes_len p1 + bytes_len p2 in
+  let c2 = emit_call pc2 in
+  let s2 = bytes_from_ints (0x48, 0x89, 0x45, 0xd8) in
+  -- Part 3: tokenize
+  let lt = emit_load_bc tok_offset in
+  let s3a = bytes_from_ints (0x48, 0x8b, 0x75, 0xd8) in
+  let pc3 = pc2 + 5 + bytes_len s2 + bytes_len lt + bytes_len s3a in
+  let c3 = emit_call pc3 in
+  let s3 = bytes_from_ints (0x48, 0x89, 0x45, 0xd0) in
+  -- Part 4: build parser tuple + parse
+  let p4 = bytes_from_ints (
+    0x4c, 0x89, 0xfa,
+    0x49, 0xc7, 0x07, 0x01, 0x02, 0x00, 0x00,
+    0x48, 0x8b, 0x4d, 0xd0, 0x49, 0x89, 0x4f, 0x08,
+    0x48, 0x8b, 0x4d, 0xd8, 0x49, 0x89, 0x4f, 0x10,
+    0x49, 0x83, 0xc7, 0x18, 0x48, 0x83, 0xca, 0x01) in
+  let lp = emit_load_bc par_offset in
+  let s4a = bytes_from_ints (0x48, 0x89, 0xd6) in
+  let pc4 = pc3 + 5 + bytes_len s3 + bytes_len p4 + bytes_len lp + bytes_len s4a in
+  let c4 = emit_call pc4 in
+  let s4 = bytes_from_ints (0x48, 0x89, 0x45, 0xc8) in
+  -- Part 5: wrap AST + compile
+  let p5 = bytes_from_ints (
+    0x4c, 0x89, 0xfa,
+    0x49, 0xc7, 0x07, 0x01, 0x01, 0x00, 0x00,
+    0x48, 0x8b, 0x4d, 0xc8, 0x49, 0x89, 0x4f, 0x08,
+    0x49, 0x83, 0xc7, 0x10, 0x48, 0x83, 0xca, 0x01) in
+  let la = emit_load_bc ast_offset in
+  let s5a = bytes_from_ints (0x48, 0x89, 0xd6) in
+  let pc5 = pc4 + 5 + bytes_len s4 + bytes_len p5 + bytes_len la + bytes_len s5a in
+  let c5 = emit_call pc5 in
+  let s5 = bytes_from_ints (0x48, 0x89, 0x45, 0xc0) in
+  -- Part 6: parse argv[2] + run user program
+  let elf_m = compile_source (file_read "src/iris-programs/compiler/elf_wrapper.iris") in
+  let atoi = module_eval (elf_m.0) 8 () in
+  let pe = module_eval (elf_m.0) 9 () in
+  let s6a = bytes_from_ints (0x48, 0x8b, 0x7d, 0xf0) in
+  let s6b = bytes_from_ints (0x48, 0x89, 0xc6, 0x48, 0x8b, 0x7d, 0xc0) in
+  let pc6 = pc5 + 5 + bytes_len s5 + bytes_len s6a + bytes_len atoi + bytes_len s6b in
+  let c6 = emit_call pc6 in
+  let pre_exit = bytes_from_ints (0x49, 0x89, 0xc4, 0x48, 0x83, 0xec, 0x20) in
+  -- Assemble
+  let s = p1 in
+  let s = bytes_concat s p2 in let s = bytes_concat s c2 in let s = bytes_concat s s2 in
+  let s = bytes_concat s lt in let s = bytes_concat s s3a in let s = bytes_concat s c3 in let s = bytes_concat s s3 in
+  let s = bytes_concat s p4 in let s = bytes_concat s lp in let s = bytes_concat s s4a in let s = bytes_concat s c4 in let s = bytes_concat s s4 in
+  let s = bytes_concat s p5 in let s = bytes_concat s la in let s = bytes_concat s s5a in let s = bytes_concat s c5 in let s = bytes_concat s s5 in
+  let s = bytes_concat s s6a in let s = bytes_concat s atoi in let s = bytes_concat s s6b in let s = bytes_concat s c6 in
+  let s = bytes_concat s pre_exit in
+  bytes_concat s pe
+
+
+let main x =
+  -- Get VM code
+  let vm_m = compile_source (file_read "src/iris-programs/compiler/native_vm.iris") in
+  let vm_code = module_eval (vm_m.0) 1 () in
+  let vm_size = bytes_len vm_code in
+
+  -- Get pipeline bytecodes (use save_pipeline_bc)
+  let sbc_m = compile_source (file_read "src/iris-programs/compiler/save_pipeline_bc.iris") in
+  let nb = list_len (sbc_m.1) in
+  let tok_r = module_eval (sbc_m.0) (nb - 1) (0, 0) in
+  let tok_bc = tok_r.1 in
+  let par_r = module_eval (sbc_m.0) (nb - 1) (1, 0) in
+  let par_bc = par_r.1 in
+  let ast_r = module_eval (sbc_m.0) (nb - 1) (2, 0) in
+  let ast_bc = ast_r.1 in
+
+  -- Emit bc data
+  let tok_data = emit_bc_data tok_bc in
+  let par_data = emit_bc_data par_bc in
+  let ast_data = emit_bc_data ast_bc in
+
+  -- Compute layout
+  let header_total = 120 in
+  let stub_approx = 600 in
+  let vm_offset = header_total + stub_approx in
+  let tok_off = vm_offset + vm_size + (vm_offset + vm_size) % 2 in
+  let par_off = tok_off + bytes_len tok_data in
+  let ast_off = par_off + bytes_len par_data in
+
+  -- Build stub with approximate offsets (for sizing)
+  let stub1 = emit_stub vm_offset tok_off par_off ast_off in
+  let stub_size = bytes_len stub1 in
+
+  -- Recompute with actual stub size
+  let vm_offset2 = header_total + stub_size in
+  let raw2 = vm_offset2 + vm_size in
+  let pad2 = raw2 % 2 in
+  let tok_off2 = raw2 + pad2 in
+  let par_off2 = tok_off2 + bytes_len tok_data in
+  let ast_off2 = par_off2 + bytes_len par_data in
+  let file_size = ast_off2 + bytes_len ast_data in
+  let mem_size = file_size + 262144 in
+
+  -- Rebuild stub with correct offsets
+  let stub2 = emit_stub vm_offset2 tok_off2 par_off2 ast_off2 in
+
+  -- ELF headers
+  let ehdr = bytes_from_ints (
+    0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 0, 0x3e, 0, 1, 0, 0, 0,
+    0x78, 0, 0x40, 0, 0, 0, 0, 0,
+    0x40, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x40, 0, 0x38, 0, 1, 0, 0, 0, 0, 0, 0, 0) in
+  let fs0 = bitand file_size 255 in let fs1 = bitand (shr file_size 8) 255 in
+  let fs2 = bitand (shr file_size 16) 255 in let fs3 = bitand (shr file_size 24) 255 in
+  let ms0 = bitand mem_size 255 in let ms1 = bitand (shr mem_size 8) 255 in
+  let ms2 = bitand (shr mem_size 16) 255 in let ms3 = bitand (shr mem_size 24) 255 in
+  let phdr = bytes_from_ints (
+    1, 0, 0, 0, 7, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    0, 0, 0x40, 0, 0, 0, 0, 0,
+    fs0, fs1, fs2, fs3, 0, 0, 0, 0,
+    ms0, ms1, ms2, ms3, 0, 0, 0, 0,
+    0, 0x10, 0, 0, 0, 0, 0, 0) in
+
+  let pad = if pad2 == 1 then bytes_from_ints (0x90) else bytes_from_ints () in
+  let binary = bytes_concat ehdr (bytes_concat phdr (bytes_concat stub2
+    (bytes_concat vm_code (bytes_concat pad (bytes_concat tok_data
+      (bytes_concat par_data ast_data)))))) in
+
+  -- Return sizes for debugging, not the binary (too large for module_eval)
+  (bytes_len binary, bytes_len stub2, vm_size, tuple_len tok_bc, tuple_len par_bc, tuple_len ast_bc)

@@ -9,9 +9,35 @@ shift || true
 
 case "$cmd" in
   run)
+    # Run via the tree-walker (fast startup, uses Rust evaluator)
     "$STAGE0" run "$@"
     ;;
+
+  run-native)
+    # Compile to native binary, then execute (self-hosted pipeline)
+    source="${1:?Usage: iris run-native <source.iris> [arg]}"
+    arg="${2:-0}"
+    tmpbin=$(mktemp /tmp/iris_run_XXXXXX)
+    trap "rm -f $tmpbin" EXIT
+    cd "$PROJECT"
+    "$STAGE0" run src/iris-programs/compiler/iris_native_compile.iris "$source" 0 2>&1 | \
+      nix-shell -p python3 --run 'python3 -c "
+import sys, re
+data = sys.stdin.read()
+m = re.search(r\"Bytes\(\[([0-9, \n]+)\]\)\", data)
+if m:
+    nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
+    sys.stdout.buffer.write(bytes(nums))
+else:
+    print(\"Error:\", data[:500], file=sys.stderr); sys.exit(1)
+"' > "$tmpbin"
+    chmod +x "$tmpbin"
+    "$tmpbin" "$arg"
+    ;;
+
   build)
+    # Compile source.iris to a standalone native x86-64 binary.
+    # Pipeline: source → self_graph → graph-to-bytecodes (cached, JIT) → ELF
     source="${1:?Usage: iris build <source.iris> -o <output>}"
     shift; output=""
     while [ $# -gt 0 ]; do case "$1" in -o) output="$2"; shift 2 ;; *) shift ;; esac; done
@@ -26,15 +52,45 @@ if m:
     nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
     sys.stdout.buffer.write(bytes(nums))
 else:
-    print(\"Error:\", data[:500], file=sys.stderr)
-    sys.exit(1)
+    print(\"Error:\", data[:500], file=sys.stderr); sys.exit(1)
 "' > "$output"
     chmod +x "$output"
     echo "$source -> $output ($(wc -c < "$output") bytes)"
     ;;
+
+  pipeline)
+    # Compile all pipeline stages to bytecodes (for verification)
+    cd "$PROJECT"
+    COMPILER=src/iris-programs/compiler/save_pipeline_bc.iris
+    echo "=== IRIS Pipeline Compilation ==="
+    for stage_num in 0 1 2; do
+      case $stage_num in
+        0) name="Tokenizer" ;;
+        1) name="Parser" ;;
+        2) name="AST compiler" ;;
+      esac
+      result=$("$STAGE0" run "$COMPILER" "$stage_num" 0)
+      n=$(echo "$result" | sed 's/(\([0-9]*\),.*/\1/')
+      echo "  $name: $n bytecodes"
+    done
+    ;;
+
   compile) "$STAGE0" compile "$@" ;;
   test) "$STAGE0" test "$@" ;;
   prove) echo "[prove] Lean kernel verification pending." ;;
-  version) echo "IRIS compiler v0.3.0 — source → bytecodes → native x86-64" ;;
-  help|*) echo "Usage: iris {run|build|compile|test|prove|version} [args]" ;;
+  version) echo "IRIS compiler v0.4.0 — self-hosted pipeline: tokenize → parse → compile → native x86-64" ;;
+  help|*)
+    cat <<'HELP'
+Usage: iris <command> [args]
+
+Commands:
+  run <source.iris> [args]          Run via tree-walker (fast startup)
+  run-native <source.iris> [arg]    Compile to native, then execute
+  build <source.iris> -o <output>   Produce standalone native binary
+  pipeline                          Compile all pipeline stages (verify)
+  compile <source.iris> -o <json>   Compile to JSON SemanticGraph
+  test <dir>                        Run test suite
+  version                           Show version
+HELP
+    ;;
 esac

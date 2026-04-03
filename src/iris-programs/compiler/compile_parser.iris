@@ -3,10 +3,10 @@
 
 let ws_push stack item = (item, stack)
 
-let compile_graph pg start_nid =
+let compile_graph pg start_nid init_env init_ns =
   -- State: (work_stack, bytecodes, env, next_slot, segments_stack)
   -- segments_stack: saved bytecode segments for guard compilation
-  let init_state = (((0, start_nid), ()), (), (), 0, ()) in
+  let init_state = (((0, start_nid), ()), (), init_env, init_ns, ()) in
   let final_state = fold init_state (\state step ->
     let ws = state.0 in
     let bc = state.1 in
@@ -54,11 +54,13 @@ let compile_graph pg start_nid =
         else if kind == 2 then
           let ch = graph_outgoing pg nid in
           let b = bitand (graph_get_binder pg nid) 255 in
-          (ws_push rest (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
+          let w0 = ws_push rest (11, env) in
+          (ws_push w0 (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
         else if kind == 3 then
           let ch = graph_outgoing pg nid in
           let b = bitand (graph_get_binder pg nid) 255 in
-          (ws_push (ws_push (ws_push rest (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
+          let w0 = ws_push rest (11, env) in
+          (ws_push (ws_push (ws_push w0 (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
         else if kind == 1 then
           let ch = graph_outgoing pg nid in
           let f = list_nth ch 0 in
@@ -66,7 +68,8 @@ let compile_graph pg start_nid =
           if graph_get_kind pg f == 2 then
             let b = bitand (graph_get_binder pg f) 255 in
             let bd = list_nth (graph_outgoing pg f) 0 in
-            (ws_push (ws_push (ws_push rest (0, bd)) (6, ns)) (0, a), bc, list_append env (b, ns), ns + 1, segs)
+            let w0 = ws_push rest (11, env) in
+            (ws_push (ws_push (ws_push w0 (0, bd)) (6, ns)) (0, a), bc, list_append env (b, ns), ns + 1, segs)
           else (ws_push (ws_push rest (0, a)) (0, f), bc, env, ns, segs)
         else if kind == 8 then
           let ch = graph_outgoing pg nid in
@@ -79,11 +82,13 @@ let compile_graph pg start_nid =
           let ib = if ik == 2 then bitand (graph_get_binder pg body) 255 else 0 in
           let e2 = list_append env (ob, ns) in
           let e3 = if ik == 2 then list_append e2 (ib, ns + 1) else e2 in
-          (ws_push (ws_push (ws_push (ws_push (ws_push rest (8, 0)) (0, ab)) (7, ns, ns + 1)) (0, list_nth ch 2)) (0, list_nth ch 0), bc, e3, ns + 2, segs)
+          let w0 = ws_push rest (11, env) in
+          (ws_push (ws_push (ws_push (ws_push (ws_push w0 (8, 0)) (0, ab)) (7, ns, ns + 1)) (0, list_nth ch 2)) (0, list_nth ch 0), bc, e3, ns + 2, segs)
         else if kind == 16 then
           let ch = graph_outgoing pg nid in
           let b = bitand (graph_get_binder pg nid) 255 in
-          (ws_push (ws_push (ws_push rest (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
+          let w0 = ws_push rest (11, env) in
+          (ws_push (ws_push (ws_push w0 (0, list_nth ch 1)) (6, ns)) (0, list_nth ch 0), bc, list_append env (b, ns), ns + 1, segs)
         else (rest, list_concat bc (1, 0), env, ns, segs)
       else if tag == 1 then (rest, list_concat bc (item.1,), env, ns, segs)
       else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), env, ns, segs)
@@ -121,16 +126,19 @@ let compile_graph pg start_nid =
         let tl = tuple_len then_bc in
         let el = tuple_len else_bc in
         let cl = tuple_len cond_bc in
-        let jz_target = cl + 2 + tl + 2 in
-        let jmp_target = jz_target + el in
-        let assembled = list_concat cond_bc (17, jz_target) in
+        let jz_rel = 2 + tl + 2 in
+        let jmp_rel = 2 + el in
+        let assembled = list_concat cond_bc (17, jz_rel) in
         let a2 = list_concat assembled then_bc in
-        let a3 = list_concat a2 (16, jmp_target) in
+        let a3 = list_concat a2 (16, jmp_rel) in
         let a4 = list_concat a3 else_bc in
         -- bc is replaced by assembled bytecodes (else_bc was the current bc)
         (rest, a4, env, ns, rest_segs)
+      else if tag == 11 then
+        -- RESTORE_ENV: restore env to saved state (keep ns and segs)
+        (rest, bc, item.1, ns, segs)
       else (rest, bc, env, ns, segs)
-  ) 5000000 in
+  ) 20000000 in
   list_concat (final_state.1) (0,)
 
 
@@ -151,5 +159,6 @@ let main x =
   let pg = result.0 in
   let root = graph_get_root pg in
   let body_node = list_nth (graph_outgoing pg root) 1 in
-  let bytecodes = compile_graph pg body_node in
+  -- Pre-populate env: binder 0 → slot 0 (tokens), binder 1 → slot 1 (src)
+  let bytecodes = compile_graph pg body_node ((0, 0), (1, 1)) 2 in
   (tuple_len bytecodes, bytecodes)

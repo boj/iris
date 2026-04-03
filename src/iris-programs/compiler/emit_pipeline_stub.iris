@@ -1,0 +1,197 @@
+-- emit_pipeline_stub.iris — Emit the multi-stage startup stub as bytes.
+--
+-- The stub chains: read_file → tokenize → parse → ast_compile → execute
+-- Each stage calls the native VM with different bytecodes.
+--
+-- Register conventions:
+--   r15 = heap bump pointer (preserved across VM calls)
+--   rbp = stack frame base
+--   [rbp-8..rbp-128] = saved values between stages
+--   VM: rdi=bc_tagged_ptr, rsi=input → rax=result
+--
+-- Input: vm_offset, tok_offset, par_offset, ast_offset (file offsets)
+-- Output: startup stub as Bytes
+
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+let emit_stub vm_offset tok_offset par_offset ast_offset =
+  let vaddr = 4194304 in  -- 0x400000
+  let header_total = 120 in
+
+  -- Helper: emit call rel32 to VM from a given file position
+  let emit_call = \pos ->
+    let rel = vm_offset - pos - 5 in
+    bytes_from_ints (0xe8, bitand rel 255, bitand (shr rel 8) 255,
+      bitand (shr rel 16) 255, bitand (shr rel 24) 255) in
+
+  -- Helper: emit mov rdi, imm64 (load tagged bc pointer)
+  let emit_load_bc = \bc_file_offset ->
+    bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + bc_file_offset + 1)) in
+
+  -- === PART 1: Init heap + build argv[1] as IRIS string ===
+  let part1 = bytes_from_ints (
+    -- Stack frame
+    0x48, 0x89, 0xe5,                       -- mov rbp, rsp
+    0x48, 0x81, 0xec, 0x00, 0x01, 0x00, 0x00, -- sub rsp, 256
+    -- Init heap: brk(0), brk(+64MB)
+    0x48, 0x31, 0xff,                       -- xor rdi, rdi
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,         -- mov rax, 12 (SYS_brk)
+    0x0f, 0x05,                             -- syscall
+    0x49, 0x89, 0xc7,                       -- mov r15, rax
+    0x48, 0x89, 0xc7,                       -- mov rdi, rax
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x04, -- add rdi, 64MB
+    0x48, 0xc7, 0xc0, 12, 0, 0, 0,
+    0x0f, 0x05,
+    -- Save argv[1] and argv[2] pointers
+    0x48, 0x8b, 0x75, 0x10,                 -- mov rsi, [rbp+16] (argv[1] = source path)
+    0x48, 0x89, 0x75, 0xf8,                 -- mov [rbp-8], rsi
+    0x48, 0x8b, 0x75, 0x18,                 -- mov rsi, [rbp+24] (argv[2] = user input)
+    0x48, 0x89, 0x75, 0xf0,                 -- mov [rbp-16], rsi
+    -- Build IRIS string from argv[1] (C string → tagged heap string)
+    0x48, 0x8b, 0x7d, 0xf8,                 -- mov rdi, [rbp-8] (C string ptr)
+    -- strlen: count until \0
+    0x48, 0x31, 0xc9,                       -- xor rcx, rcx
+    0x80, 0x3c, 0x0f, 0x00,                 -- cmp byte [rdi+rcx], 0
+    0x74, 0x04,                             -- je .done
+    0x48, 0xff, 0xc1,                       -- inc rcx
+    0xeb, 0xf5,                             -- jmp .-11
+    -- .done: rcx = strlen. Allocate string on heap.
+    0x48, 0x89, 0x4d, 0xe8,                 -- mov [rbp-24], rcx (save len)
+    0x48, 0x8d, 0x41, 0x0f,                 -- lea rax, [rcx+15]
+    0x48, 0x83, 0xe0, 0xf8,                 -- and rax, -8 (align)
+    0x4c, 0x89, 0xfa,                       -- mov rdx, r15 (alloc base)
+    0x49, 0x01, 0xc7,                       -- add r15, rax (bump)
+    -- Write string header: (len << 8) | 1
+    0x48, 0x8b, 0x4d, 0xe8,                 -- mov rcx, [rbp-24]
+    0x48, 0xc1, 0xe1, 0x08,                 -- shl rcx, 8
+    0x48, 0x83, 0xc9, 0x01,                 -- or rcx, 1
+    0x48, 0x89, 0x0a,                       -- mov [rdx], rcx
+    -- Copy bytes: rep movsb from argv[1] to heap
+    0x48, 0x8d, 0x7a, 0x08,                 -- lea rdi, [rdx+8]
+    0x48, 0x8b, 0x75, 0xf8,                 -- mov rsi, [rbp-8] (source C string)
+    0x48, 0x8b, 0x4d, 0xe8,                 -- mov rcx, [rbp-24] (len)
+    0xf3, 0xa4,                             -- rep movsb
+    -- Tag the string pointer and save
+    0x48, 0x83, 0xca, 0x01,                 -- or rdx, 1
+    0x48, 0x89, 0x55, 0xe0                  -- mov [rbp-32], rdx (filename_string)
+  ) in
+
+  -- === PART 2: Read file via tiny VM program [FILE_READ, HALT] ===
+  let part2 = bytes_from_ints (
+    -- Build bytecodes data on heap: header + [39(FILE_READ), 0(HALT)]
+    0x4c, 0x89, 0xf8,                       -- mov rax, r15
+    0x49, 0xc7, 0x07, 0x00, 0x02, 0x00, 0x00, -- mov qword [r15], 0x200 (count=2)
+    0x49, 0xc7, 0x47, 0x08, 39, 0, 0, 0,    -- mov qword [r15+8], 39
+    0x49, 0xc7, 0x47, 0x10, 0, 0, 0, 0,     -- mov qword [r15+16], 0
+    0x49, 0x83, 0xc7, 0x18,                 -- add r15, 24
+    0x48, 0x83, 0xc8, 0x01,                 -- or rax, 1 (tag)
+    0x48, 0x89, 0xc7,                       -- mov rdi, rax (bc ptr)
+    0x48, 0x8b, 0x75, 0xe0                  -- mov rsi, [rbp-32] (filename)
+  ) in
+  -- call VM → rax = source_string
+  let pos2 = header_total + bytes_len part1 + bytes_len part2 in
+  let call2 = emit_call pos2 in
+  let save2 = bytes_from_ints (0x48, 0x89, 0x45, 0xd8) in -- mov [rbp-40], rax
+
+  -- === PART 3: Tokenize via VM(tok_bc, source_string) ===
+  let load_tok = emit_load_bc tok_offset in
+  let setup3 = bytes_from_ints (0x48, 0x8b, 0x75, 0xd8) in -- mov rsi, [rbp-40]
+  let pos3 = pos2 + 5 + bytes_len save2 + bytes_len load_tok + bytes_len setup3 in
+  let call3 = emit_call pos3 in
+  let save3 = bytes_from_ints (0x48, 0x89, 0x45, 0xd0) in -- mov [rbp-48], rax (tokens)
+
+  -- === PART 4: Build (tokens, source_string) tuple for parser ===
+  let part4 = bytes_from_ints (
+    0x4c, 0x89, 0xfa,                       -- mov rdx, r15
+    0x49, 0xc7, 0x07, 0x01, 0x02, 0x00, 0x00, -- [r15] = 0x201 (count=2, tag=1)
+    0x48, 0x8b, 0x4d, 0xd0,                 -- mov rcx, [rbp-48] (tokens)
+    0x49, 0x89, 0x4f, 0x08,                 -- [r15+8] = tokens
+    0x48, 0x8b, 0x4d, 0xd8,                 -- mov rcx, [rbp-40] (source_string)
+    0x49, 0x89, 0x4f, 0x10,                 -- [r15+16] = source_string
+    0x49, 0x83, 0xc7, 0x18,                 -- add r15, 24
+    0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
+  ) in
+  -- Parse via VM(par_bc, tuple)
+  let load_par = emit_load_bc par_offset in
+  let setup4 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx (tuple)
+  let pos4 = pos3 + 5 + bytes_len save3 + bytes_len part4 + bytes_len load_par + bytes_len setup4 in
+  let call4 = emit_call pos4 in
+  let save4 = bytes_from_ints (0x48, 0x89, 0x45, 0xc8) in -- mov [rbp-56], rax (AST)
+
+  -- === PART 5: Wrap AST in 1-element tuple (prevent module_eval unpacking) ===
+  let part5 = bytes_from_ints (
+    0x4c, 0x89, 0xfa,                       -- mov rdx, r15
+    0x49, 0xc7, 0x07, 0x01, 0x01, 0x00, 0x00, -- [r15] = 0x101 (count=1, tag=1)
+    0x48, 0x8b, 0x4d, 0xc8,                 -- mov rcx, [rbp-56] (AST)
+    0x49, 0x89, 0x4f, 0x08,                 -- [r15+8] = AST
+    0x49, 0x83, 0xc7, 0x10,                 -- add r15, 16
+    0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
+  ) in
+  -- AST compile via VM(ast_bc, wrapped_AST)
+  let load_ast = emit_load_bc ast_offset in
+  let setup5 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx
+  let pos5 = pos4 + 5 + bytes_len save4 + bytes_len part5 + bytes_len load_ast + bytes_len setup5 in
+  let call5 = emit_call pos5 in
+  let save5 = bytes_from_ints (0x48, 0x89, 0x45, 0xc0) in -- mov [rbp-64], rax (user_bc tuple)
+
+  -- === PART 6: User bytecodes tuple → already in correct format for VM ===
+  -- The AST compiler returns a flat tuple of bytecodes.
+  -- The VM reads bc[PC] from the tuple elements. Tagged tuple pointer works directly.
+  -- Parse argv[2] as integer for user input.
+  let elf_m = compile_source (file_read "src/iris-programs/compiler/elf_wrapper.iris") in
+  let atoi_code = module_eval (elf_m.0) 8 () in
+  let print_exit_code = module_eval (elf_m.0) 9 () in
+
+  let setup6 = bytes_from_ints (
+    0x48, 0x8b, 0x7d, 0xf0                  -- mov rdi, [rbp-16] (argv[2])
+  ) in
+  -- atoi_code: rdi=string → rax=integer
+  let post_atoi = bytes_from_ints (
+    0x48, 0x89, 0xc6,                       -- mov rsi, rax (user input)
+    0x48, 0x8b, 0x7d, 0xc0                  -- mov rdi, [rbp-64] (user bc tuple)
+  ) in
+  -- call VM → rax = user program result
+  let pos6 = pos5 + 5 + bytes_len save5 + bytes_len setup6 + bytes_len atoi_code + bytes_len post_atoi in
+  let call6 = emit_call pos6 in
+
+  -- Print result and exit
+  let pre_exit = bytes_from_ints (
+    0x49, 0x89, 0xc4,                       -- mov r12, rax
+    0x48, 0x83, 0xec, 0x20                  -- sub rsp, 32
+  ) in
+
+  -- === Assemble all parts ===
+  let s = part1 in
+  let s = bytes_concat s part2 in
+  let s = bytes_concat s call2 in
+  let s = bytes_concat s save2 in
+  let s = bytes_concat s load_tok in
+  let s = bytes_concat s setup3 in
+  let s = bytes_concat s call3 in
+  let s = bytes_concat s save3 in
+  let s = bytes_concat s part4 in
+  let s = bytes_concat s load_par in
+  let s = bytes_concat s setup4 in
+  let s = bytes_concat s call4 in
+  let s = bytes_concat s save4 in
+  let s = bytes_concat s part5 in
+  let s = bytes_concat s load_ast in
+  let s = bytes_concat s setup5 in
+  let s = bytes_concat s call5 in
+  let s = bytes_concat s save5 in
+  let s = bytes_concat s setup6 in
+  let s = bytes_concat s atoi_code in
+  let s = bytes_concat s post_atoi in
+  let s = bytes_concat s call6 in
+  let s = bytes_concat s pre_exit in
+  bytes_concat s print_exit_code
+
+let main x =
+  -- Test: emit a stub with dummy offsets
+  let stub = emit_stub 1000 3000 70000 290000 in
+  bytes_len stub

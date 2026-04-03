@@ -1,0 +1,107 @@
+-- multi_func_transform.iris — Transform multi-function IRIS to single-function.
+--
+-- Converts:
+--   let double x = x * 2
+--   let f n = double n + 1
+-- Into:
+--   let f n =
+--     let double = \x -> x * 2 in
+--     double n + 1
+--
+-- This allows the self_graph compiler to handle multi-function programs
+-- by inlining earlier functions as local let-lambda bindings.
+
+let transform source =
+  let slen = str_len source in
+  -- Find all positions where "let " starts at beginning of line
+  let let_positions = fold () (\acc i ->
+    if i >= slen - 4 then acc
+    else
+      let at_start = if i == 0 then 1 else if char_at source (i - 1) == 10 then 1 else 0 in
+      if at_start == 1 then
+        if char_at source i == 108 then        -- 'l'
+          if char_at source (i + 1) == 101 then  -- 'e'
+            if char_at source (i + 2) == 116 then  -- 't'
+              if char_at source (i + 3) == 32 then   -- ' '
+                list_append acc i
+              else acc
+            else acc
+          else acc
+        else acc
+      else acc
+  ) slen in
+  let nlets = list_len let_positions in
+  if nlets <= 1 then source  -- single function, no transform needed
+  else
+    -- For each function except the last, extract: name, params, body
+    -- Then wrap the last function's body with: let name = \params -> body in ...
+    let last_pos = list_nth let_positions (nlets - 1) in
+    -- Extract the last function's declaration line (up to =\n)
+    let last_header = str_slice source last_pos slen in
+    -- Find "=\n" in the last header
+    let eq_pos = fold (0 - 1) (\p i ->
+      if p >= 0 then p
+      else if i >= str_len last_header - 1 then p
+      else if char_at last_header i == 61 then
+        if char_at last_header (i + 1) == 10 then
+          -- Guard: prev char not =, !, <, >
+          let prev = if i > 0 then char_at last_header (i - 1) else 0 in
+          if prev == 61 then p else if prev == 33 then p
+          else if prev == 60 then p else if prev == 62 then p
+          else i
+        else p
+      else p
+    ) (str_len last_header) in
+    let last_decl = str_slice last_header 0 eq_pos in  -- "let f n "
+    let last_body = str_trim (str_slice last_header (eq_pos + 2) (str_len last_header)) in
+    -- Build the prefix: for each earlier function, extract and wrap
+    let prefix = fold "" (\acc i ->
+      if i >= nlets - 1 then acc
+      else
+        let pos = list_nth let_positions i in
+        let end_pos = if i + 1 < nlets then list_nth let_positions (i + 1) else slen in
+        let func_src = str_trim (str_slice source pos end_pos) in
+        -- Parse: "let name params = body"
+        -- Find the space after "let "
+        let after_let = str_slice func_src 4 (str_len func_src) in
+        -- Find "=\n" in this function
+        let feq = fold (0 - 1) (\p j ->
+          if p >= 0 then p
+          else if j >= str_len after_let - 1 then p
+          else if char_at after_let j == 61 then
+            if char_at after_let (j + 1) == 10 then
+              let prev = if j > 0 then char_at after_let (j - 1) else 0 in
+              if prev == 61 then p else if prev == 33 then p
+              else if prev == 60 then p else if prev == 62 then p
+              else j
+            else p
+          else p
+        ) (str_len after_let) in
+        let name_params = str_trim (str_slice after_let 0 feq) in  -- "double x" or "helper a b"
+        let fbody = str_trim (str_slice after_let (feq + 2) (str_len after_let)) in
+        -- Split name from params: first space
+        let sp = fold (0 - 1) (\p j ->
+          if p >= 0 then p
+          else if j >= str_len name_params then p
+          else if char_at name_params j == 32 then j else p
+        ) (str_len name_params) in
+        let name = if sp >= 0 then str_slice name_params 0 sp else name_params in
+        let params = if sp >= 0 then str_trim (str_slice name_params (sp + 1) (str_len name_params)) else "" in
+        -- Build: "let name = \p1 -> \p2 -> body in\n  "
+        let lambda_params = fold ("", 0) (\st j ->
+          if j > str_len params then st
+          else if j == str_len params then
+            let last = str_trim (str_slice params (st.1) j) in
+            if str_len last > 0 then (str_concat (st.0) (str_concat "\\" (str_concat last " -> ")), j)
+            else st
+          else if char_at params j == 32 then
+            let param = str_trim (str_slice params (st.1) j) in
+            if str_len param > 0 then (str_concat (st.0) (str_concat "\\" (str_concat param " -> ")), j + 1)
+            else (st.0, j + 1)
+          else st
+        ) (str_len params + 1) in
+        let lp = lambda_params.0 in
+        str_concat acc (str_concat "  let " (str_concat name (str_concat " = " (str_concat lp (str_concat fbody " in\n")))))
+    ) nlets in
+    -- Assemble: last_decl =\n  prefix last_body
+    str_concat last_decl (str_concat "=\n" (str_concat prefix (str_concat "  " last_body)))

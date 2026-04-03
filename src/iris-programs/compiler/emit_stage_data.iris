@@ -1,0 +1,38 @@
+-- emit_stage_data.iris — Emit bytecodes data as raw bytes to stdout.
+-- Usage: iris-stage0 run emit_stage_data.iris <stage> 0
+-- stage 0 = tokenizer bc data, 1 = parser bc data, 2 = AST compiler bc data
+
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in
+  let n_chunks = (n + 7) / 8 in
+  fold header (\acc ci ->
+    if ci >= n_chunks then acc
+    else let base = ci * 8 in
+      let chunk = fold () (\ch j ->
+        if j >= 8 then ch else if base + j >= n then ch
+        else let v = tuple_get bc (base + j) in
+          let b0 = bitand v 255 in let v1 = shr v 8 in let b1 = bitand v1 255 in
+          let v2 = shr v1 8 in let b2 = bitand v2 255 in let v3 = shr v2 8 in let b3 = bitand v3 255 in
+          let v4 = shr v3 8 in let b4 = bitand v4 255 in let v5 = shr v4 8 in let b5 = bitand v5 255 in
+          let v6 = shr v5 8 in let b6 = bitand v6 255 in let v7 = shr v6 8 in let b7 = bitand v7 255 in
+          list_concat ch (b0, b1, b2, b3, b4, b5, b6, b7)
+      ) 8 in
+      bytes_concat acc (bytes_from_ints chunk)
+  ) n_chunks
+
+let main stage x =
+  -- Load the compiled bytecodes from save_pipeline_bc
+  let sbc_m = compile_source (file_read "src/iris-programs/compiler/save_pipeline_bc.iris") in
+  let nb = list_len (sbc_m.1) in
+  let result = module_eval (sbc_m.0) (nb - 1) (stage, 0) in
+  let bc = result.1 in
+  let data = emit_bc_data bc in
+  (bytes_len data, tuple_len bc)

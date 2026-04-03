@@ -1,0 +1,116 @@
+-- ast_compile_single.iris — Single-function AST → bytecodes compiler.
+-- Everything inlined into one function for self_graph compilation.
+-- Input: Module AST (from parser)
+-- Output: flat bytecodes tuple
+
+let compile_program tree =
+  let func_decls = tuple_get tree 2 in
+  let n_funcs = tuple_len func_decls in
+  let decl = tuple_get func_decls (n_funcs - 1) in
+  let children = tuple_get decl 2 in
+  let params = tuple_get children 0 in
+  let body = tuple_get children 1 in
+  let n_params = list_len params in
+  let init_scope = fold () (\sc j ->
+    if j >= n_params then sc
+    else list_append sc ((list_nth params j).1, j)
+  ) n_params in
+  -- Iterative fold-based AST compiler
+  let init_state = (((0, body), ()), (), init_scope, n_params, ()) in
+  let final_state = fold init_state (\state step ->
+    let ws = state.0 in
+    let bc = state.1 in
+    let sc = state.2 in
+    let ns = state.3 in
+    let segs = state.4 in
+    if ws == () then state
+    else
+      let item = ws.0 in
+      let rest = ws.1 in
+      let tag = item.0 in
+      if tag == 0 then
+        let ast = item.1 in
+        let kind = ast.0 in
+        let payload = ast.1 in
+        if kind == 0 then (rest, list_concat bc (1, payload), sc, ns, segs)
+        else if kind == 3 then (rest, list_concat bc (1, payload), sc, ns, segs)
+        else if kind == 4 then
+          let slot = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len sc then s else let e = list_nth sc i in if e.0 == payload then e.1 else s) (list_len sc) in
+          if slot >= 0 then (rest, list_concat bc (14, slot), sc, ns, segs)
+          else (rest, list_concat bc (1, 0), sc, ns, segs)
+        else if kind == 5 then (rest, list_concat bc (1, 0), sc, ns, segs)
+        else if kind == 10 then
+          let left = (ast.2).0 in let right = (ast.2).1 in
+          let bop = if payload == 0 then 2 else if payload == 1 then 3 else if payload == 2 then 4 else if payload == 3 then 5 else if payload == 4 then 6 else if payload == 5 then 8 else if payload == 6 then 11 else if payload == 7 then 9 else if payload == 8 then 10 else if payload == 9 then 12 else if payload == 10 then 13 else 0 in
+          if bop >= 2 then (((0, left), ((0, right), ((1, bop), rest))), bc, sc, ns, segs)
+          else (((0, left), ((0, right), ((2, payload, 2), rest))), bc, sc, ns, segs)
+        else if kind == 12 then
+          let func = (ast.2).0 in let arg = (ast.2).1 in
+          if func.0 == 13 then
+            let ph = func.1 in let bd = list_nth (func.2) 0 in let slot = ns in
+            (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (ph, slot), slot + 1, segs)
+          else if func.0 == 12 then
+            let inner = (func.2).0 in
+            if inner.0 == 12 then
+              let head = (inner.2).0 in
+              if head.0 == 4 then if head.1 == 421 then
+                let base = (inner.2).1 in let stp = (func.2).1 in
+                let acc_s = ns in let idx_s = ns + 1 in
+                let sb = if stp.0 == 13 then let si = list_nth (stp.2) 0 in if si.0 == 13 then list_nth (si.2) 0 else si else stp in
+                let ssc = if stp.0 == 13 then let ih2 = stp.3 in if ih2 != 0 then list_append (list_append sc (stp.1, acc_s)) (ih2, idx_s) else list_append sc (stp.1, acc_s) else sc in
+                (((0, base), ((0, arg), ((7, acc_s, idx_s), ((0, sb), ((8, 0), ((11, sc), rest)))))), bc, ssc, idx_s + 1, segs)
+              else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+              else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+            else
+              let inf = (func.2).0 in let ina = (func.2).1 in
+              if inf.0 == 4 then
+                let fn2 = inf.1 in
+                let opc = if fn2 == 1072 then 177 else if fn2 == 722 then 192 else if fn2 == 969 then 210 else if fn2 == 869 then 194 else if fn2 == 1171 then 193 else if fn2 == 1765 then 158 else if fn2 == 1093 then 182 else if fn2 == 1411 then 183 else if fn2 == 654 then 184 else if fn2 == 996 then 180 else if fn2 == 968 then 178 else 0 in
+                if opc > 0 then (((0, ina), ((0, arg), ((2, opc, 2), rest))), bc, sc, ns, segs)
+                else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+              else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+          else if func.0 == 4 then
+            let fn1 = func.1 in
+            let opc = if fn1 == 759 then 176 else if fn1 == 1093 then 182 else if fn1 == 1411 then 183 else if fn1 == 968 then 214 else if fn1 == 858 then 240 else if fn1 == 1367 then 156 else if fn1 == 1797 then 157 else 0 in
+            if opc > 0 then (((0, arg), ((2, opc, 1), rest)), bc, sc, ns, segs)
+            else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+          else (((0, func), ((0, arg), rest)), bc, sc, ns, segs)
+        else if kind == 13 then
+          let bd = list_nth (ast.2) 0 in let ih = ast.3 in
+          if ih != 0 then (((0, bd), ((11, sc), rest)), bc, list_append (list_append sc (payload, ns)) (ih, ns + 1), ns + 2, segs)
+          else (((0, bd), ((11, sc), rest)), bc, list_append sc (payload, ns), ns + 1, segs)
+        else if kind == 14 then
+          let binding = (ast.2).0 in let bd = (ast.2).1 in let slot = ns in
+          (((0, binding), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (payload, slot), slot + 1, segs)
+        else if kind == 15 then
+          let cond = (ast.2).0 in let then_br = (ast.2).1 in let else_br = (ast.2).2 in
+          (((0, cond), ((3, then_br, else_br), rest)), bc, sc, ns, segs)
+        else if kind == 17 then
+          let nc = list_len (ast.2) in
+          let w = fold ((4, nc), rest) (\w i -> if i >= nc then w else ((0, list_nth (ast.2) (nc - 1 - i)), w)) nc in
+          (w, bc, sc, ns, segs)
+        else if kind == 18 then
+          (((0, list_nth (ast.2) 0), ((5, payload), rest)), bc, sc, ns, segs)
+        else (rest, list_concat bc (1, 0), sc, ns, segs)
+      else if tag == 1 then (rest, list_concat bc (item.1,), sc, ns, segs)
+      else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), sc, ns, segs)
+      else if tag == 3 then
+        (((9, 0), ((0, item.1), ((9, 0), ((0, item.2), ((10, 0), rest))))), bc, sc, ns, segs)
+      else if tag == 4 then (rest, list_concat bc (18, item.1), sc, ns, segs)
+      else if tag == 5 then (rest, list_concat bc (19, item.1), sc, ns, segs)
+      else if tag == 6 then (rest, list_concat bc (15, item.1), sc, ns, segs)
+      else if tag == 7 then (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), sc, ns, segs)
+      else if tag == 8 then (rest, list_concat bc (26,), sc, ns, segs)
+      else if tag == 9 then (rest, (), sc, ns, (bc, segs))
+      else if tag == 10 then
+        let then_bc = segs.0 in let s1 = segs.1 in let cond_bc = s1.0 in let rest_segs = s1.1 in
+        let el = tuple_len bc in let tl = tuple_len then_bc in let cl = tuple_len cond_bc in
+        let jz_rel = 2 + tl + 2 in let jmp_rel = 2 + el in
+        (rest, list_concat (list_concat (list_concat (list_concat cond_bc (17, jz_rel)) then_bc) (16, jmp_rel)) bc, sc, ns, rest_segs)
+      else if tag == 11 then (rest, bc, item.1, ns, segs)
+      else (rest, bc, sc, ns, segs)
+  ) 500000 in
+  list_concat (final_state.1) (0,)
+
+
+

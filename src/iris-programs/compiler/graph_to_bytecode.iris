@@ -851,11 +851,11 @@ let rec compile_node pg nid env ns ia va ib vb =
       let clen = list_len (rc.0) in
       let tlen = list_len (rt.0) in
       let elen = list_len (re.0) in
-      let jz_target = clen + 2 + tlen + 2 in
-      let jmp_target = jz_target + elen in
-      let code = list_concat (rc.0) (17, jz_target) in
+      let jz_rel = 2 + tlen + 2 in
+      let jmp_rel = 2 + elen in
+      let code = list_concat (rc.0) (17, jz_rel) in
       let code2 = list_concat code (rt.0) in
-      let code3 = list_concat code2 (16, jmp_target) in
+      let code3 = list_concat code2 (16, jmp_rel) in
       (list_concat code3 (re.0), re.1, re.2)
 
   -- =======================================================================

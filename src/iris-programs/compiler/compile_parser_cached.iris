@@ -1,0 +1,177 @@
+-- compile_parser_cached.iris — Compile parser to bytecodes with node cache.
+-- Handles DAG (shared nodes) by caching compiled results.
+-- State: (ws, bc, env, ns, segs, cache)
+-- cache: list of (nid, slot) pairs for already-compiled nodes
+
+let ws_push stack item = (item, stack)
+
+let cache_lookup nid cache =
+  fold (0 - 1) (\s i ->
+    if s >= 0 then s else if i >= list_len cache then s
+    else let e = list_nth cache i in if e.0 == nid then e.1 else s
+  ) (list_len cache)
+
+let compile_graph pg start_nid init_env init_ns =
+  let init_state = (((0, start_nid), ()), (), init_env, init_ns, (), ()) in
+  let final_state = fold init_state (\state step ->
+    let ws = state.0 in
+    let bc = state.1 in
+    let env = state.2 in
+    let ns = state.3 in
+    let segs = state.4 in
+    let cache = state.5 in
+    if ws == () then state
+    else
+      let item = ws.0 in
+      let rest = ws.1 in
+      let tag = item.0 in
+      if tag == 0 then
+        let nid = item.1 in
+        -- Check cache first
+        let cached = cache_lookup nid cache in
+        if cached >= 0 then
+          -- Already compiled: just load the cached result
+          (rest, list_concat bc (14, cached), env, ns, segs, cache)
+        else
+          let kind = graph_get_kind pg nid in
+          -- For non-Lit nodes, allocate a cache slot and push CACHE_STORE
+          if kind == 5 then
+            -- Lit nodes: compile directly, no caching needed
+            let tt = graph_get_lit_type_tag pg nid in
+            let lv = graph_get_lit_value pg nid in
+            if tt == 255 then
+              let s = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len env then s else let e = list_nth env i in if e.0 == lv then e.1 else s) (list_len env) in
+              (rest, list_concat bc (14, if s >= 0 then s else lv), env, ns, segs, cache)
+            else (rest, list_concat bc (1, lv), env, ns, segs, cache)
+          else
+            -- Non-Lit: allocate cache slot, push CACHE_STORE below work items
+            let cs = ns in
+            let ns2 = ns + 1 in
+            let rest2 = ws_push rest (12, nid, cs) in  -- CACHE_STORE after compilation
+            if kind == 0 then
+              let op = graph_get_prim_op pg nid in
+              let ch = graph_outgoing pg nid in
+              let nc = list_len ch in
+              let bop = if op == 0 then 2 else if op == 1 then 3 else if op == 2 then 4 else if op == 3 then 5 else if op == 4 then 6 else if op == 32 then 8 else if op == 33 then 11 else if op == 34 then 9 else if op == 35 then 10 else if op == 36 then 12 else if op == 37 then 13 else 0 in
+              if nc == 2 then
+                if bop >= 2 then
+                  (ws_push (ws_push (ws_push rest2 (1, bop)) (0, list_nth ch 1)) (0, list_nth ch 0), bc, env, ns2, segs, cache)
+                else (ws_push (ws_push (ws_push rest2 (2, op, nc)) (0, list_nth ch 1)) (0, list_nth ch 0), bc, env, ns2, segs, cache)
+              else if nc == 1 then (ws_push (ws_push rest2 (2, op, 1)) (0, list_nth ch 0), bc, env, ns2, segs, cache)
+              else (rest2, bc, env, ns2, segs, cache)
+            else if kind == 17 then
+              let ch = graph_outgoing pg nid in
+              (ws_push (ws_push rest2 (3, list_nth ch 1, list_nth ch 2)) (0, list_nth ch 0), bc, env, ns2, segs, cache)
+            else if kind == 11 then
+              let ch = graph_outgoing pg nid in
+              let nc = list_len ch in
+              let w = fold (ws_push rest2 (4, nc)) (\w i -> if i >= nc then w else ws_push w (0, list_nth ch (nc - 1 - i))) nc in
+              (w, bc, env, ns2, segs, cache)
+            else if kind == 13 then
+              let ch = graph_outgoing pg nid in
+              let fi = graph_get_field_index pg nid in
+              (ws_push (ws_push rest2 (5, fi)) (0, list_nth ch 0), bc, env, ns2, segs, cache)
+            else if kind == 2 then
+              let ch = graph_outgoing pg nid in
+              let b = bitand (graph_get_binder pg nid) 255 in
+              let w0 = ws_push rest2 (11, env) in
+              (ws_push w0 (0, list_nth ch 0), bc, list_append env (b, ns2), ns2 + 1, segs, cache)
+            else if kind == 3 then
+              let ch = graph_outgoing pg nid in
+              let b = bitand (graph_get_binder pg nid) 255 in
+              let w0 = ws_push rest2 (11, env) in
+              (ws_push (ws_push (ws_push w0 (0, list_nth ch 1)) (6, ns2)) (0, list_nth ch 0), bc, list_append env (b, ns2), ns2 + 1, segs, cache)
+            else if kind == 1 then
+              let ch = graph_outgoing pg nid in
+              let f = list_nth ch 0 in
+              let a = list_nth ch 1 in
+              if graph_get_kind pg f == 2 then
+                let b = bitand (graph_get_binder pg f) 255 in
+                let bd = list_nth (graph_outgoing pg f) 0 in
+                let w0 = ws_push rest2 (11, env) in
+                (ws_push (ws_push (ws_push w0 (0, bd)) (6, ns2)) (0, a), bc, list_append env (b, ns2), ns2 + 1, segs, cache)
+              else (ws_push (ws_push rest2 (0, a)) (0, f), bc, env, ns2, segs, cache)
+            else if kind == 8 then
+              let ch = graph_outgoing pg nid in
+              let step = list_nth ch 1 in
+              let sc = graph_outgoing pg step in
+              let ob = bitand (graph_get_binder pg step) 255 in
+              let body = list_nth sc 0 in
+              let ik = graph_get_kind pg body in
+              let ab = if ik == 2 then list_nth (graph_outgoing pg body) 0 else body in
+              let ib = if ik == 2 then bitand (graph_get_binder pg body) 255 else 0 in
+              let e2 = list_append env (ob, ns2) in
+              let e3 = if ik == 2 then list_append e2 (ib, ns2 + 1) else e2 in
+              let w0 = ws_push rest2 (11, env) in
+              (ws_push (ws_push (ws_push (ws_push (ws_push w0 (8, 0)) (0, ab)) (7, ns2, ns2 + 1)) (0, list_nth ch 2)) (0, list_nth ch 0), bc, e3, ns2 + 2, segs, cache)
+            else if kind == 16 then
+              let ch = graph_outgoing pg nid in
+              let b = bitand (graph_get_binder pg nid) 255 in
+              let w0 = ws_push rest2 (11, env) in
+              (ws_push (ws_push (ws_push w0 (0, list_nth ch 1)) (6, ns2)) (0, list_nth ch 0), bc, list_append env (b, ns2), ns2 + 1, segs, cache)
+            else (rest2, list_concat bc (1, 0), env, ns2, segs, cache)
+      else if tag == 1 then (rest, list_concat bc (item.1,), env, ns, segs, cache)
+      else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), env, ns, segs, cache)
+      else if tag == 3 then
+        let then_id = item.1 in
+        let else_id = item.2 in
+        let w1 = ws_push rest (10, 0) in
+        let w2 = ws_push w1 (0, else_id) in
+        let w3 = ws_push w2 (9, 0) in
+        let w4 = ws_push w3 (0, then_id) in
+        let w5 = ws_push w4 (9, 0) in
+        (w5, bc, env, ns, segs, cache)
+      else if tag == 4 then (rest, list_concat bc (18, item.1), env, ns, segs, cache)
+      else if tag == 5 then (rest, list_concat bc (19, item.1), env, ns, segs, cache)
+      else if tag == 6 then (rest, list_concat bc (15, item.1), env, ns, segs, cache)
+      else if tag == 7 then
+        (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), env, ns, segs, cache)
+      else if tag == 8 then (rest, list_concat bc (26,), env, ns, segs, cache)
+      else if tag == 9 then
+        (rest, (), env, ns, (bc, segs), cache)
+      else if tag == 10 then
+        let then_bc = segs.0 in
+        let s1 = segs.1 in
+        let cond_bc = s1.0 in
+        let rest_segs = s1.1 in
+        let else_bc = bc in
+        let tl = tuple_len then_bc in
+        let el = tuple_len else_bc in
+        let cl = tuple_len cond_bc in
+        let jz_rel = 2 + tl + 2 in
+        let jmp_rel = 2 + el in
+        let assembled = list_concat cond_bc (17, jz_rel) in
+        let a2 = list_concat assembled then_bc in
+        let a3 = list_concat a2 (16, jmp_rel) in
+        let a4 = list_concat a3 else_bc in
+        (rest, a4, env, ns, rest_segs, cache)
+      else if tag == 11 then
+        -- RESTORE_ENV
+        (rest, bc, item.1, ns, segs, cache)
+      else if tag == 12 then
+        -- CACHE_STORE: emit STORE(slot) + LOAD(slot) to cache AND keep on stack
+        let nid = item.1 in
+        let slot = item.2 in
+        (rest, list_concat bc (15, slot, 14, slot), env, ns, segs, list_append cache (nid, slot))
+      else (rest, bc, env, ns, segs, cache)
+  ) 5000000 in
+  list_concat (final_state.1) (0,)
+
+let main x =
+  let source = file_read "src/iris-programs/syntax/iris_parser.iris" in
+  let slen = str_len source in
+  let pos = fold (0 - 1) (\p i ->
+    if p >= 0 then p else if i >= slen - 2 then p
+    else let c1 = char_at source i in let c2 = char_at source (i + 1) in if c1 == 61 then if c2 == 10 then i else p else p
+  ) slen in
+  let injected = str_concat (str_slice source 0 pos) (str_concat "=\n  (self_graph,\n" (str_concat (str_trim (str_slice source (pos + 2) slen)) ")")) in
+  let m = compile_source injected in
+  let nb = list_len (m.1) in
+  let tok_m = compile_source (file_read "src/iris-programs/syntax/tokenizer.iris") in
+  let test_src = "let x = 1" in
+  let result = module_eval (m.0) (nb - 1) (module_eval (tok_m.0) 0 test_src, test_src) in
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  let body_node = list_nth (graph_outgoing pg root) 1 in
+  let bytecodes = compile_graph pg body_node ((0, 0), (1, 1)) 2 in
+  (tuple_len bytecodes, bytecodes)

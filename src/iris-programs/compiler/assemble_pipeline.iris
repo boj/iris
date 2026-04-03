@@ -1,0 +1,50 @@
+-- assemble_pipeline.iris — Assemble the self-hosting binary from pre-compiled bytecodes.
+-- Usage: pipe bytecodes from save_pipeline_bc.iris, then assemble.
+-- For now: compile all 3 stages inline using save_pipeline_bc.iris as a module.
+
+let le64 v =
+  let b0 = bitand v 255 in let n1 = shr v 8 in let b1 = bitand n1 255 in
+  let n2 = shr n1 8 in let b2 = bitand n2 255 in let n3 = shr n2 8 in let b3 = bitand n3 255 in
+  let n4 = shr n3 8 in let b4 = bitand n4 255 in let n5 = shr n4 8 in let b5 = bitand n5 255 in
+  let n6 = shr n5 8 in let b6 = bitand n6 255 in let n7 = shr n6 8 in let b7 = bitand n7 255 in
+  bytes_from_ints (b0, b1, b2, b3, b4, b5, b6, b7)
+
+let emit_bc_data bc =
+  let n = tuple_len bc in
+  let header = le64 (n * 256) in
+  let n_chunks = (n + 7) / 8 in
+  fold header (\acc ci ->
+    if ci >= n_chunks then acc
+    else let base = ci * 8 in
+      let chunk = fold () (\ch j ->
+        if j >= 8 then ch else if base + j >= n then ch
+        else let v = tuple_get bc (base + j) in
+          let b0 = bitand v 255 in let v1 = shr v 8 in let b1 = bitand v1 255 in
+          let v2 = shr v1 8 in let b2 = bitand v2 255 in let v3 = shr v2 8 in let b3 = bitand v3 255 in
+          let v4 = shr v3 8 in let b4 = bitand v4 255 in let v5 = shr v4 8 in let b5 = bitand v5 255 in
+          let v6 = shr v5 8 in let b6 = bitand v6 255 in let v7 = shr v6 8 in let b7 = bitand v7 255 in
+          list_concat ch (b0, b1, b2, b3, b4, b5, b6, b7)
+      ) 8 in
+      bytes_concat acc (bytes_from_ints chunk)
+  ) n_chunks
+
+let main x =
+  -- Compile each stage via save_pipeline_bc module
+  let sbc_m = compile_source (file_read "src/iris-programs/compiler/save_pipeline_bc.iris") in
+  let nb = list_len (sbc_m.1) in
+  -- Binding 4 = main(stage, x). stage 0=tok, 1=par, 2=ast
+  -- But module_eval unpacks tuples... use list_append wrapping
+  let tok_result = module_eval (sbc_m.0) (nb - 1) (0, 0) in
+  let tok_bc = tok_result.1 in
+  let tok_n = tok_result.0 in
+  let par_result = module_eval (sbc_m.0) (nb - 1) (1, 0) in
+  let par_bc = par_result.1 in
+  let par_n = par_result.0 in
+  let ast_result = module_eval (sbc_m.0) (nb - 1) (2, 0) in
+  let ast_bc = ast_result.1 in
+  let ast_n = ast_result.0 in
+  -- Emit BC data
+  let tok_data = emit_bc_data tok_bc in
+  let par_data = emit_bc_data par_bc in
+  let ast_data = emit_bc_data ast_bc in
+  (tok_n, par_n, ast_n, bytes_len tok_data, bytes_len par_data, bytes_len ast_data)

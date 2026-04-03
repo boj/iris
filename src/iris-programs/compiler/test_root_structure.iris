@@ -1,0 +1,30 @@
+-- Check what graph_get_root returns for multi-param self_graph injection
+-- Test with a simple 2-param function
+
+let main x =
+  let source = "let f a b =\n  (self_graph,\n  a + b)" in
+  let m = compile_source source in
+  let nb = list_len (m.1) in
+  let result = module_eval (m.0) (nb - 1) (3, 7) in
+  let pg = result.0 in
+  let root = graph_get_root pg in
+  let rk = graph_get_kind pg root in
+  let rch = graph_outgoing pg root in
+  let rnc = list_len rch in
+  -- If root is Lambda, check binder and child
+  let rb = if rk == 2 then bitand (graph_get_binder pg root) 255 else 0 - 1 in
+  -- Check children
+  let c0k = if rnc > 0 then graph_get_kind pg (list_nth rch 0) else 0 - 1 in
+  let c1k = if rnc > 1 then graph_get_kind pg (list_nth rch 1) else 0 - 1 in
+  -- If root is Lambda(2), check its child
+  let inner = if rk == 2 then list_nth rch 0 else root in
+  let ik = graph_get_kind pg inner in
+  let ich = graph_outgoing pg inner in
+  let inc = list_len ich in
+  let ib = if ik == 2 then bitand (graph_get_binder pg inner) 255 else 0 - 1 in
+  -- One more level
+  let inner2 = if ik == 2 then list_nth ich 0 else inner in
+  let i2k = graph_get_kind pg inner2 in
+  let i2ch = graph_outgoing pg inner2 in
+  let i2nc = list_len i2ch in
+  (rk, rnc, rb, c0k, c1k, ik, inc, ib, i2k, i2nc, result.1)

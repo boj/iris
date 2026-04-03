@@ -42,10 +42,10 @@ let rec compile_expr ast scope ns =
     let re = compile_expr else_br (rt.1) (rt.2) in
     let cl = list_len (rc.0) in
     let tl = list_len (rt.0) in
-    let jz_target = cl + 2 + tl + 2 in
-    let jmp_target = jz_target + list_len (re.0) in
-    let code = list_concat (rc.0) (17, jz_target) in
-    let code2 = list_concat (list_concat code (rt.0)) (16, jmp_target) in
+    let jz_rel = 2 + tl + 2 in
+    let jmp_rel = 2 + list_len (re.0) in
+    let code = list_concat (rc.0) (17, jz_rel) in
+    let code2 = list_concat (list_concat code (rt.0)) (16, jmp_rel) in
     (list_concat code2 (re.0), re.1, re.2)
 
   else if kind == 17 then                                              -- Tuple

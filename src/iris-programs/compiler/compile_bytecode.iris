@@ -121,12 +121,12 @@ let compile_node program node_id env next_slot =
     let cond_code = rc.0 in
     let cond_len = list_len cond_code in
     -- JZ jumps over then_code + JMP(2)
-    let jz_target = cond_len + 2 + then_len + 2 in
+    let jz_rel = 2 + then_len + 2 in
     -- JMP jumps over else_code
-    let jmp_target = cond_len + 2 + then_len + 2 + else_len in
-    let full = list_concat cond_code (17, jz_target) in
+    let jmp_rel = cond_len + 2 + then_len + 2 + else_len in
+    let full = list_concat cond_code (17, jz_rel) in
     let full2 = list_concat full then_code in
-    let full3 = list_concat full2 (16, jmp_target) in
+    let full3 = list_concat full2 (16, jmp_rel) in
     let full4 = list_concat full3 else_code in
     (full4, re.1, re.2)
 
