@@ -2,13 +2,16 @@
 """
 IRIS bytecode interpreter for debugging native VM crashes.
 
-Executes tokenizer bytecodes with tracing to find where a non-tuple value
+Executes pipeline stage bytecodes with tracing to find where a non-tuple value
 appears where TUPLE_GET/TUPLE_GET_DYN expects a tuple pointer.
 
 Usage:
-    bootstrap/iris-stage0 run src/iris-programs/compiler/save_pipeline_bc.iris 0 0 | python3 debug_bc.py
-    # or
-    python3 debug_bc.py  (reads bytecodes from stdin, hardcoded input)
+    python3 debug_bc.py                    # stage 0 (tokenizer)
+    python3 debug_bc.py --stage 0          # stage 0 (tokenizer)
+    python3 debug_bc.py --stage 1          # stage 1 (parser) — runs tok first
+    python3 debug_bc.py --stage 2          # stage 2 (AST compiler) — runs tok+par first
+    python3 debug_bc.py --stage 1 --trace  # with full opcode tracing
+    python3 debug_bc.py <file>             # read bytecodes from file (stage 0 mode)
 """
 
 import sys
@@ -66,12 +69,15 @@ def parse_bytecodes(text):
     if rest.startswith("(") and rest.endswith(")"):
         rest = rest[1:-1]
 
-    # Parse comma-separated integers
+    # Parse comma-separated values (integers or () for unit)
     bc = []
     for token in rest.split(","):
         token = token.strip()
         if token:
-            bc.append(int(token))
+            if token == "()":
+                bc.append(())  # unit value
+            else:
+                bc.append(int(token))
 
     print(f"Parsed {len(bc)} bytecodes (header says {count})", file=sys.stderr)
     return bc
@@ -150,12 +156,16 @@ def val_repr(v, max_depth=3, max_items=8):
 # ---------------------------------------------------------------------------
 # VM
 # ---------------------------------------------------------------------------
-def run_vm(bc, input_val, max_steps=1_000_000, trace_all=False, trace_file=None):
+def run_vm(bc, input_val, max_steps=1_000_000, trace_all=False, trace_file=None,
+           extra_inputs=None):
     """
     Execute IRIS bytecodes.
 
     bc: list of int bytecodes
-    input_val: the input value (pushed onto stack and stored in locals[0])
+    input_val: the primary input value (pushed onto stack AND stored in locals[0])
+    extra_inputs: dict of {slot: value} for additional inputs (e.g. {1: source_str})
+                  These are stored in locals only, NOT pushed onto the stack.
+                  This matches native VM behavior: rsi→stack+locals[0], rdx→locals[1] only.
     max_steps: abort after this many steps
     trace_all: if True, print every opcode execution
     trace_file: file object for trace output (default stderr)
@@ -167,10 +177,14 @@ def run_vm(bc, input_val, max_steps=1_000_000, trace_all=False, trace_file=None)
     locals_ = {}     # slot -> value
     fold_stack = []  # stack of FoldState
 
-    # Store input as locals[0]
+    # Store primary input as locals[0] and push onto stack
     locals_[0] = input_val
-    # Push input onto stack
     stack.append(input_val)
+
+    # Store extra inputs in locals only (not pushed onto stack)
+    if extra_inputs:
+        for slot, val in extra_inputs.items():
+            locals_[slot] = val
 
     pc = 0
     step = 0
@@ -592,53 +606,148 @@ def run_vm(bc, input_val, max_steps=1_000_000, trace_all=False, trace_file=None)
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def compile_stage_bc(base_dir, stage_num, timeout_sec=300):
+    """Compile bytecodes for a pipeline stage using iris-stage0."""
     import subprocess
+    cmd = [
+        os.path.join(base_dir, "bootstrap/iris-stage0"), "run",
+        os.path.join(base_dir, "src/iris-programs/compiler/save_pipeline_bc.iris"),
+        str(stage_num), "0"
+    ]
+    print(f"Running: {' '.join(cmd)}", file=sys.stderr)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout_sec, cwd=base_dir
+    )
+    if result.stderr:
+        print(f"  stderr: {result.stderr[:500]}", file=sys.stderr)
+    print(f"  stdout length: {len(result.stdout)}", file=sys.stderr)
+    print(f"  return code: {result.returncode}", file=sys.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(f"Stage {stage_num} compilation failed (rc={result.returncode})")
+    return parse_bytecodes(result.stdout)
 
-    # Check if a bytecode file was provided as argument
-    bc_file = None
-    for arg in sys.argv[1:]:
-        if arg != "--trace" and not arg.startswith("-"):
-            bc_file = arg
-            break
 
-    if bc_file:
-        print(f"Reading bytecodes from file: {bc_file}", file=sys.stderr)
-        with open(bc_file, "r") as f:
-            raw = f.read()
-    else:
-        print("Running: bootstrap/iris-stage0 run src/iris-programs/compiler/save_pipeline_bc.iris 0 0", file=sys.stderr)
-        base_dir = os.path.dirname(os.path.abspath(__file__)) or "."
-        result = subprocess.run(
-            [os.path.join(base_dir, "bootstrap/iris-stage0"), "run",
-             os.path.join(base_dir, "src/iris-programs/compiler/save_pipeline_bc.iris"), "0", "0"],
-            capture_output=True, text=True, timeout=120,
-            cwd=base_dir
-        )
-        raw = result.stdout
-        if result.stderr:
-            print(f"Stage0 stderr: {result.stderr[:500]}", file=sys.stderr)
-        print(f"Stage0 stdout length: {len(raw)}", file=sys.stderr)
-        print(f"Stage0 return code: {result.returncode}", file=sys.stderr)
+def run_stage(label, bc, input_val, extra_inputs=None, max_steps=2_000_000,
+              trace_all=False, trace_file=None):
+    """Run a pipeline stage and report results."""
+    if trace_file is None:
+        trace_file = sys.stderr
 
-    bc = parse_bytecodes(raw)
+    print(f"\n{'='*60}", file=trace_file)
+    print(f"Running {label} ({len(bc)} bytecodes)", file=trace_file)
+    print(f"  Primary input: {val_repr(input_val, max_depth=2, max_items=8)}", file=trace_file)
+    if extra_inputs:
+        for slot, val in extra_inputs.items():
+            print(f"  Extra input [slot {slot}]: {val_repr(val, max_depth=1, max_items=5)}", file=trace_file)
+    print(f"  First 40 bytecodes: {bc[:40]}", file=trace_file)
+    print(f"{'='*60}", file=trace_file)
 
-    # Input for the tokenizer
-    input_str = "let f n = n + 1\n"
-
-    print(f"Running tokenizer bytecodes ({len(bc)} ops) with input: {input_str!r}", file=sys.stderr)
-    print(f"First 40 bytecodes: {bc[:40]}", file=sys.stderr)
-
-    # Check if there's a trace-all flag
-    trace_all = "--trace" in sys.argv
-
-    result = run_vm(bc, input_str, max_steps=2_000_000, trace_all=trace_all)
+    result = run_vm(bc, input_val, max_steps=max_steps, trace_all=trace_all,
+                    trace_file=trace_file, extra_inputs=extra_inputs)
 
     if result is not None:
-        print(f"\n=== Execution completed successfully ===", file=sys.stderr)
-        print(f"Result: {val_repr(result, max_depth=3, max_items=20)}", file=sys.stderr)
+        print(f"\n=== {label}: completed successfully ===", file=trace_file)
+        print(f"Result: {val_repr(result, max_depth=3, max_items=20)}", file=trace_file)
     else:
-        print(f"\n=== Execution DID NOT complete ===", file=sys.stderr)
+        print(f"\n=== {label}: FAILED ===", file=trace_file)
+
+    return result
+
+
+def main():
+    import subprocess
+    import argparse
+
+    parser = argparse.ArgumentParser(description="IRIS bytecode interpreter for debugging")
+    parser.add_argument("--stage", type=int, default=None,
+                        help="Pipeline stage: 0=tokenizer, 1=parser, 2=AST compiler")
+    parser.add_argument("--trace", action="store_true",
+                        help="Print every opcode execution")
+    parser.add_argument("--max-steps", type=int, default=2_000_000,
+                        help="Max steps before aborting (default 2M)")
+    parser.add_argument("--input", type=str, default=None,
+                        help="Source code to process (default: 'let f n = n + 1\\n')")
+    parser.add_argument("bc_file", nargs="?", default=None,
+                        help="Bytecode file to read (stage 0 mode only)")
+    args = parser.parse_args()
+
+    base_dir = os.path.dirname(os.path.abspath(__file__)) or "."
+    input_str = args.input if args.input is not None else "let f n = n + 1\n"
+
+    # Default: if no --stage and no bc_file, stage 0
+    if args.stage is None and args.bc_file is None:
+        args.stage = 0
+    elif args.stage is None:
+        args.stage = 0  # bc_file implies stage 0
+
+    # -----------------------------------------------------------------------
+    # Stage 0: Tokenizer
+    # -----------------------------------------------------------------------
+    if args.bc_file:
+        print(f"Reading bytecodes from file: {args.bc_file}", file=sys.stderr)
+        with open(args.bc_file, "r") as f:
+            raw = f.read()
+        tok_bc = parse_bytecodes(raw)
+    elif args.stage >= 0:
+        tok_bc = compile_stage_bc(base_dir, 0, timeout_sec=120)
+    else:
+        tok_bc = None
+
+    if args.stage == 0:
+        result = run_stage("Stage 0 (tokenizer)", tok_bc, input_str,
+                           max_steps=args.max_steps, trace_all=args.trace)
+        if result is None:
+            sys.exit(1)
+        sys.exit(0)
+
+    # Run tokenizer to get tokens for parser input
+    print(f"\n--- Running tokenizer to produce parser input ---", file=sys.stderr)
+    tokens = run_stage("Stage 0 (tokenizer → parser input)", tok_bc, input_str,
+                       max_steps=args.max_steps, trace_all=False)
+    if tokens is None:
+        print("FATAL: Tokenizer failed, cannot proceed to parser", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\nTokenizer produced {tuple_len(tokens)} tokens:", file=sys.stderr)
+    if is_tuple(tokens):
+        for i, tok in enumerate(tokens):
+            print(f"  token[{i}]: {val_repr(tok, max_depth=2, max_items=10)}", file=sys.stderr)
+
+    # -----------------------------------------------------------------------
+    # Stage 1: Parser
+    # -----------------------------------------------------------------------
+    if args.stage >= 1:
+        par_bc = compile_stage_bc(base_dir, 1, timeout_sec=600)
+
+        # Parser takes 2 args: tokens (slot 0, pushed on stack) and source (slot 1)
+        # Native VM: rsi→stack+locals[0], rdx→locals[1]
+        result = run_stage("Stage 1 (parser)", par_bc, tokens,
+                           extra_inputs={1: input_str},
+                           max_steps=args.max_steps, trace_all=args.trace)
+        if result is None:
+            print("FATAL: Parser failed", file=sys.stderr)
+            sys.exit(1)
+
+        if args.stage == 1:
+            sys.exit(0)
+
+        tree = result
+
+    # -----------------------------------------------------------------------
+    # Stage 2: AST compiler
+    # -----------------------------------------------------------------------
+    if args.stage >= 2:
+        ast_bc = compile_stage_bc(base_dir, 2, timeout_sec=120)
+
+        # AST compiler input: (list_append () tree) = 1-element tuple wrapping the tree
+        ast_input = (tree,)
+        result = run_stage("Stage 2 (AST compiler)", ast_bc, ast_input,
+                           max_steps=args.max_steps, trace_all=args.trace)
+        if result is None:
+            print("FATAL: AST compiler failed", file=sys.stderr)
+            sys.exit(1)
+
+        sys.exit(0)
 
 
 if __name__ == "__main__":
