@@ -148,9 +148,12 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   ) in
   -- atoi_code: rdi=string → rax=integer
   -- Also build IRIS string from argv[2] and pass as rdx (locals[1])
+  -- Build IRIS string from argv[2], then decide: pass as rsi (string) or rsi (integer)
+  -- Heuristic: if first char of argv[2] is a digit or '-', atoi result goes in rsi (integer).
+  -- Otherwise, the IRIS string goes in rsi (for programs that take string input).
   let post_atoi = bytes_from_ints (
-    0x48, 0x89, 0x85, 0x30, 0xff, 0xff, 0xff, -- mov [rbp-208], rax (save integer for later)
-    -- Build IRIS string from argv[2] for string input (locals[1])
+    0x48, 0x89, 0x85, 0x30, 0xff, 0xff, 0xff, -- mov [rbp-208], rax (save atoi result)
+    -- Build IRIS string from argv[2]
     0x48, 0x8b, 0x7d, 0xf0,                 -- mov rdi, [rbp-16] (argv[2] C string)
     0x48, 0x31, 0xc9,                       -- xor rcx, rcx (strlen counter)
     0x80, 0x3c, 0x0f, 0x00,                 -- cmp byte [rdi+rcx], 0
@@ -170,8 +173,21 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x8b, 0x75, 0xf0,                 -- mov rsi, [rbp-16]
     0xf3, 0xa4,                             -- rep movsb
     0x48, 0x83, 0xca, 0x01,                 -- or rdx, 1 (tag string ptr)
-    -- rdx = IRIS string of argv[2]; restore integer into rsi
-    0x48, 0x8b, 0xb5, 0x30, 0xff, 0xff, 0xff, -- mov rsi, [rbp-208] (restore integer)
+    -- Heuristic: check first byte of argv[2]. If digit/'-', use integer; else use string.
+    0x48, 0x8b, 0x7d, 0xf0,                 -- mov rdi, [rbp-16] (argv[2] again)
+    0x0f, 0xb6, 0x07,                       -- movzx eax, byte [rdi]
+    0x2c, 0x30,                             -- sub al, '0'
+    0x3c, 0x0a,                             -- cmp al, 10
+    0x72, 0x0c,                             -- jb .is_numeric (skip 12 bytes)
+    0x0f, 0xb6, 0x07,                       -- movzx eax, byte [rdi]
+    0x3c, 0x2d,                             -- cmp al, '-'
+    0x74, 0x05,                             -- je .is_numeric (skip 5 bytes)
+    -- Non-numeric: pass IRIS string as rsi (primary input)
+    0x48, 0x89, 0xd6,                       -- mov rsi, rdx (string → rsi)
+    0xeb, 0x07,                             -- jmp .done (skip 7 bytes)
+    -- .is_numeric: pass integer as rsi
+    0x48, 0x8b, 0xb5, 0x30, 0xff, 0xff, 0xff, -- mov rsi, [rbp-208] (integer → rsi)
+    -- .done: rdx = IRIS string (always available as locals[1])
     0x48, 0x8b, 0x7d, 0xc0                  -- mov rdi, [rbp-64] (user bc tuple)
   ) in
   -- call VM → rax = user program result
