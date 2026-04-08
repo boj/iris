@@ -34,7 +34,8 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x31, 0xff,                       -- xor rdi, rdi
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,         -- mov rax, 12 (SYS_brk)
     0x0f, 0x05,                             -- syscall
-    0x49, 0x89, 0xc7,                       -- mov r15, rax
+    0x49, 0x89, 0xc7,                       -- mov r15, rax (heap start)
+    0x48, 0x89, 0x85, 0x38, 0xff, 0xff, 0xff, -- mov [rbp-200], rax (save brk_start for value printer)
     0x48, 0x89, 0xc7,                       -- mov rdi, rax
     0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40, -- add rdi, 8GB
     0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
@@ -139,7 +140,8 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   -- Parse argv[2] as integer for user input.
   let elf_m = compile_source (file_read "src/iris-programs/compiler/elf_wrapper.iris") in
   let atoi_code = module_eval (elf_m.0) 8 () in
-  let print_exit_code = module_eval (elf_m.0) 9 () in
+  let print_value_code = module_eval (elf_m.0) 10 () in
+  let print_int_code = module_eval (elf_m.0) 9 () in
 
   let setup6 = bytes_from_ints (
     0x48, 0x8b, 0x7d, 0xf0                  -- mov rdi, [rbp-16] (argv[2])
@@ -184,7 +186,9 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let s = bytes_concat s post_atoi in
   let s = bytes_concat s call6 in
   let s = bytes_concat s pre_exit in
-  bytes_concat s print_exit_code
+  -- Print result: value printer checks tag → string or falls through to integer
+  let s = bytes_concat s print_value_code in
+  bytes_concat s print_int_code
 
 let main x =
   -- Test: emit a stub with dummy offsets
