@@ -90,14 +90,18 @@ let compile_program tree =
               let inf = (func.2).0 in let ina = (func.2).1 in
               if inf.0 == 4 then
                 let fn2 = inf.1 in
-                let opc = if fn2 == 1072 then 177 else if fn2 == 722 then 192 else if fn2 == 969 then 210 else if fn2 == 869 then 194 else if fn2 == 1171 then 193 else if fn2 == 1765 then 158 else if fn2 == 1093 then 182 else if fn2 == 1411 then 183 else if fn2 == 654 then 184 else if fn2 == 996 then 180 else if fn2 == 968 then 178 else 0 in
-                if opc > 0 then (((0, ina), ((0, arg), ((2, opc, 2), rest))), bc, sc, ns, segs, fns)
+                -- Map 2-arg function name hashes to native VM bytecodes
+                -- str_concat(1072)→32, char_at(722)→31, tuple_get(969)→35(dyn),
+                -- list_nth(869)→35, list_append(1171)→22, list_concat(1765)→34
+                let bop2 = if fn2 == 1072 then 32 else if fn2 == 722 then 31 else if fn2 == 969 then 35 else if fn2 == 869 then 35 else if fn2 == 1171 then 22 else if fn2 == 1765 then 34 else 0 in
+                if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
                 else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else if func.0 == 4 then
             let fn1 = func.1 in
-            let opc = if fn1 == 759 then 176 else if fn1 == 1093 then 182 else if fn1 == 1411 then 183 else if fn1 == 968 then 214 else if fn1 == 858 then 240 else if fn1 == 1367 then 156 else if fn1 == 1797 then 157 else 0 in
-            if opc > 0 then (((0, arg), ((2, opc, 1), rest)), bc, sc, ns, segs, fns)
+            -- Map function name hashes to native VM bytecode opcodes (1-arg)
+            let bop = if fn1 == 759 then 30 else if fn1 == 968 then 21 else if fn1 == 858 then 21 else 0 in
+            if bop > 0 then (((0, arg), ((1, bop), rest)), bc, sc, ns, segs, fns)
             else
               -- Check function table: resolve Var to Lambda and inline
               let fn_idx = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == fn1 then i else s) (list_len fns) in

@@ -144,11 +144,34 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let print_int_code = module_eval (elf_m.0) 9 () in
 
   let setup6 = bytes_from_ints (
-    0x48, 0x8b, 0x7d, 0xf0                  -- mov rdi, [rbp-16] (argv[2])
+    0x48, 0x8b, 0x7d, 0xf0                  -- mov rdi, [rbp-16] (argv[2] C string)
   ) in
   -- atoi_code: rdi=string → rax=integer
+  -- Also build IRIS string from argv[2] and pass as rdx (locals[1])
   let post_atoi = bytes_from_ints (
-    0x48, 0x89, 0xc6,                       -- mov rsi, rax (user input)
+    0x48, 0x89, 0x85, 0x30, 0xff, 0xff, 0xff, -- mov [rbp-208], rax (save integer for later)
+    -- Build IRIS string from argv[2] for string input (locals[1])
+    0x48, 0x8b, 0x7d, 0xf0,                 -- mov rdi, [rbp-16] (argv[2] C string)
+    0x48, 0x31, 0xc9,                       -- xor rcx, rcx (strlen counter)
+    0x80, 0x3c, 0x0f, 0x00,                 -- cmp byte [rdi+rcx], 0
+    0x74, 0x04,                             -- je .strlen_done
+    0x48, 0xff, 0xc1,                       -- inc rcx
+    0xeb, 0xf5,                             -- jmp .-11
+    -- .strlen_done: allocate and copy
+    0x48, 0x8d, 0x41, 0x0f,                 -- lea rax, [rcx+15]
+    0x48, 0x83, 0xe0, 0xf8,                 -- and rax, -8 (align)
+    0x4c, 0x89, 0xfa,                       -- mov rdx, r15 (alloc base)
+    0x49, 0x01, 0xc7,                       -- add r15, rax (bump)
+    0x48, 0x89, 0xc8,                       -- mov rax, rcx
+    0x48, 0xc1, 0xe0, 0x08,                 -- shl rax, 8
+    0x48, 0x83, 0xc8, 0x01,                 -- or rax, 1 (string header)
+    0x48, 0x89, 0x02,                       -- mov [rdx], rax
+    0x48, 0x8d, 0x7a, 0x08,                 -- lea rdi, [rdx+8]
+    0x48, 0x8b, 0x75, 0xf0,                 -- mov rsi, [rbp-16]
+    0xf3, 0xa4,                             -- rep movsb
+    0x48, 0x83, 0xca, 0x01,                 -- or rdx, 1 (tag string ptr)
+    -- rdx = IRIS string of argv[2]; restore integer into rsi
+    0x48, 0x8b, 0xb5, 0x30, 0xff, 0xff, 0xff, -- mov rsi, [rbp-208] (restore integer)
     0x48, 0x8b, 0x7d, 0xc0                  -- mov rdi, [rbp-64] (user bc tuple)
   ) in
   -- call VM → rax = user program result
