@@ -36,7 +36,14 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x0f, 0x05,                             -- syscall
     0x49, 0x89, 0xc7,                       -- mov r15, rax
     0x48, 0x89, 0xc7,                       -- mov rdi, rax
-    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40, -- add rdi, 1GB
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40, -- add rdi, 8GB
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
+    0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,
     0x0f, 0x05,
     -- Save argv[1] and argv[2] pointers
@@ -103,37 +110,24 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let call3 = bytes_from_ints (0xe8, bitand rel3 255, bitand (shr rel3 8) 255, bitand (shr rel3 16) 255, bitand (shr rel3 24) 255) in
   let save3 = bytes_from_ints (0x48, 0x89, 0x45, 0xd0) in -- mov [rbp-48], rax (tokens)
 
-  -- === PART 4: Build (tokens, source_string) tuple for parser ===
-  let part4 = bytes_from_ints (
-    0x4c, 0x89, 0xfa,                       -- mov rdx, r15
-    0x49, 0xc7, 0x07, 0x01, 0x02, 0x00, 0x00, -- [r15] = 0x201 (count=2, tag=1)
-    0x48, 0x8b, 0x4d, 0xd0,                 -- mov rcx, [rbp-48] (tokens)
-    0x49, 0x89, 0x4f, 0x08,                 -- [r15+8] = tokens
-    0x48, 0x8b, 0x4d, 0xd8,                 -- mov rcx, [rbp-40] (source_string)
-    0x49, 0x89, 0x4f, 0x10,                 -- [r15+16] = source_string
-    0x49, 0x83, 0xc7, 0x18,                 -- add r15, 24
-    0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
-  ) in
-  -- Parse via VM(par_bc, tuple)
+  -- === PART 4: Pass tokens (rsi) and source (rdx) as separate args to parser ===
+  let part4 = bytes_from_ints () in
+  -- Parse via VM(par_bc, tokens=rsi, source=rdx)
   let load_par = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + par_offset + 1)) in
-  let setup4 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx (tuple)
+  let setup4 = bytes_from_ints (
+    0x48, 0x8b, 0x75, 0xd0,                 -- mov rsi, [rbp-48] (tokens)
+    0x48, 0x8b, 0x55, 0xd8                  -- mov rdx, [rbp-40] (source_string)
+  ) in
   let pos4 = pos3 + 5 + bytes_len save3 + bytes_len part4 + bytes_len load_par + bytes_len setup4 in
   let rel4 = vm_offset - pos4 - 5 in
   let call4 = bytes_from_ints (0xe8, bitand rel4 255, bitand (shr rel4 8) 255, bitand (shr rel4 16) 255, bitand (shr rel4 24) 255) in
   let save4 = bytes_from_ints (0x48, 0x89, 0x45, 0xc8) in -- mov [rbp-56], rax (AST)
 
-  -- === PART 5: Wrap AST in 1-element tuple (prevent module_eval unpacking) ===
-  let part5 = bytes_from_ints (
-    0x4c, 0x89, 0xfa,                       -- mov rdx, r15
-    0x49, 0xc7, 0x07, 0x01, 0x01, 0x00, 0x00, -- [r15] = 0x101 (count=1, tag=1)
-    0x48, 0x8b, 0x4d, 0xc8,                 -- mov rcx, [rbp-56] (AST)
-    0x49, 0x89, 0x4f, 0x08,                 -- [r15+8] = AST
-    0x49, 0x83, 0xc7, 0x10,                 -- add r15, 16
-    0x48, 0x83, 0xca, 0x01                  -- or rdx, 1
-  ) in
-  -- AST compile via VM(ast_bc, wrapped_AST)
+  -- === PART 5: Pass raw AST to AST compiler (no wrapping needed) ===
+  let part5 = bytes_from_ints () in
+  -- AST compile via VM(ast_bc, raw_AST)
   let load_ast = bytes_concat (bytes_from_ints (0x48, 0xbf)) (le64 (vaddr + ast_offset + 1)) in
-  let setup5 = bytes_from_ints (0x48, 0x89, 0xd6) in -- mov rsi, rdx
+  let setup5 = bytes_from_ints (0x48, 0x8b, 0x75, 0xc8) in -- mov rsi, [rbp-56] (AST)
   let pos5 = pos4 + 5 + bytes_len save4 + bytes_len part5 + bytes_len load_ast + bytes_len setup5 in
   let rel5 = vm_offset - pos5 - 5 in
   let call5 = bytes_from_ints (0xe8, bitand rel5 255, bitand (shr rel5 8) 255, bitand (shr rel5 16) 255, bitand (shr rel5 24) 255) in

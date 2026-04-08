@@ -58,7 +58,7 @@ data = open('$TMPDIR/par_raw.txt').read().strip()
 # Format: (27063, (14, 0, 21, ...))
 idx = data.index('(', 1)
 inner = data[idx+1:-2]
-nums = [int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit()]
+nums = [0 if x.strip()=='()' else int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit() or x.strip()=='()']
 # Emit bc_data: header(count<<8) + le64 elements
 count = len(nums)
 out = struct.pack('<Q', count * 256)
@@ -76,7 +76,7 @@ import sys, struct
 data = open('$TMPDIR/ast_raw.txt').read().strip()
 idx = data.index('(', 1)
 inner = data[idx+1:-2]
-nums = [int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit()]
+nums = [0 if x.strip()=='()' else int(x.strip()) for x in inner.split(',') if x.strip().lstrip('-').isdigit() or x.strip()=='()']
 count = len(nums)
 out = struct.pack('<Q', count * 256)
 for n in nums:
