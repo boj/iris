@@ -11,25 +11,23 @@ let compile_program tree =
   let params = tuple_get children 0 in
   let body = tuple_get children 1 in
   let n_params = list_len params in
-  -- Wrap body with Let/in bindings for prior function declarations.
-  -- Transform: [decl_f, decl_g, decl_main] → main_body becomes:
-  --   Let(f, Lambda(x, f_body), Let(g, Lambda(y, g_body), original_body))
-  -- This uses the existing Let/in + Lambda inlining at compile time.
-  let wrapped_body = fold body (\b i ->
-    let ri = n_funcs - 2 - i in
-    if ri < 0 then b
-    else let d = tuple_get func_decls ri in
-      let dname = d.1 in let dchildren = d.2 in
-      let dparams = tuple_get dchildren 0 in let dbody = tuple_get dchildren 1 in
-      let np = list_len dparams in
-      let lam = if np == 0 then dbody
-        else if np == 1 then (13, (list_nth dparams 0).1, (dbody,))
-        else fold dbody (\acc j ->
-          let pi = np - 1 - j in
-          if pi < 0 then acc else (13, (list_nth dparams pi).1, (acc,))
-        ) np in
-      (14, dname, (lam, b))
-  ) n_funcs in
+  -- Multi-function: wrap body with Let/in bindings for prior declarations
+  let wrapped_body = if n_funcs <= 1 then body
+    else fold body (\b i ->
+      let ri = n_funcs - 2 - i in
+      if ri < 0 then b
+      else let d = tuple_get func_decls ri in
+        let dname = d.1 in let dchildren = d.2 in
+        let dparams = tuple_get dchildren 0 in let dbody = tuple_get dchildren 1 in
+        let np = list_len dparams in
+        let lam = if np == 0 then dbody
+          else if np == 1 then (13, (list_nth dparams 0).1, (dbody,))
+          else fold dbody (\acc j ->
+            let pi = np - 1 - j in
+            if pi < 0 then acc else (13, (list_nth dparams pi).1, (acc,))
+          ) np in
+        (14, dname, (lam, b))
+    ) n_funcs in
   let init_scope = fold () (\sc j ->
     if j >= n_params then sc
     else list_append sc ((list_nth params j).1, j)
@@ -82,7 +80,7 @@ let compile_program tree =
                 let base = (inner.2).1 in let stp = (func.2).1 in
                 let acc_s = ns in let idx_s = ns + 1 in
                 let sb = if stp.0 == 13 then let si = list_nth (stp.2) 0 in if si.0 == 13 then list_nth (si.2) 0 else si else stp in
-                let ssc = if stp.0 == 13 then let ih2 = stp.3 in if ih2 != 0 then list_append (list_append sc (stp.1, acc_s)) (ih2, idx_s) else list_append sc (stp.1, acc_s) else sc in
+                let ssc = if stp.0 == 13 then let ih2 = if tuple_len stp > 3 then stp.3 else 0 in if ih2 != 0 then list_append (list_append sc (stp.1, acc_s)) (ih2, idx_s) else list_append sc (stp.1, acc_s) else sc in
                 (((0, base), ((0, arg), ((7, acc_s, idx_s), ((0, sb), ((8, 0), ((11, sc), rest)))))), bc, ssc, idx_s + 1, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
@@ -114,7 +112,7 @@ let compile_program tree =
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
         else if kind == 13 then
-          let bd = list_nth (ast.2) 0 in let ih = ast.3 in
+          let bd = list_nth (ast.2) 0 in let ih = if tuple_len ast > 3 then ast.3 else 0 in
           if ih != 0 then (((0, bd), ((11, sc), rest)), bc, list_append (list_append sc (payload, ns)) (ih, ns + 1), ns + 2, segs, fns)
           else (((0, bd), ((11, sc), rest)), bc, list_append sc (payload, ns), ns + 1, segs, fns)
         else if kind == 14 then
@@ -136,7 +134,8 @@ let compile_program tree =
       else if tag == 1 then (rest, list_concat bc (item.1,), sc, ns, segs, fns)
       else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), sc, ns, segs, fns)
       else if tag == 3 then
-        (((9, 0), ((0, item.1), ((9, 0), ((0, item.2), ((10, 0), rest))))), bc, sc, ns, segs, fns)
+        -- Save/restore scope between then/else branches (prevents let-binding leaks)
+        (((9, 0), ((0, item.1), ((11, sc), ((9, 0), ((0, item.2), ((11, sc), ((10, 0), rest))))))), bc, sc, ns, segs, fns)
       else if tag == 4 then (rest, list_concat bc (18, item.1), sc, ns, segs, fns)
       else if tag == 5 then (rest, list_concat bc (19, item.1), sc, ns, segs, fns)
       else if tag == 6 then (rest, list_concat bc (15, item.1), sc, ns, segs, fns)
