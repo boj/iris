@@ -51,17 +51,17 @@ let compile_program tree =
         let ast = item.1 in
         let kind = ast.0 in
         let payload = ast.1 in
-        if kind == 0 then (rest, list_append (list_append bc 1) payload, sc, ns, segs, fns)
-        else if kind == 3 then (rest, list_append (list_append bc 1) payload, sc, ns, segs, fns)
+        if kind == 0 then (rest, list_concat bc (1, payload), sc, ns, segs, fns)
+        else if kind == 3 then (rest, list_concat bc (1, payload), sc, ns, segs, fns)
         else if kind == 4 then
           let slot = fold (0 - 1) (\s i -> if s >= 0 then s else let ri = list_len sc - 1 - i in if ri < 0 then s else let e = list_nth sc ri in if e.0 == payload then e.1 else s) (list_len sc) in
-          if slot >= 0 then (rest, list_append (list_append bc 14) slot, sc, ns, segs, fns)
+          if slot >= 0 then (rest, list_concat bc (14, slot), sc, ns, segs, fns)
           else
             -- Check function table for prior declarations (compile-time inlining)
             let fn_idx = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == payload then i else s) (list_len fns) in
             if fn_idx >= 0 then (((0, (list_nth fns fn_idx).1), rest), bc, sc, ns, segs, fns)
-            else (rest, list_append (list_append bc 1) 0, sc, ns, segs, fns)
-        else if kind == 5 then (rest, list_append (list_append bc 1) 0, sc, ns, segs, fns)
+            else (rest, list_concat bc (1, 0), sc, ns, segs, fns)
+        else if kind == 5 then (rest, list_concat bc (1, 0), sc, ns, segs, fns)
         else if kind == 10 then
           let left = (ast.2).0 in let right = (ast.2).1 in
           let bop = if payload == 0 then 2 else if payload == 1 then 3 else if payload == 2 then 4 else if payload == 3 then 5 else if payload == 4 then 6 else if payload == 5 then 8 else if payload == 6 then 11 else if payload == 7 then 9 else if payload == 8 then 10 else if payload == 9 then 12 else if payload == 10 then 13 else 0 in
@@ -76,7 +76,7 @@ let compile_program tree =
             let inner = (func.2).0 in
             if inner.0 == 12 then
               let head = (inner.2).0 in
-              if head.0 == 4 then if head.1 == 421 then
+              if head.0 == 4 then if head.1 == 3148801 then
                 let base = (inner.2).1 in let stp = (func.2).1 in
                 let acc_s = ns in let idx_s = ns + 1 in
                 let sb = if stp.0 == 13 then let si = list_nth (stp.2) 0 in if si.0 == 13 then list_nth (si.2) 0 else si else stp in
@@ -89,18 +89,16 @@ let compile_program tree =
               if inf.0 == 4 then
                 let fn2 = inf.1 in
                 -- Map 2-arg function name hashes to native VM bytecodes
-                -- str_concat(1072)→32, char_at(722)→31, tuple_get(969)→35(dyn),
-                -- list_nth(869)→35, list_append(1171)→22
-                -- Note: list_concat also hashes to 1171 (collision). AST compiler
-                -- avoids list_concat; uses chained list_append for bytecodes.
-                let bop2 = if fn2 == 1072 then 32 else if fn2 == 722 then 31 else if fn2 == 969 then 35 else if fn2 == 869 then 35 else if fn2 == 1171 then 22 else 0 in
+                -- str_concat→32, char_at→31, tuple_get→35(dyn),
+                -- list_nth→35, list_append→22, list_concat→34
+                let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else 0 in
                 if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
                 else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else if func.0 == 4 then
             let fn1 = func.1 in
             -- Map function name hashes to native VM bytecode opcodes (1-arg)
-            let bop = if fn1 == 759 then 30 else if fn1 == 968 then 21 else if fn1 == 858 then 21 else 0 in
+            let bop = if fn1 == 105492123399 then 30 else if fn1 == 102256924767518 then 21 else if fn1 == 3067952628468 then 21 else 0 in
             if bop > 0 then (((0, arg), ((1, bop), rest)), bc, sc, ns, segs, fns)
             else
               -- Check function table: resolve Var to Lambda and inline
@@ -132,33 +130,28 @@ let compile_program tree =
           (w, bc, sc, ns, segs, fns)
         else if kind == 18 then
           (((0, list_nth (ast.2) 0), ((5, payload), rest)), bc, sc, ns, segs, fns)
-        else (rest, list_append (list_append bc 1) 0, sc, ns, segs, fns)
-      else if tag == 1 then (rest, list_append bc item.1, sc, ns, segs, fns)
-      else if tag == 2 then (rest, list_append (list_append (list_append bc 28) item.1) item.2, sc, ns, segs, fns)
+        else (rest, list_concat bc (1, 0), sc, ns, segs, fns)
+      else if tag == 1 then (rest, list_concat bc (item.1,), sc, ns, segs, fns)
+      else if tag == 2 then (rest, list_concat bc (28, item.1, item.2), sc, ns, segs, fns)
       else if tag == 3 then
         -- Save/restore scope between then/else branches (prevents let-binding leaks)
         (((9, 0), ((0, item.1), ((11, sc), ((9, 0), ((0, item.2), ((11, sc), ((10, 0), rest))))))), bc, sc, ns, segs, fns)
-      else if tag == 4 then (rest, list_append (list_append bc 18) item.1, sc, ns, segs, fns)
-      else if tag == 5 then (rest, list_append (list_append bc 19) item.1, sc, ns, segs, fns)
-      else if tag == 6 then (rest, list_append (list_append bc 15) item.1, sc, ns, segs, fns)
-      else if tag == 7 then (rest, list_append (list_append (list_append (list_append (list_append (list_append bc 25) 0) 15) item.2) 15) item.1, sc, ns, segs, fns)
-      else if tag == 8 then (rest, list_append bc 26, sc, ns, segs, fns)
+      else if tag == 4 then (rest, list_concat bc (18, item.1), sc, ns, segs, fns)
+      else if tag == 5 then (rest, list_concat bc (19, item.1), sc, ns, segs, fns)
+      else if tag == 6 then (rest, list_concat bc (15, item.1), sc, ns, segs, fns)
+      else if tag == 7 then (rest, list_concat bc (25, 0, 15, item.2, 15, item.1), sc, ns, segs, fns)
+      else if tag == 8 then (rest, list_concat bc (26,), sc, ns, segs, fns)
       else if tag == 9 then (rest, (), sc, ns, (bc, segs), fns)
       else if tag == 10 then
         let then_bc = segs.0 in let s1 = segs.1 in let cond_bc = s1.0 in let rest_segs = s1.1 in
         let el = tuple_len bc in let tl = tuple_len then_bc in let cl = tuple_len cond_bc in
         let jz_rel = 2 + tl + 2 in let jmp_rel = 2 + el in
         -- Merge: cond_bc ++ [17, jz_rel] ++ then_bc ++ [16, jmp_rel] ++ else_bc
-        -- Use fold-based concat since list_concat hashes collide with list_append
-        let r1 = list_append (list_append cond_bc 17) jz_rel in
-        let r2 = fold r1 (\acc j -> list_append acc (tuple_get then_bc j)) tl in
-        let r3 = list_append (list_append r2 16) jmp_rel in
-        let r4 = fold r3 (\acc j -> list_append acc (tuple_get bc j)) el in
-        (rest, r4, sc, ns, rest_segs, fns)
+        (rest, list_concat (list_concat (list_concat (list_concat cond_bc (17, jz_rel)) then_bc) (16, jmp_rel)) bc, sc, ns, rest_segs, fns)
       else if tag == 11 then (rest, bc, item.1, ns, segs, fns)
       else (rest, bc, sc, ns, segs, fns)
   ) 5000000 in
-  list_append (final_state.1) 0
+  list_concat (final_state.1) (0,)
 
 
 

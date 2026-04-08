@@ -9,7 +9,7 @@
 -- Token kinds:
 --   0  = EOF
 --   1  = IntLit (payload = numeric value)
---   2  = Ident  (payload = char-sum hash)
+--   2  = Ident  (payload = polynomial hash: h*31+c)
 --   3  = FloatLit (payload = integer part * 1000000 + fractional scaled)
 --   4  = StringLit
 --   5  = HexHash (payload = 0, raw hex digits in source)
@@ -43,10 +43,9 @@
 -- of && since the bootstrap evaluator lowers && to bitwise AND
 -- (returns Int) but Guard nodes require Bool.
 
--- Keyword classification: uses char-sum hash + length to identify keywords.
--- Each keyword has a unique (hash, length) pair; the hash alone can collide
--- (e.g. "let" and "val" may share hash under some encodings), so length
--- is always checked together with the hash.
+-- Keyword classification: uses polynomial hash (h*31+c) + length to identify keywords.
+-- Each keyword has a unique (hash, length) pair; polynomial hashing avoids
+-- the collisions of simple char-sum (e.g. list_append vs list_concat).
 -- Returns token kind (2 = plain ident, >2 = keyword).
 -- Includes requires(26), ensures(27), allow(28), deny(29).
 
@@ -67,29 +66,29 @@ let tokenize src : String -> Tuple [cost: Unknown] =
         if mode == 1 then
           -- Emit final identifier
           let ident_len = pos - ms in
-          let ident_hash = fold 0 (\h j -> h + char_at src (ms + j)) ident_len in
+          let ident_hash = fold 0 (\h j -> h * 31 + char_at src (ms + j)) ident_len in
           let fc = char_at src ms in
           let sc = if ident_len >= 2 then char_at src (ms + 1) else 0 in
           let kind =
-            if ident_hash == 325 then if ident_len == 3 then if fc == 108 then 10 else 2 else 2       -- let (l=108)
-            else if ident_hash == 314 then if ident_len == 3 then if fc == 114 then 11 else 2 else 2  -- rec (r=114)
-            else if ident_hash == 215 then if ident_len == 2 then if fc == 105 then 12 else 2 else 2  -- in (i=105)
-            else if ident_hash == 323 then if ident_len == 3 then if fc == 118 then 13 else 2 else 2  -- val (v=118)
-            else if ident_hash == 450 then if ident_len == 4 then if fc == 116 then 14 else 2 else 2  -- type (t=116)
-            else if ident_hash == 667 then if ident_len == 6 then if fc == 105 then 15 else 2 else 2  -- import (i=105)
-            else if ident_hash == 212 then if ident_len == 2 then if fc == 97 then 16 else 2 else 2   -- as (a=97)
-            else if ident_hash == 525 then if ident_len == 5 then if fc == 109 then 17 else 2 else 2  -- match (m=109)
-            else if ident_hash == 444 then if ident_len == 4 then if fc == 119 then 18 else 2 else 2  -- with (w=119)
-            else if ident_hash == 207 then if ident_len == 2 then if fc == 105 then 20 else 2 else 2  -- if (i=105)
-            else if ident_hash == 431 then if ident_len == 4 then if fc == 116 then 21 else 2 else 2  -- then (t=116)
-            else if ident_hash == 425 then if ident_len == 4 then if fc == 101 then 22 else 2 else 2  -- else (e=101)
-            else if ident_hash == 640 then if ident_len == 6 then if fc == 102 then 23 else 2 else 2  -- forall (f=102)
-            else if ident_hash == 448 then if ident_len == 4 then if fc == 116 then if sc == 114 then 24 else 2 else 2 else 2  -- true (t=116,r=114)
-            else if ident_hash == 523 then if ident_len == 5 then if fc == 102 then 25 else 2 else 2  -- false (f=102)
-            else if ident_hash == 880 then if ident_len == 8 then if fc == 114 then 26 else 2 else 2  -- requires (r=114)
-            else if ident_hash == 773 then if ident_len == 7 then if fc == 101 then 27 else 2 else 2  -- ensures (e=101)
-            else if ident_hash == 543 then if ident_len == 5 then if fc == 97 then 28 else 2 else 2   -- allow (a=97)
-            else if ident_hash == 432 then if ident_len == 4 then if fc == 100 then 29 else 2 else 2  -- deny (d=100)
+            if ident_hash == 107035 then if ident_len == 3 then if fc == 108 then 10 else 2 else 2       -- let (l=108)
+            else if ident_hash == 112784 then if ident_len == 3 then if fc == 114 then 11 else 2 else 2  -- rec (r=114)
+            else if ident_hash == 3365 then if ident_len == 2 then if fc == 105 then 12 else 2 else 2  -- in (i=105)
+            else if ident_hash == 116513 then if ident_len == 3 then if fc == 118 then 13 else 2 else 2  -- val (v=118)
+            else if ident_hash == 3575610 then if ident_len == 4 then if fc == 116 then 14 else 2 else 2  -- type (t=116)
+            else if ident_hash == 3110171557 then if ident_len == 6 then if fc == 105 then 15 else 2 else 2  -- import (i=105)
+            else if ident_hash == 3122 then if ident_len == 2 then if fc == 97 then 16 else 2 else 2   -- as (a=97)
+            else if ident_hash == 103668165 then if ident_len == 5 then if fc == 109 then 17 else 2 else 2  -- match (m=109)
+            else if ident_hash == 3649734 then if ident_len == 4 then if fc == 119 then 18 else 2 else 2  -- with (w=119)
+            else if ident_hash == 3357 then if ident_len == 2 then if fc == 105 then 20 else 2 else 2  -- if (i=105)
+            else if ident_hash == 3558941 then if ident_len == 4 then if fc == 116 then 21 else 2 else 2  -- then (t=116)
+            else if ident_hash == 3116345 then if ident_len == 4 then if fc == 101 then 22 else 2 else 2  -- else (e=101)
+            else if ident_hash == 3026177080 then if ident_len == 6 then if fc == 102 then 23 else 2 else 2  -- forall (f=102)
+            else if ident_hash == 3569038 then if ident_len == 4 then if fc == 116 then if sc == 114 then 24 else 2 else 2 else 2  -- true (t=116,r=114)
+            else if ident_hash == 97196323 then if ident_len == 5 then if fc == 102 then 25 else 2 else 2  -- false (f=102)
+            else if ident_hash == 3229422267310 then if ident_len == 8 then if fc == 114 then 26 else 2 else 2  -- requires (r=114)
+            else if ident_hash == 92896881653 then if ident_len == 7 then if fc == 101 then 27 else 2 else 2  -- ensures (e=101)
+            else if ident_hash == 92906313 then if ident_len == 5 then if fc == 97 then 28 else 2 else 2   -- allow (a=97)
+            else if ident_hash == 3079692 then if ident_len == 4 then if fc == 100 then 29 else 2 else 2  -- deny (d=100)
             else 2 in
           let payload = if kind == 2 then ident_hash else 0 in
           let final_kind = if ident_hash == 95 then if ident_len == 1 then 64 else kind else kind in
@@ -214,29 +213,29 @@ let tokenize src : String -> Tuple [cost: Unknown] =
           else
             -- Emit identifier
             let ident_len = pos - ms in
-            let ident_hash = fold 0 (\h j -> h + char_at src (ms + j)) ident_len in
+            let ident_hash = fold 0 (\h j -> h * 31 + char_at src (ms + j)) ident_len in
             let fc = char_at src ms in
             let sc = if ident_len >= 2 then char_at src (ms + 1) else 0 in
             let kind =
-              if ident_hash == 325 then if ident_len == 3 then if fc == 108 then 10 else 2 else 2
-              else if ident_hash == 314 then if ident_len == 3 then if fc == 114 then 11 else 2 else 2
-              else if ident_hash == 215 then if ident_len == 2 then if fc == 105 then 12 else 2 else 2
-              else if ident_hash == 323 then if ident_len == 3 then if fc == 118 then 13 else 2 else 2
-              else if ident_hash == 450 then if ident_len == 4 then if fc == 116 then 14 else 2 else 2
-              else if ident_hash == 667 then if ident_len == 6 then if fc == 105 then 15 else 2 else 2
-              else if ident_hash == 212 then if ident_len == 2 then if fc == 97 then 16 else 2 else 2
-              else if ident_hash == 525 then if ident_len == 5 then if fc == 109 then 17 else 2 else 2
-              else if ident_hash == 444 then if ident_len == 4 then if fc == 119 then 18 else 2 else 2
-              else if ident_hash == 207 then if ident_len == 2 then if fc == 105 then 20 else 2 else 2
-              else if ident_hash == 431 then if ident_len == 4 then if fc == 116 then 21 else 2 else 2
-              else if ident_hash == 425 then if ident_len == 4 then if fc == 101 then 22 else 2 else 2
-              else if ident_hash == 640 then if ident_len == 6 then if fc == 102 then 23 else 2 else 2
-              else if ident_hash == 448 then if ident_len == 4 then if fc == 116 then if sc == 114 then 24 else 2 else 2 else 2
-              else if ident_hash == 523 then if ident_len == 5 then if fc == 102 then 25 else 2 else 2
-              else if ident_hash == 880 then if ident_len == 8 then if fc == 114 then 26 else 2 else 2
-              else if ident_hash == 773 then if ident_len == 7 then if fc == 101 then 27 else 2 else 2
-              else if ident_hash == 543 then if ident_len == 5 then if fc == 97 then 28 else 2 else 2
-              else if ident_hash == 432 then if ident_len == 4 then if fc == 100 then 29 else 2 else 2
+              if ident_hash == 107035 then if ident_len == 3 then if fc == 108 then 10 else 2 else 2
+              else if ident_hash == 112784 then if ident_len == 3 then if fc == 114 then 11 else 2 else 2
+              else if ident_hash == 3365 then if ident_len == 2 then if fc == 105 then 12 else 2 else 2
+              else if ident_hash == 116513 then if ident_len == 3 then if fc == 118 then 13 else 2 else 2
+              else if ident_hash == 3575610 then if ident_len == 4 then if fc == 116 then 14 else 2 else 2
+              else if ident_hash == 3110171557 then if ident_len == 6 then if fc == 105 then 15 else 2 else 2
+              else if ident_hash == 3122 then if ident_len == 2 then if fc == 97 then 16 else 2 else 2
+              else if ident_hash == 103668165 then if ident_len == 5 then if fc == 109 then 17 else 2 else 2
+              else if ident_hash == 3649734 then if ident_len == 4 then if fc == 119 then 18 else 2 else 2
+              else if ident_hash == 3357 then if ident_len == 2 then if fc == 105 then 20 else 2 else 2
+              else if ident_hash == 3558941 then if ident_len == 4 then if fc == 116 then 21 else 2 else 2
+              else if ident_hash == 3116345 then if ident_len == 4 then if fc == 101 then 22 else 2 else 2
+              else if ident_hash == 3026177080 then if ident_len == 6 then if fc == 102 then 23 else 2 else 2
+              else if ident_hash == 3569038 then if ident_len == 4 then if fc == 116 then if sc == 114 then 24 else 2 else 2 else 2
+              else if ident_hash == 97196323 then if ident_len == 5 then if fc == 102 then 25 else 2 else 2
+              else if ident_hash == 3229422267310 then if ident_len == 8 then if fc == 114 then 26 else 2 else 2
+              else if ident_hash == 92896881653 then if ident_len == 7 then if fc == 101 then 27 else 2 else 2
+              else if ident_hash == 92906313 then if ident_len == 5 then if fc == 97 then 28 else 2 else 2
+              else if ident_hash == 3079692 then if ident_len == 4 then if fc == 100 then 29 else 2 else 2
               else 2 in
             let payload = if kind == 2 then ident_hash else 0 in
             let final_kind = if ident_hash == 95 then if ident_len == 1 then 64 else kind else kind in
