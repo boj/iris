@@ -30,7 +30,7 @@ let compile_program tree =
     ) n_funcs in
   let init_scope = fold () (\sc j ->
     if j >= n_params then sc
-    else list_append sc ((list_nth params j).1, j)
+    else list_concat sc (((list_nth params j).1, j),)
   ) n_params in
   -- Iterative fold-based AST compiler
   -- State: (ws, bc, sc, ns, segs, fns) where fns = function table for Lambda inlining
@@ -71,7 +71,7 @@ let compile_program tree =
           let func = (ast.2).0 in let arg = (ast.2).1 in
           if func.0 == 13 then
             let ph = func.1 in let bd = list_nth (func.2) 0 in let slot = ns in
-            (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (ph, slot), slot + 1, segs, fns)
+            (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_concat sc ((ph, slot),), slot + 1, segs, fns)
           else if func.0 == 12 then
             let inner = (func.2).0 in
             if inner.0 == 12 then
@@ -80,7 +80,7 @@ let compile_program tree =
                 let base = (inner.2).1 in let stp = (func.2).1 in
                 let acc_s = ns in let idx_s = ns + 1 in
                 let sb = if stp.0 == 13 then let si = list_nth (stp.2) 0 in if si.0 == 13 then list_nth (si.2) 0 else si else stp in
-                let ssc = if stp.0 == 13 then let ih2 = if tuple_len stp > 3 then stp.3 else 0 in if ih2 != 0 then list_append (list_append sc (stp.1, acc_s)) (ih2, idx_s) else list_append sc (stp.1, acc_s) else sc in
+                let ssc = if stp.0 == 13 then let ih2 = if tuple_len stp > 3 then stp.3 else 0 in if ih2 != 0 then list_concat (list_concat sc ((stp.1, acc_s),)) ((ih2, idx_s),) else list_concat sc ((stp.1, acc_s),) else sc in
                 (((0, base), ((0, arg), ((7, acc_s, idx_s), ((0, sb), ((8, 0), ((11, sc), rest)))))), bc, ssc, idx_s + 1, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
@@ -90,8 +90,10 @@ let compile_program tree =
                 let fn2 = inf.1 in
                 -- Map 2-arg function name hashes to native VM bytecodes
                 -- str_concat(1072)→32, char_at(722)→31, tuple_get(969)→35(dyn),
-                -- list_nth(869)→35, list_append(1171)→22, list_concat(1765)→34
-                let bop2 = if fn2 == 1072 then 32 else if fn2 == 722 then 31 else if fn2 == 969 then 35 else if fn2 == 869 then 35 else if fn2 == 1171 then 22 else if fn2 == 1765 then 34 else 0 in
+                -- list_nth(869)→35, list_concat/list_concat(1171)→22 or 34
+                -- Hash 1171 = both list_concat AND list_concat (collision).
+                -- Map to LIST_CONCAT (34). All list_concat calls use (elem,) wrapping.
+                let bop2 = if fn2 == 1072 then 32 else if fn2 == 722 then 31 else if fn2 == 969 then 35 else if fn2 == 869 then 35 else if fn2 == 1171 then 34 else 0 in
                 if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
                 else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
@@ -107,20 +109,20 @@ let compile_program tree =
                 let fn_lam = (list_nth fns fn_idx).1 in
                 if fn_lam.0 == 13 then
                   let ph = fn_lam.1 in let bd = list_nth (fn_lam.2) 0 in let slot = ns in
-                  (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (ph, slot), slot + 1, segs, fns)
+                  (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_concat sc ((ph, slot),), slot + 1, segs, fns)
                 else (((0, fn_lam), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
         else if kind == 13 then
           let bd = list_nth (ast.2) 0 in let ih = if tuple_len ast > 3 then ast.3 else 0 in
-          if ih != 0 then (((0, bd), ((11, sc), rest)), bc, list_append (list_append sc (payload, ns)) (ih, ns + 1), ns + 2, segs, fns)
-          else (((0, bd), ((11, sc), rest)), bc, list_append sc (payload, ns), ns + 1, segs, fns)
+          if ih != 0 then (((0, bd), ((11, sc), rest)), bc, list_concat (list_concat sc ((payload, ns),)) ((ih, ns + 1),), ns + 2, segs, fns)
+          else (((0, bd), ((11, sc), rest)), bc, list_concat sc ((payload, ns),), ns + 1, segs, fns)
         else if kind == 14 then
           let binding = (ast.2).0 in let bd = (ast.2).1 in let slot = ns in
           -- If binding is a Lambda, add to function table for compile-time inlining
           if binding.0 == 13 then
-            (((0, bd), ((11, sc), rest)), bc, sc, ns, segs, list_append fns (payload, binding))
-          else (((0, binding), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (payload, slot), slot + 1, segs, fns)
+            (((0, bd), ((11, sc), rest)), bc, sc, ns, segs, list_concat fns ((payload, binding),))
+          else (((0, binding), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_concat sc ((payload, slot),), slot + 1, segs, fns)
         else if kind == 15 then
           let cond = (ast.2).0 in let then_br = (ast.2).1 in let else_br = (ast.2).2 in
           (((0, cond), ((3, then_br, else_br), rest)), bc, sc, ns, segs, fns)
