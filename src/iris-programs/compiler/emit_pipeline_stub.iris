@@ -47,11 +47,23 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x81, 0xc7, 0x00, 0x00, 0x00, 0x40,
     0x48, 0xc7, 0xc0, 12, 0, 0, 0,
     0x0f, 0x05,
-    -- Save argv[1] and argv[2] pointers
-    0x48, 0x8b, 0x75, 0x10,                 -- mov rsi, [rbp+16] (argv[1] = source path)
+    -- Check for --compile flag: if argv[1][0] == '-', shift args
+    0x48, 0x8b, 0x75, 0x10,                 -- mov rsi, [rbp+16] (argv[1])
+    0x80, 0x3e, 0x2d,                       -- cmp byte [rsi], '-'
+    0x75, 0x1d,                             -- jne .normal_args (skip 29 bytes)
+    -- Compile-only mode: argv[2]=file, argv[3]=input
+    0x48, 0xc7, 0x85, 0x40, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, -- mov qword [rbp-192], 1
+    0x48, 0x8b, 0x75, 0x18,                 -- mov rsi, [rbp+24] (argv[2] = source)
     0x48, 0x89, 0x75, 0xf8,                 -- mov [rbp-8], rsi
-    0x48, 0x8b, 0x75, 0x18,                 -- mov rsi, [rbp+24] (argv[2] = user input)
+    0x48, 0x8b, 0x75, 0x20,                 -- mov rsi, [rbp+32] (argv[3] = input)
     0x48, 0x89, 0x75, 0xf0,                 -- mov [rbp-16], rsi
+    0xeb, 0x17,                             -- jmp .args_done (skip 23 bytes)
+    -- .normal_args: argv[1]=file, argv[2]=input
+    0x48, 0xc7, 0x85, 0x40, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, -- mov qword [rbp-192], 0
+    0x48, 0x89, 0x75, 0xf8,                 -- mov [rbp-8], rsi (argv[1] already in rsi)
+    0x48, 0x8b, 0x75, 0x18,                 -- mov rsi, [rbp+24] (argv[2] = input)
+    0x48, 0x89, 0x75, 0xf0,                 -- mov [rbp-16], rsi
+    -- .args_done:
     -- Build IRIS string from argv[1] (C string → tagged heap string)
     0x48, 0x8b, 0x7d, 0xf8,                 -- mov rdi, [rbp-8] (C string ptr)
     -- strlen: count until \0
@@ -134,6 +146,28 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let call5 = bytes_from_ints (0xe8, bitand rel5 255, bitand (shr rel5 8) 255, bitand (shr rel5 16) 255, bitand (shr rel5 24) 255) in
   let save5 = bytes_from_ints (0x48, 0x89, 0x45, 0xc0) in -- mov [rbp-64], rax (user_bc tuple)
 
+  -- === Compile-only check: if --compile flag, output bytecodes and exit ===
+  let compile_check = bytes_from_ints (
+    0x48, 0x83, 0xbd, 0x40, 0xff, 0xff, 0xff, 0x01, -- cmp qword [rbp-192], 1
+    0x75, 0x31,                                       -- jne .execute (skip 49 bytes)
+    -- Compile-only: output user_bc tuple as bc_data to stdout
+    0x48, 0x8b, 0x45, 0xc0,                           -- mov rax, [rbp-64] (user_bc tagged)
+    0x48, 0x83, 0xe0, 0xfe,                           -- and rax, -2 (untag)
+    0x48, 0x8b, 0x08,                                 -- mov rcx, [rax] (header = count << 8)
+    0x48, 0xc1, 0xe9, 0x08,                           -- shr rcx, 8 (count)
+    0x48, 0xff, 0xc1,                                 -- inc rcx (count + 1 for header)
+    0x48, 0xc1, 0xe1, 0x03,                           -- shl rcx, 3 (bytes = (count+1)*8)
+    0x48, 0x89, 0xc6,                                 -- mov rsi, rax (buffer)
+    0x48, 0x89, 0xca,                                 -- mov rdx, rcx (count)
+    0xbf, 0x01, 0x00, 0x00, 0x00,                     -- mov edi, 1 (stdout)
+    0xb8, 0x01, 0x00, 0x00, 0x00,                     -- mov eax, 1 (sys_write)
+    0x0f, 0x05,                                       -- syscall
+    0xb8, 0xe7, 0x00, 0x00, 0x00,                     -- mov eax, 231 (sys_exit_group)
+    0x31, 0xff,                                       -- xor edi, edi
+    0x0f, 0x05                                        -- syscall
+    -- .execute: normal path continues below
+  ) in
+
   -- === PART 6: User bytecodes tuple → already in correct format for VM ===
   -- The AST compiler returns a flat tuple of bytecodes.
   -- The VM reads bc[PC] from the tuple elements. Tagged tuple pointer works directly.
@@ -191,7 +225,7 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
     0x48, 0x8b, 0x7d, 0xc0                  -- mov rdi, [rbp-64] (user bc tuple)
   ) in
   -- call VM → rax = user program result
-  let pos6 = pos5 + 5 + bytes_len save5 + bytes_len setup6 + bytes_len atoi_code + bytes_len post_atoi in
+  let pos6 = pos5 + 5 + bytes_len save5 + bytes_len compile_check + bytes_len setup6 + bytes_len atoi_code + bytes_len post_atoi in
   let rel6 = vm_offset - pos6 - 5 in
   let call6 = bytes_from_ints (0xe8, bitand rel6 255, bitand (shr rel6 8) 255, bitand (shr rel6 16) 255, bitand (shr rel6 24) 255) in
 
@@ -220,6 +254,7 @@ let emit_stub vm_offset tok_offset par_offset ast_offset =
   let s = bytes_concat s setup5 in
   let s = bytes_concat s call5 in
   let s = bytes_concat s save5 in
+  let s = bytes_concat s compile_check in
   let s = bytes_concat s setup6 in
   let s = bytes_concat s atoi_code in
   let s = bytes_concat s post_atoi in
