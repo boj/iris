@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# build-native-self: Self-hosting IRIS native binary builder.
+# build-native-self: Fully self-hosted IRIS native binary builder.
 #
 # Compiles the tokenizer, parser, and AST compiler using iris-native itself,
 # then assembles a new binary. The VM and startup stub are firmware extracted
-# from the current binary (or regenerated via stage0 if sizes change).
+# from the current binary; stub offsets are patched via Python.
+#
+# NO DEPENDENCY on iris-stage0. This is a fully self-hosted build.
 #
 # Usage: bootstrap/build-native-self [-o output]
 set -euo pipefail
@@ -11,7 +13,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT="$(cd "$DIR/.." && pwd)"
 IRIS_NATIVE="$DIR/iris-native"
-STAGE0="$DIR/iris-stage0"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
@@ -57,47 +58,32 @@ AST_OFF=$((PAR_OFF + PAR_SIZE))
 FILE_SIZE=$((AST_OFF + AST_SIZE))
 MEM_SIZE=$((FILE_SIZE + 262144))
 
-# Step 4: Generate stub (uses stage0 for bytes_from_ints)
+# Step 4: Generate stub by patching the template from the current binary.
+# The stub is x86-64 machine code with 3 patchable movabs instructions
+# encoding the virtual addresses of tok/par/ast bytecodes.
+# No stage0 dependency: offsets are patched directly via Python.
 echo -n "  Stub...       "
-cat > "$TMPDIR/emit_stub.iris" << IRIS
-let main x =
-  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
-  module_eval (m.0) 1 ($VM_OFF, $TOK_OFF, $PAR_OFF, $AST_OFF)
-IRIS
+dd if="$IRIS_NATIVE" of="$TMPDIR/stub.bin" bs=1 skip=$HEADER_SIZE count=$STUB_SIZE 2>/dev/null
 
-extract_bytes() {
-  nix-shell -p python3 --run 'python3 -c "
-import sys, re
-data = sys.stdin.read()
-m = re.search(r\"Bytes\(\[([0-9, \n]+)\]\)\", data)
-if m:
-    nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
-    sys.stdout.buffer.write(bytes(nums))
-else:
-    print(\"Error:\", data[:200], file=sys.stderr); sys.exit(1)
-"'
-}
+nix-shell -p python3 --run "python3 -c \"
+import struct, sys
 
-"$STAGE0" run "$TMPDIR/emit_stub.iris" 0 | extract_bytes > "$TMPDIR/stub.bin"
-ACTUAL_STUB=$(wc -c < "$TMPDIR/stub.bin")
-echo "$ACTUAL_STUB bytes"
+with open('$TMPDIR/stub.bin', 'r+b') as f:
+    stub = bytearray(f.read())
 
-if [ "$ACTUAL_STUB" -ne "$STUB_SIZE" ]; then
-  echo "Warning: stub size changed ($ACTUAL_STUB vs $STUB_SIZE), recalculating..."
-  VM_OFF=$((HEADER_SIZE + ACTUAL_STUB))
-  TOK_OFF=$((VM_OFF + VM_SIZE))
-  PAR_OFF=$((TOK_OFF + TOK_SIZE))
-  AST_OFF=$((PAR_OFF + PAR_SIZE))
-  FILE_SIZE=$((AST_OFF + AST_SIZE))
-  MEM_SIZE=$((FILE_SIZE + 262144))
-  cat > "$TMPDIR/emit_stub2.iris" << IRIS
-let main x =
-  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
-  module_eval (m.0) 1 ($VM_OFF, $TOK_OFF, $PAR_OFF, $AST_OFF)
-IRIS
-  "$STAGE0" run "$TMPDIR/emit_stub2.iris" 0 | extract_bytes > "$TMPDIR/stub.bin"
-  STUB_SIZE=$ACTUAL_STUB
-fi
+vaddr = 0x400000
+
+# Patch 3 movabs rdi instructions (0x48 0xbf + le64 immediate)
+# These load the tagged pointers for tok/par/ast bytecodes.
+# Offsets 284, 307, 334 are the movabs prefixes; +2 is the immediate.
+struct.pack_into('<Q', stub, 284 + 2, vaddr + $TOK_OFF + 1)
+struct.pack_into('<Q', stub, 307 + 2, vaddr + $PAR_OFF + 1)
+struct.pack_into('<Q', stub, 334 + 2, vaddr + $AST_OFF + 1)
+
+with open('$TMPDIR/stub.bin', 'wb') as f:
+    f.write(stub)
+\""
+echo "$STUB_SIZE bytes (patched)"
 
 # Step 5: Build ELF headers
 nix-shell -p python3 --run "python3 -c \"

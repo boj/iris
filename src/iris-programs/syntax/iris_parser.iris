@@ -507,7 +507,8 @@ let parse tokens src =
               else if tk == 3 then
                 (pos + 1, ((1, tok.1, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
               else if tk == 4 then
-                (pos + 1, ((2, tok.2, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
+                let str_val = str_slice src (tok.2 + 1) (tok.3 - 1) in
+                (pos + 1, ((2, str_val, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
               else if tk == 5 then
                 -- HexHash: treat as integer 0 for expression contexts
                 (pos + 1, ((0, 0, mt), vs), vsp + 1, os, osp, 1, mbp, 0)
@@ -684,13 +685,72 @@ let parse tokens src =
                           let a2_parsed = parse_body a2_body_pos in
                           let a2_body = a2_parsed.0 in
                           let a2_len = a2_parsed.1 in
-                          -- 3 arms: desugar to if/then/else chain
-                          -- if scr == pat0 then body0 else if scr == pat1 then body1 else body2
-                          let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
-                          let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
-                          let inner = (15, 0, (eq1, a1_body, a2_body)) in
-                          let outer = (15, 0, (eq0, a0_body, inner)) in
-                          (a2_body_pos + a2_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
+                          -- Check for arm 3
+                          let p3 = a2_body_pos + a2_len in
+                          let has_a3 = if p3 < dend then if (list_nth tokens p3).0 == 62 then 1 else 0 else 0 in
+                          if has_a3 == 1 then
+                            let a3_pat = list_nth tokens (p3 + 1) in
+                            let a3_body_pos = p3 + 3 in
+                            let a3_parsed = parse_body a3_body_pos in
+                            let a3_body = a3_parsed.0 in
+                            let a3_len = a3_parsed.1 in
+                            -- Check for arm 4
+                            let p4 = a3_body_pos + a3_len in
+                            let has_a4 = if p4 < dend then if (list_nth tokens p4).0 == 62 then 1 else 0 else 0 in
+                            if has_a4 == 1 then
+                              let a4_pat = list_nth tokens (p4 + 1) in
+                              let a4_body_pos = p4 + 3 in
+                              let a4_parsed = parse_body a4_body_pos in
+                              let a4_body = a4_parsed.0 in
+                              let a4_len = a4_parsed.1 in
+                              -- Check for arm 5
+                              let p5 = a4_body_pos + a4_len in
+                              let has_a5 = if p5 < dend then if (list_nth tokens p5).0 == 62 then 1 else 0 else 0 in
+                              if has_a5 == 1 then
+                                let a5_pat = list_nth tokens (p5 + 1) in
+                                let a5_body_pos = p5 + 3 in
+                                let a5_parsed = parse_body a5_body_pos in
+                                let a5_body = a5_parsed.0 in
+                                let a5_len = a5_parsed.1 in
+                                -- 6 arms
+                                let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
+                                let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
+                                let eq2 = (10, 5, (scrutinee, (0, a2_pat.1, mt))) in
+                                let eq3 = (10, 5, (scrutinee, (0, a3_pat.1, mt))) in
+                                let eq4 = (10, 5, (scrutinee, (0, a4_pat.1, mt))) in
+                                let i4 = (15, 0, (eq4, a4_body, a5_body)) in
+                                let i3 = (15, 0, (eq3, a3_body, i4)) in
+                                let i2 = (15, 0, (eq2, a2_body, i3)) in
+                                let i1 = (15, 0, (eq1, a1_body, i2)) in
+                                let outer = (15, 0, (eq0, a0_body, i1)) in
+                                (a5_body_pos + a5_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
+                              else
+                                -- 5 arms
+                                let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
+                                let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
+                                let eq2 = (10, 5, (scrutinee, (0, a2_pat.1, mt))) in
+                                let eq3 = (10, 5, (scrutinee, (0, a3_pat.1, mt))) in
+                                let i3 = (15, 0, (eq3, a3_body, a4_body)) in
+                                let i2 = (15, 0, (eq2, a2_body, i3)) in
+                                let i1 = (15, 0, (eq1, a1_body, i2)) in
+                                let outer = (15, 0, (eq0, a0_body, i1)) in
+                                (a4_body_pos + a4_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
+                            else
+                              -- 4 arms
+                              let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
+                              let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
+                              let eq2 = (10, 5, (scrutinee, (0, a2_pat.1, mt))) in
+                              let i2 = (15, 0, (eq2, a2_body, a3_body)) in
+                              let i1 = (15, 0, (eq1, a1_body, i2)) in
+                              let outer = (15, 0, (eq0, a0_body, i1)) in
+                              (a3_body_pos + a3_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
+                          else
+                            -- 3 arms
+                            let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
+                            let eq1 = (10, 5, (scrutinee, (0, a1_pat.1, mt))) in
+                            let inner = (15, 0, (eq1, a1_body, a2_body)) in
+                            let outer = (15, 0, (eq0, a0_body, inner)) in
+                            (a2_body_pos + a2_len, (outer, vs), vsp + 1, os, osp, 1, mbp, 0)
                         else
                           -- 2 arms: if scr == pat0 then body0 else body1
                           let eq0 = (10, 5, (scrutinee, (0, a0_pat.1, mt))) in
