@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# build-native-self: Self-hosting IRIS native binary builder.
+#
+# Compiles the tokenizer, parser, and AST compiler using iris-native itself,
+# then assembles a new binary. The VM and startup stub are firmware extracted
+# from the current binary (or regenerated via stage0 if sizes change).
+#
+# Usage: bootstrap/build-native-self [-o output]
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT="$(cd "$DIR/.." && pwd)"
+IRIS_NATIVE="$DIR/iris-native"
+STAGE0="$DIR/iris-stage0"
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+OUTPUT="${2:-$DIR/iris-native}"
+
+echo "=== Self-Hosted IRIS Native Build ==="
+echo "Compiler: $IRIS_NATIVE"
+echo
+
+cd "$PROJECT"
+
+# Step 1: Compile pipeline stages using iris-native
+echo -n "  Tokenizer...  "
+"$IRIS_NATIVE" --compile src/iris-programs/syntax/tokenizer.iris > "$TMPDIR/tok.bin"
+echo "$(wc -c < "$TMPDIR/tok.bin") bytes"
+
+echo -n "  Parser...     "
+"$IRIS_NATIVE" --compile src/iris-programs/syntax/iris_parser.iris > "$TMPDIR/par.bin"
+echo "$(wc -c < "$TMPDIR/par.bin") bytes"
+
+echo -n "  AST compiler..."
+"$IRIS_NATIVE" --compile src/iris-programs/compiler/ast_compile_single.iris > "$TMPDIR/ast.bin"
+echo " $(wc -c < "$TMPDIR/ast.bin") bytes"
+
+# Step 2: Extract VM firmware from current binary
+# Binary layout: [120 headers] [788 stub] [2842 VM] [tok] [par] [ast]
+HEADER_SIZE=120
+STUB_SIZE=788
+VM_SIZE=2842
+
+dd if="$IRIS_NATIVE" of="$TMPDIR/vm.bin" bs=1 skip=$((HEADER_SIZE + STUB_SIZE)) count=$VM_SIZE 2>/dev/null
+echo "  VM:           $VM_SIZE bytes (firmware)"
+
+# Step 3: Compute layout
+TOK_SIZE=$(wc -c < "$TMPDIR/tok.bin")
+PAR_SIZE=$(wc -c < "$TMPDIR/par.bin")
+AST_SIZE=$(wc -c < "$TMPDIR/ast.bin")
+
+VM_OFF=$((HEADER_SIZE + STUB_SIZE))
+TOK_OFF=$((VM_OFF + VM_SIZE))
+PAR_OFF=$((TOK_OFF + TOK_SIZE))
+AST_OFF=$((PAR_OFF + PAR_SIZE))
+FILE_SIZE=$((AST_OFF + AST_SIZE))
+MEM_SIZE=$((FILE_SIZE + 262144))
+
+# Step 4: Generate stub (uses stage0 for bytes_from_ints)
+echo -n "  Stub...       "
+cat > "$TMPDIR/emit_stub.iris" << IRIS
+let main x =
+  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
+  module_eval (m.0) 1 ($VM_OFF, $TOK_OFF, $PAR_OFF, $AST_OFF)
+IRIS
+
+extract_bytes() {
+  nix-shell -p python3 --run 'python3 -c "
+import sys, re
+data = sys.stdin.read()
+m = re.search(r\"Bytes\(\[([0-9, \n]+)\]\)\", data)
+if m:
+    nums = [int(x.strip()) for x in m.group(1).split(\",\") if x.strip()]
+    sys.stdout.buffer.write(bytes(nums))
+else:
+    print(\"Error:\", data[:200], file=sys.stderr); sys.exit(1)
+"'
+}
+
+"$STAGE0" run "$TMPDIR/emit_stub.iris" 0 | extract_bytes > "$TMPDIR/stub.bin"
+ACTUAL_STUB=$(wc -c < "$TMPDIR/stub.bin")
+echo "$ACTUAL_STUB bytes"
+
+if [ "$ACTUAL_STUB" -ne "$STUB_SIZE" ]; then
+  echo "Warning: stub size changed ($ACTUAL_STUB vs $STUB_SIZE), recalculating..."
+  VM_OFF=$((HEADER_SIZE + ACTUAL_STUB))
+  TOK_OFF=$((VM_OFF + VM_SIZE))
+  PAR_OFF=$((TOK_OFF + TOK_SIZE))
+  AST_OFF=$((PAR_OFF + PAR_SIZE))
+  FILE_SIZE=$((AST_OFF + AST_SIZE))
+  MEM_SIZE=$((FILE_SIZE + 262144))
+  cat > "$TMPDIR/emit_stub2.iris" << IRIS
+let main x =
+  let m = compile_source (file_read "src/iris-programs/compiler/emit_pipeline_stub.iris") in
+  module_eval (m.0) 1 ($VM_OFF, $TOK_OFF, $PAR_OFF, $AST_OFF)
+IRIS
+  "$STAGE0" run "$TMPDIR/emit_stub2.iris" 0 | extract_bytes > "$TMPDIR/stub.bin"
+  STUB_SIZE=$ACTUAL_STUB
+fi
+
+# Step 5: Build ELF headers
+nix-shell -p python3 --run "python3 -c \"
+import struct, sys
+ehdr = bytearray(64)
+ehdr[0:4] = b'\\x7fELF'
+ehdr[4] = 2; ehdr[5] = 1; ehdr[6] = 1
+struct.pack_into('<H', ehdr, 16, 2)
+struct.pack_into('<H', ehdr, 18, 0x3e)
+struct.pack_into('<I', ehdr, 20, 1)
+struct.pack_into('<Q', ehdr, 24, 0x400000 + 120)
+struct.pack_into('<Q', ehdr, 32, 64)
+struct.pack_into('<H', ehdr, 52, 64)
+struct.pack_into('<H', ehdr, 54, 56)
+struct.pack_into('<H', ehdr, 56, 1)
+phdr = bytearray(56)
+struct.pack_into('<I', phdr, 0, 1)
+struct.pack_into('<I', phdr, 4, 7)
+struct.pack_into('<Q', phdr, 16, 0x400000)
+struct.pack_into('<Q', phdr, 24, 0x400000)
+struct.pack_into('<Q', phdr, 32, $FILE_SIZE)
+struct.pack_into('<Q', phdr, 40, $MEM_SIZE)
+struct.pack_into('<Q', phdr, 48, 0x200000)
+sys.stdout.buffer.write(bytes(ehdr) + bytes(phdr))
+\"" > "$TMPDIR/headers.bin"
+
+# Step 6: Assemble final binary
+cat "$TMPDIR/headers.bin" "$TMPDIR/stub.bin" "$TMPDIR/vm.bin" \
+    "$TMPDIR/tok.bin" "$TMPDIR/par.bin" "$TMPDIR/ast.bin" > "$OUTPUT"
+chmod +x "$OUTPUT"
+
+echo
+echo "=== Self-hosted binary: $OUTPUT ($(wc -c < "$OUTPUT") bytes) ==="
+echo "  Layout: Headers($HEADER_SIZE) + Stub($STUB_SIZE) + VM($VM_SIZE)"
+echo "          + Tok($TOK_SIZE) + Par($PAR_SIZE) + AST($AST_SIZE)"
+echo
+echo "Usage: $OUTPUT <source.iris> <arg>"

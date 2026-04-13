@@ -11,13 +11,16 @@ let compile_program tree =
   let params = tuple_get children 0 in
   let body = tuple_get children 1 in
   let n_params = list_len params in
+  -- Check for rec flag (bit 31 of decl payload)
+  let is_rec = if decl.1 >= 2147483648 then 1 else 0 in
+  let rec_hash = if is_rec == 1 then bitand (decl.1) 2147483647 else 0 in
   -- Multi-function: wrap body with Let/in bindings for prior declarations
   let wrapped_body = if n_funcs <= 1 then body
     else fold body (\b i ->
       let ri = n_funcs - 2 - i in
       if ri < 0 then b
       else let d = tuple_get func_decls ri in
-        let dname = d.1 in let dchildren = d.2 in
+        let dname = if d.1 >= 2147483648 then bitand (d.1) 2147483647 else d.1 in let dchildren = d.2 in
         let dparams = tuple_get dchildren 0 in let dbody = tuple_get dchildren 1 in
         let np = list_len dparams in
         let lam = if np == 0 then dbody
@@ -90,15 +93,22 @@ let compile_program tree =
                 let fn2 = inf.1 in
                 -- Map 2-arg function name hashes to native VM bytecodes
                 -- str_concat→32, char_at→31, tuple_get→35(dyn),
-                -- list_nth→35, list_append→22, list_concat→34
-                let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else 0 in
+                -- list_nth→35, list_append→22, list_concat→34, bitand→23, shr→24
+                let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else if fn2 == 2906178986 then 23 else if fn2 == 113853 then 24 else 0 in
                 if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
                 else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else if func.0 == 4 then
             let fn1 = func.1 in
+            -- Check for self-recursive call first
+            let is_self_call = if is_rec == 1 then if fn1 == rec_hash then 1 else 0 else 0 in
+            if is_self_call == 1 then
+              -- Emit: compile arg, then append CALL(41) + target(0) to bytecodes
+              (((0, arg), ((12, 0), rest)), bc, sc, ns, segs, fns)
+            else
             -- Map function name hashes to native VM bytecode opcodes (1-arg)
-            let bop = if fn1 == 105492123399 then 30 else if fn1 == 102256924767518 then 21 else if fn1 == 3067952628468 then 21 else 0 in
+            -- str_len→30, tuple_len→21, list_len→21, file_read→39, bytes_len→21, list_range→27
+            let bop = if fn1 == 105492123399 then 30 else if fn1 == 102256924767518 then 21 else if fn1 == 3067952628468 then 21 else if fn1 == 89982543473273 then 39 else if fn1 == 87018299089985 then 21 else if fn1 == 2948302481383004 then 27 else 0 in
             if bop > 0 then (((0, arg), ((1, bop), rest)), bc, sc, ns, segs, fns)
             else
               -- Check function table: resolve Var to Lambda and inline
@@ -149,6 +159,7 @@ let compile_program tree =
         -- Merge: cond_bc ++ [17, jz_rel] ++ then_bc ++ [16, jmp_rel] ++ else_bc
         (rest, list_concat (list_concat (list_concat (list_concat cond_bc (17, jz_rel)) then_bc) (16, jmp_rel)) bc, sc, ns, rest_segs, fns)
       else if tag == 11 then (rest, bc, item.1, ns, segs, fns)
+      else if tag == 12 then (rest, list_concat bc (41, item.1), sc, ns, segs, fns)
       else (rest, bc, sc, ns, segs, fns)
   ) 5000000 in
   list_concat (final_state.1) (0,)

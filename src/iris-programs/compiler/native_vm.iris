@@ -79,7 +79,8 @@ let emit_vm_core =
     0x49, 0x89, 0x75, 0x00,           -- mov [r13], rsi  (push input)
     -- Store input as locals[0], second arg (rdx) as locals[1]
     0x48, 0x89, 0xb5, 0x00, 0x00, 0xff, 0xff, -- mov [rbp-65536], rsi
-    0x48, 0x89, 0x95, 0x08, 0x00, 0xff, 0xff  -- mov [rbp-65528], rdx (locals[1])
+    0x48, 0x89, 0x95, 0x08, 0x00, 0xff, 0xff, -- mov [rbp-65528], rdx (locals[1])
+    0x48, 0xc7, 0x85, 0x48, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 -- mov qword [rbp-184], 0 (call depth)
   ) in
 
   -- Dispatch loop top: load opcode from bytecode[r12]
@@ -110,10 +111,20 @@ let emit_vm_core =
   -- Each handler: cmp rax, OP (4B); jne rel32 .next (6B); body; jmp rel32 .loop_top (5B)
   -- The jne uses rel32 (0x0f 0x85) to support handler bodies > 127 bytes.
 
-  -- HALT (0): test rax, rax; jnz skip; load top; epilogue; ret
+  -- HALT (0): if call stack non-empty, return to caller. Otherwise exit.
+  -- Call stack uses [rbp-184] as depth counter. CALL increments, HALT decrements.
   let op_halt = bytes_from_ints (
     0x48, 0x85, 0xc0,                 -- test rax, rax
-    0x75, 0x14,                       -- jnz .not_halt (skip 20 bytes)
+    0x75, 0x2f,                       -- jnz .not_halt (skip 47 bytes)
+    -- Check call depth at [rbp-184]
+    0x48, 0x83, 0xbd, 0x48, 0xff, 0xff, 0xff, 0x00, -- cmp qword [rbp-184], 0
+    0x74, 0x11,                       -- je .exit (skip 17 bytes)
+    -- Return from recursive call: restore caller state
+    0x48, 0xff, 0x8d, 0x48, 0xff, 0xff, 0xff, -- dec qword [rbp-184]
+    0x8f, 0x85, 0x00, 0x00, 0xff, 0xff, -- pop [rbp-65536] (restore locals[0])
+    0x41, 0x5c,                       -- pop r12 (return PC)
+    0xeb, 0xdb,                       -- jmp load_opcode (rel8 = -37)
+    -- .exit: normal program exit
     0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
     0x48, 0x81, 0xc4, 0x00, 0x00, 0x01, 0x00,
     0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x5d, 0xc3
@@ -753,12 +764,32 @@ let emit_vm_core =
     (25, op_fold_body_test), (26, op_foldend_body_test), (29, op_push_str_ptr_body), (30, op_str_len_body)
   ) in
   let n_b = 14 in
+  -- CALL (41, target_pc): save return state, jump to target. pc = bytecodes[pc+1]
+  let op_call_body = bytes_from_ints (
+    -- Read target PC
+    0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
+    0x49, 0x8b, 0x5c, 0xde, 0x08,     -- mov rbx, [r14 + rbx*8 + 8] (target)
+    -- Save return state: push return_pc and old locals[0]
+    0x49, 0x8d, 0x44, 0x24, 0x02,     -- lea rax, [r12+2] (return PC)
+    0x50,                              -- push rax
+    0xff, 0xb5, 0x00, 0x00, 0xff, 0xff, -- push [rbp-65536] (save locals[0])
+    -- Inc call depth
+    0x48, 0xff, 0x85, 0x48, 0xff, 0xff, 0xff, -- inc qword [rbp-184]
+    -- Pop new argument from value stack → locals[0]
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x89, 0x85, 0x00, 0x00, 0xff, 0xff, -- mov [rbp-65536], rax (locals[0])
+    -- Jump to target
+    0x49, 0x89, 0xdc                  -- mov r12, rbx
+  ) in
+
   let handlers_c = (
     (31, op_char_at_body), (32, op_str_concat_body), (33, op_str_slice_body),
     (35, op_tget_dyn_body),
-    (39, op_file_read_body), (40, op_debug_print_body)
+    (39, op_file_read_body), (40, op_debug_print_body),
+    (41, op_call_body)
   ) in
-  let n_c = 6 in
+  let n_c = 7 in
 
   -- ============================================================
   -- Dispatch builder: uses jne rel32 (0x0f 0x85) to support large handler bodies.
