@@ -12,7 +12,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT="$(cd "$DIR/.." && pwd)"
-IRIS_NATIVE="$DIR/iris-native"
+IRIS_NATIVE="${IRIS_NATIVE:-$DIR/iris-native}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
@@ -41,7 +41,7 @@ echo " $(wc -c < "$TMPDIR/ast.bin") bytes"
 # Binary layout: [120 headers] [788 stub] [2842 VM] [tok] [par] [ast]
 HEADER_SIZE=120
 STUB_SIZE=788
-VM_SIZE=2842
+VM_SIZE=2854
 
 dd if="$IRIS_NATIVE" of="$TMPDIR/vm.bin" bs=1 skip=$((HEADER_SIZE + STUB_SIZE)) count=$VM_SIZE 2>/dev/null
 echo "  VM:           $VM_SIZE bytes (firmware)"

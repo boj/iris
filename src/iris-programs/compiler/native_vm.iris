@@ -115,15 +115,16 @@ let emit_vm_core =
   -- Call stack uses [rbp-184] as depth counter. CALL increments, HALT decrements.
   let op_halt = bytes_from_ints (
     0x48, 0x85, 0xc0,                 -- test rax, rax
-    0x75, 0x2f,                       -- jnz .not_halt (skip 47 bytes)
+    0x75, 0x35,                       -- jnz .not_halt (skip 53 bytes)
     -- Check call depth at [rbp-184]
     0x48, 0x83, 0xbd, 0x48, 0xff, 0xff, 0xff, 0x00, -- cmp qword [rbp-184], 0
-    0x74, 0x11,                       -- je .exit (skip 17 bytes)
+    0x74, 0x17,                       -- je .exit (skip 23 bytes)
     -- Return from recursive call: restore caller state
     0x48, 0xff, 0x8d, 0x48, 0xff, 0xff, 0xff, -- dec qword [rbp-184]
     0x8f, 0x85, 0x00, 0x00, 0xff, 0xff, -- pop [rbp-65536] (restore locals[0])
+    0x8f, 0x85, 0x08, 0x00, 0xff, 0xff, -- pop [rbp-65528] (restore locals[1])
     0x41, 0x5c,                       -- pop r12 (return PC)
-    0xeb, 0xdb,                       -- jmp load_opcode (rel8 = -37)
+    0xeb, 0xd5,                       -- jmp load_opcode (rel8 = -43)
     -- .exit: normal program exit
     0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
     0x48, 0x81, 0xc4, 0x00, 0x00, 0x01, 0x00,
@@ -769,9 +770,10 @@ let emit_vm_core =
     -- Read target PC
     0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
     0x49, 0x8b, 0x5c, 0xde, 0x08,     -- mov rbx, [r14 + rbx*8 + 8] (target)
-    -- Save return state: push return_pc and old locals[0]
+    -- Save return state: push return_pc, locals[1], and locals[0]
     0x49, 0x8d, 0x44, 0x24, 0x02,     -- lea rax, [r12+2] (return PC)
     0x50,                              -- push rax
+    0xff, 0xb5, 0x08, 0x00, 0xff, 0xff, -- push [rbp-65528] (save locals[1])
     0xff, 0xb5, 0x00, 0x00, 0xff, 0xff, -- push [rbp-65536] (save locals[0])
     -- Inc call depth
     0x48, 0xff, 0x85, 0x48, 0xff, 0xff, 0xff, -- inc qword [rbp-184]
