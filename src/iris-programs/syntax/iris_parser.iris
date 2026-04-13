@@ -213,7 +213,7 @@ let parse tokens src =
         let name_pos = if is_rec == 1 then dstart + 2 else dstart + 1 in
         let name_tok = list_nth tokens name_pos in
         let name_hash = name_tok.1 in
-        let decl_payload = if is_rec == 1 then name_hash + 2147483648 else name_hash in
+        let decl_payload = if is_rec == 1 then 0 - name_hash - 1 else name_hash in
 
         -- Collect params and find '='
         -- Parse: type annotation (after ':'), cost annotation [cost: X],
@@ -777,7 +777,7 @@ let parse tokens src =
                     let nt = list_nth tokens np in
                     if nt.0 == 2 then
                       let nh = nt.1 in
-                      let pl = if ir == 1 then nh + 2147483648 else nh in
+                      let pl = if ir == 1 then 0 - nh - 1 else nh in
                       let ep = fold (np + 1, 0)
                         (\es _j ->
                           if es.1 == 1 then es

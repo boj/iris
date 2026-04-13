@@ -11,16 +11,19 @@ let compile_program tree =
   let params = tuple_get children 0 in
   let body = tuple_get children 1 in
   let n_params = list_len params in
-  -- Check for rec flag (bit 31 of decl payload)
-  let is_rec = if decl.1 >= 2147483648 then 1 else 0 in
-  let rec_hash = if is_rec == 1 then bitand (decl.1) 2147483647 else 0 in
+  -- Check for rec flag (negative payload signals rec declaration)
+  let is_rec = if decl.1 < 0 then 1 else 0 in
+  let rec_hash = if is_rec == 1 then 0 - decl.1 - 1 else 0 in
   -- Multi-function: wrap body with Let/in bindings for prior declarations
   let wrapped_body = if n_funcs <= 1 then body
     else fold body (\b i ->
       let ri = n_funcs - 2 - i in
       if ri < 0 then b
       else let d = tuple_get func_decls ri in
-        let dname = if d.1 >= 2147483648 then bitand (d.1) 2147483647 else d.1 in let dchildren = d.2 in
+        if d.0 != 30 then b
+        else let raw_name = d.1 in
+        let is_rec_decl = if raw_name < 0 then 1 else 0 in
+        let dname = if is_rec_decl == 1 then 0 - raw_name - 1 else raw_name in let dchildren = d.2 in
         let dparams = tuple_get dchildren 0 in let dbody = tuple_get dchildren 1 in
         let np = list_len dparams in
         let lam = if np == 0 then dbody
@@ -29,7 +32,8 @@ let compile_program tree =
             let pi = np - 1 - j in
             if pi < 0 then acc else (13, (list_nth dparams pi).1, (acc,))
           ) np in
-        (14, dname, (lam, b))
+        let wrapped_lam = if is_rec_decl == 1 then (98, lam) else lam in
+        (14, dname, (wrapped_lam, b))
     ) n_funcs in
   let init_scope = fold () (\sc j ->
     if j >= n_params then sc
@@ -129,7 +133,10 @@ let compile_program tree =
               let fn_idx = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == fn1 then i else s) (list_len fns) in
               if fn_idx >= 0 then
                 let fn_lam = (list_nth fns fn_idx).1 in
-                if fn_lam.0 == 13 then
+                if fn_lam.0 == 99 then
+                  -- Call target (prelude function): emit CALL with absolute PC
+                  (((0, arg), ((12, fn_lam.1), rest)), bc, sc, ns, segs, fns)
+                else if fn_lam.0 == 13 then
                   let ph = fn_lam.1 in let bd = list_nth (fn_lam.2) 0 in let slot = ns in
                   (((0, arg), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (ph, slot), slot + 1, segs, fns)
                 else (((0, fn_lam), ((0, arg), rest)), bc, sc, ns, segs, fns)
@@ -141,8 +148,14 @@ let compile_program tree =
           else (((0, bd), ((11, sc), rest)), bc, list_append sc (payload, ns), ns + 1, segs, fns)
         else if kind == 14 then
           let binding = (ast.2).0 in let bd = (ast.2).1 in let slot = ns in
-          -- If binding is a Lambda, add to function table for compile-time inlining
-          if binding.0 == 13 then
+          if binding.0 == 98 then
+            -- Recursive Lambda (wrapped with marker 98): compile as callable prelude
+            let real_lam = binding.1 in
+            let param_hash = real_lam.1 in
+            let fn_body = list_nth (real_lam.2) 0 in
+            let fn_pc = tuple_len bc + 2 in
+            (((13, payload, param_hash), ((0, fn_body), ((14, 0), ((0, bd), ((11, sc), rest))))), bc, sc, ns, segs, list_append fns (payload, (99, fn_pc)))
+          else if binding.0 == 13 then
             (((0, bd), ((11, sc), rest)), bc, sc, ns, segs, list_append fns (payload, binding))
           else (((0, binding), ((6, slot), ((0, bd), ((11, sc), rest)))), bc, list_append sc (payload, slot), slot + 1, segs, fns)
         else if kind == 15 then
@@ -177,6 +190,15 @@ let compile_program tree =
         (rest, list_concat (list_concat (list_concat (list_concat cond_bc (17, jz_rel)) then_bc) (16, jmp_rel)) bc, sc, ns, rest_segs, fns)
       else if tag == 11 then (rest, bc, item.1, ns, segs, fns)
       else if tag == 12 then (rest, list_concat bc (41, item.1), sc, ns, segs, fns)
+      else if tag == 13 then
+        -- BEGIN_FUNC: save state, set up fresh scope for function parameter
+        (rest, (), ((item.2, 0),), 1, ((bc, sc, ns), segs), fns)
+      else if tag == 14 then
+        -- END_FUNC: append HALT, merge prelude segment with JMP skip
+        let fbc = list_concat bc (0,) in
+        let sv = segs.0 in let sbc = sv.0 in let ssc = sv.1 in let sns = sv.2 in
+        let fl = tuple_len fbc in let sl = tuple_len sbc in
+        (rest, list_concat (list_concat sbc (16, 2 + fl)) fbc, ssc, sns, segs.1, fns)
       else (rest, bc, sc, ns, segs, fns)
   ) 5000000 in
   list_concat (final_state.1) (0,)
