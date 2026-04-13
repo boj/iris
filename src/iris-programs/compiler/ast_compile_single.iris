@@ -164,6 +164,32 @@ let compile_program tree =
                 -- list_nth→35, list_append→22, list_concat→34, bitand→23, shr→24
                 let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else if fn2 == 2906178986 then 23 else if fn2 == 113853 then 24 else 0 in
                 if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
+                else if fn2 == 107868 then
+                  -- map fn xs: desugar to let _l = xs in fold () (\a i -> list_append a (fn (list_nth _l i))) (tuple_len _l)
+                  let _l = 999000001 in let _a = 999000002 in let _i = 999000003 in
+                  let nth = (12, 0, ((12, 0, ((4, 3067952630849), (4, _l))), (4, _i))) in
+                  let fn_app = (12, 0, (ina, nth)) in
+                  let mbody = (12, 0, ((12, 0, ((4, 91397376450088411), (4, _a))), fn_app)) in
+                  let mstep = (13, _a, (mbody,), _i) in
+                  let fb = (12, 0, ((4, 3148801), (0, 0))) in
+                  let fs = (12, 0, (fb, mstep)) in
+                  let cnt = (12, 0, ((4, 102256924767518), (4, _l))) in
+                  let fe = (12, 0, (fs, cnt)) in
+                  (((0, (14, _l, (arg, fe))), rest), bc, sc, ns, segs, fns)
+                else if fn2 == 3020475256 then
+                  -- filter pred xs: desugar to let _l = xs in fold () (\a i -> let e = list_nth _l i in if pred e then list_append a e else a) (tuple_len _l)
+                  let _l = 999000001 in let _a = 999000002 in let _i = 999000003 in let _e = 999000004 in
+                  let nth = (12, 0, ((12, 0, ((4, 3067952630849), (4, _l))), (4, _i))) in
+                  let cnd = (12, 0, (ina, (4, _e))) in
+                  let thb = (12, 0, ((12, 0, ((4, 91397376450088411), (4, _a))), (4, _e))) in
+                  let ite = (15, 0, (cnd, thb, (4, _a))) in
+                  let fbody = (14, _e, (nth, ite)) in
+                  let fstep = (13, _a, (fbody,), _i) in
+                  let fb = (12, 0, ((4, 3148801), (0, 0))) in
+                  let fs = (12, 0, (fb, fstep)) in
+                  let cnt = (12, 0, ((4, 102256924767518), (4, _l))) in
+                  let fe = (12, 0, (fs, cnt)) in
+                  (((0, (14, _l, (arg, fe))), rest), bc, sc, ns, segs, fns)
                 else
                   -- 2-arg function table lookup: inline 2-param Lambda
                   let fi2 = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == fn2 then i else s) (list_len fns) in
