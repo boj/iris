@@ -59,16 +59,20 @@ let compile_program tree =
         let kind = ast.0 in
         let payload = ast.1 in
         if kind == 0 then (rest, list_concat bc (1, payload), sc, ns, segs, fns)
-        else if kind == 1 then (rest, list_concat bc (1, payload), sc, ns, segs, fns)
+        else if kind == 1 then (rest, list_concat bc (49, payload), sc, ns, segs, fns)
         else if kind == 2 then (rest, list_concat bc (29, payload), sc, ns, segs, fns)
         else if kind == 3 then (rest, list_concat bc (1, payload), sc, ns, segs, fns)
         else if kind == 4 then
           let slot = fold (0 - 1) (\s i -> if s >= 0 then s else let ri = list_len sc - 1 - i in if ri < 0 then s else let e = list_nth sc ri in if e.0 == payload then e.1 else s) (list_len sc) in
           if slot >= 0 then (rest, list_concat bc (14, slot), sc, ns, segs, fns)
           else
-            -- Check function table for prior declarations (compile-time inlining)
+            -- Check function table: compile Lambda as closure (callable value)
             let fn_idx = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == payload then i else s) (list_len fns) in
-            if fn_idx >= 0 then (((0, (list_nth fns fn_idx).1), rest), bc, sc, ns, segs, fns)
+            if fn_idx >= 0 then let lam = (list_nth fns fn_idx).1 in
+              if lam.0 == 13 then let ph = lam.1 in let bd = list_nth (lam.2) 0 in
+                -- Compile lambda as code segment, push entry PC
+                (((20, ph, bd), rest), bc, sc, ns, segs, fns)
+              else (((0, lam), rest), bc, sc, ns, segs, fns)
             else (rest, list_concat bc (1, 0), sc, ns, segs, fns)
         else if kind == 5 then (rest, list_concat bc (1, 0), sc, ns, segs, fns)
         else if kind == 10 then
@@ -172,7 +176,7 @@ let compile_program tree =
                 -- Map 2-arg function name hashes to native VM bytecodes
                 -- str_concat→32, char_at→31, tuple_get→35(dyn),
                 -- list_nth→35, list_append→22, list_concat→34, bitand→23, shr→24
-                let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else if fn2 == 2906178986 then 23 else if fn2 == 113853 then 24 else if fn2 == 2592362147941414248 then 32 else 0 in
+                let bop2 = if fn2 == 3142715599850722 then 32 else if fn2 == 90933368252 then 31 else if fn2 == 102256924762719 then 35 else if fn2 == 3067952630849 then 35 else if fn2 == 91397376450088411 then 22 else if fn2 == 91397376506361301 then 34 else if fn2 == 2906178986 then 23 else if fn2 == 113853 then 24 else if fn2 == 2592362147941414248 then 32 else if fn2 == 90067648134206 then 50 else if fn2 == 90067648152029 then 51 else if fn2 == 90067648146273 then 52 else if fn2 == 90067648137262 then 53 else if fn2 == 2905408004683 then 54 else if fn2 == 2905408004528 then 55 else if fn2 == 2905408004463 then 56 else 0 in
                 if bop2 > 0 then (((0, ina), ((0, arg), ((1, bop2), rest))), bc, sc, ns, segs, fns)
                 else if fn2 == 107868 then
                   -- map fn xs: desugar to let _l = xs in fold () (\a i -> list_append a (fn (list_nth _l i))) (tuple_len _l)
@@ -250,7 +254,7 @@ let compile_program tree =
             -- Map function name hashes to native VM bytecode opcodes (1-arg)
             -- str_len→30, tuple_len→21, list_len→21, file_read→39, bytes_len→21,
             -- list_range→27, debug_print→40, print→40, int_to_string→36
-            let bop = if fn1 == 105492123399 then 30 else if fn1 == 102256924767518 then 21 else if fn1 == 3067952628468 then 21 else if fn1 == 89982543473273 then 39 else if fn1 == 87018299089985 then 21 else if fn1 == 2948302481383004 then 27 else if fn1 == 84720127073411521 then 40 else if fn1 == 106934957 then 40 else if fn1 == 0 - 6636504889774124539 then 36 else if fn1 == 0 - 7456684656838069499 then 42 else 0 in
+            let bop = if fn1 == 105492123399 then 30 else if fn1 == 102256924767518 then 21 else if fn1 == 3067952628468 then 21 else if fn1 == 89982543473273 then 39 else if fn1 == 87018299089985 then 21 else if fn1 == 2948302481383004 then 27 else if fn1 == 84720127073411521 then 40 else if fn1 == 106934957 then 40 else if fn1 == 0 - 6636504889774124539 then 36 else if fn1 == 0 - 7456684656838069499 then 42 else if fn1 == 90067648146733 then 57 else if fn1 == 2683205306120199022 then 58 else if fn1 == 2761200499303031272 then 59 else 0 in
             if bop > 0 then (((0, arg), ((1, bop), rest)), bc, sc, ns, segs, fns)
             else
               -- Check function table: resolve Var to Lambda and inline
@@ -266,12 +270,18 @@ let compile_program tree =
                   let ph = fn_lam.1 in let bd = list_nth (fn_lam.2) 0 in let slot = ns in
                   (((0, arg), ((6, slot), ((15, ph, slot), ((0, bd), ((11, sc), rest))))), bc, sc, slot + 1, segs, fns)
                 else (((0, fn_lam), ((0, arg), rest)), bc, sc, ns, segs, fns)
-              else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
+              else
+                -- f not in function table: check scope (may be a closure variable)
+                let f_slot = fold (0 - 1) (\s i -> if s >= 0 then s else let ri = list_len sc - 1 - i in if ri < 0 then s else let e = list_nth sc ri in if e.0 == fn1 then e.1 else s) (list_len sc) in
+                if f_slot >= 0 then
+                  -- Dynamic call: compile arg, LOAD closure, APPLY
+                  (((0, arg), ((22, f_slot), rest)), bc, sc, ns, segs, fns)
+                else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
         else if kind == 13 then
-          let bd = list_nth (ast.2) 0 in let ih = if tuple_len ast > 3 then ast.3 else 0 in
-          if ih != 0 then (((0, bd), ((11, sc), rest)), bc, list_append (list_append sc (payload, ns)) (ih, ns + 1), ns + 2, segs, fns)
-          else (((0, bd), ((11, sc), rest)), bc, list_append sc (payload, ns), ns + 1, segs, fns)
+          -- Lambda as value: compile as closure (code segment + push entry PC)
+          let bd = list_nth (ast.2) 0 in
+          (((20, payload, bd), rest), bc, sc, ns, segs, fns)
         else if kind == 14 then
           let binding = (ast.2).0 in let bd = (ast.2).1 in let slot = ns in
           if binding.0 == 98 then
@@ -356,6 +366,20 @@ let compile_program tree =
           let b2 = fold b1 (\b i -> list_concat b (15, sn - 1 - i)) (sn - 2) in
           let b3 = list_concat b2 (14, sn) in
           (rest, b3, sc, ns, segs, fns)
+      else if tag == 20 then
+        -- MAKE_CLOSURE: compile Lambda body as code segment, push entry PC
+        let ph = item.1 in let bd = item.2 in
+        (((0, bd), ((21, 0), rest)), (), ((ph, 0),), 1, ((bc, sc, ns), segs), fns)
+      else if tag == 21 then
+        -- MAKE_CLOSURE_END: append HALT, merge with JMP skip, push entry PC
+        let fbc = list_concat bc (0,) in
+        let sv = segs.0 in let sbc = sv.0 in let ssc = sv.1 in let sns = sv.2 in
+        let fl = tuple_len fbc in let sl = tuple_len sbc in
+        let entry_pc = sl + 2 in
+        (rest, list_concat (list_concat (list_concat sbc (16, 2 + fl)) fbc) (1, entry_pc), ssc, sns, segs.1, fns)
+      else if tag == 22 then
+        -- APPLY_VAR: emit LOAD slot, APPLY(44) for dynamic function call
+        (rest, list_concat bc (14, item.1, 44), sc, ns, segs, fns)
       else (rest, bc, sc, ns, segs, fns)
   ) 5000000 in
   list_concat (final_state.1) (0,)
