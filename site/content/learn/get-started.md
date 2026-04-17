@@ -6,165 +6,122 @@ weight: 10
 
 ## Install {#install}
 
-IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is included in the repository -- no build step required.
-
-Optionally, **Lean 4** ([elan](https://github.com/leanprover/elan) or `nix-shell -p lean4` on NixOS) is needed if you want to rebuild the proof kernel.
+IRIS ships as a self-contained binary. Clone the repository and add it to your PATH:
 
 ```bash
-# Clone the repository
 git clone https://github.com/boj/iris.git
 cd iris
-
-# Add iris-stage0 to your PATH
 export PATH="$PWD/bootstrap:$PATH"
 ```
 
-The `iris-stage0` binary is at `bootstrap/iris-stage0`.
+That gives you two commands:
+- `iris-native` -- compile and run single-file programs
+- `iris-build` -- compile and run multi-file programs with imports
 
-## Run a Program {#run}
+No dependencies required. Optionally, install [Lean 4](https://github.com/leanprover/elan) to use the proof kernel.
 
-A library of example programs is included. Try running the factorial example:
-
-```bash
-iris-stage0 run examples/algorithms/factorial.iris 10
-# Output: 3628800
-```
-
-Or Fibonacci:
-
-```bash
-iris-stage0 run examples/algorithms/fibonacci.iris 10
-# Output: 55
-```
-
-## Write Your First Program {#first-program}
+## Hello world {#hello-world}
 
 Create a file called `hello.iris`:
 
 ```iris
--- Greatest common divisor
-let rec gcd a b : Int -> Int -> Int [cost: Unknown] =
+let rec factorial n : Int -> Int =
+  if n <= 1 then 1
+  else n * factorial (n - 1)
+```
+
+Run it with an argument:
+
+```bash
+iris-native hello.iris 10
+# 3628800
+```
+
+`iris-native` compiles the source to native x86-64, finds the last top-level binding, applies the command-line arguments, and prints the result.
+
+## Pattern matching {#pattern-matching}
+
+IRIS has algebraic data types (sum types) with pattern matching. Create `shapes.iris`:
+
+```iris
+type Shape = Circle(Int) | Rect(Int, Int)
+
+let area s : Shape -> Int =
+    match s with
+      | Circle(r) -> 3 * r * r
+      | Rect(w, h) -> w * h
+
+let describe s : Shape -> Int =
+    match s with
+      | Circle(_) -> 0
+      | Rect(_, _) -> 1
+```
+
+Types are declared with `type Name = Constructor(fields) | ...`. Pattern matching uses `match ... with` and `|`-separated arms.
+
+## Let bindings and higher-order functions {#let-and-hof}
+
+Use `let ... in` for local bindings and lambdas for anonymous functions:
+
+```iris
+let rec fast_pow base exp : Int -> Int -> Int =
+  if exp == 0 then 1
+  else if exp % 2 == 0 then
+    let half = fast_pow base (exp / 2) in
+    half * half
+  else base * fast_pow base (exp - 1)
+```
+
+Fold over a range with a higher-order function:
+
+```iris
+let sum_to n : Int -> Int =
+  fold 0 (+) n
+```
+
+## Multi-file projects with imports {#imports}
+
+Split code across files using `import`:
+
+```iris
+-- math.iris
+let rec gcd a b : Int -> Int -> Int =
   if b == 0 then a
   else gcd b (a % b)
 ```
 
-Run it:
-
-```bash
-iris-stage0 run hello.iris 48 18
-# Output: 6
-```
-
-## Define Custom Types {#custom-types}
-
-Algebraic data types (sum types with named constructors and pattern matching) are first-class:
-
 ```iris
-type Result = Ok(Int) | Err(Int)
+-- main.iris
+import "math.iris" as Math
 
-let safe_divide a b : Int -> Int -> Int =
-    if b == 0 then Err 0
-    else Ok (a / b)
-
-let show_result r : Int -> Int =
-    match r with
-      | Ok(v) -> v
-      | Err(e) -> 0 - 1
+let result = Math.gcd 48 18
 ```
 
-You can also pattern match on imported types. Here, `Opt.map` applies a lambda to an `Option` value, and we destructure the result:
-
-```iris
-import "stdlib/option.iris" as Opt
-
--- Use imported HOFs with local lambdas
-let doubled = Opt.map (Some(21)) (\x -> x * 2)    -- Some(42)
-
--- Pattern match on results
-match doubled with
-| Some(v) -> v    -- 42
-| None -> 0
-```
-
-See [examples/algebraic-types/](https://github.com/boj/iris/tree/main/examples/algebraic-types) for Option, Result, linked lists, and state machines.
-
-## Import Standard Library Modules {#imports}
-
-Path-based imports let you pull in standard library modules to
-work with common patterns like optional values and error handling:
-
-```iris
-import "stdlib/option.iris" as Opt
-import "stdlib/result.iris" as Res
-
-let safe_head xs : Tuple -> Option =
-  if list_len xs == 0 then None
-  else Some (list_nth xs 0)
-
-let val = unwrap_or (safe_head (1, 2, 3)) 0  -- 1
-```
-
-Paths are resolved relative to the importing file. All top-level declarations
-and constructors from the imported file become available in scope.
-
-Higher-order functions like `map`, `filter`, and `and_then` work correctly across import boundaries. You can pass lambdas to functions defined in imported modules and pattern match on the results they return.
-
-## Interactive REPL {#repl}
+Run with `iris-build`, which resolves imports before compilation:
 
 ```bash
-iris-stage0 repl
+iris-build run main.iris
+# 6
 ```
 
-## Type-Check a Program {#check}
+Import paths are relative to the importing file. All top-level bindings and constructors from the imported module become available under the qualified name.
 
-Verify a program's correctness obligations:
+## iris-native vs iris-build {#tools}
 
-```bash
-iris-stage0 check examples/algorithms/factorial.iris
-# Output: [OK] factorial: 5/5 obligations satisfied (score: 1.00)
-```
+| Command | Use case |
+|---------|----------|
+| `iris-native <file> <args>` | Single-file programs, no imports |
+| `iris-native --compile <file>` | Compile to bytecodes (JSON) |
+| `iris-build run <file> [args]` | Multi-file programs with imports |
+| `iris-build compile <file> -o out` | Compile multi-file to native binary |
+| `bootstrap/build-native-self` | Rebuild the compiler from its own source |
 
-## Evolve a Solution {#evolve}
+`iris-native` is the core compiler binary, itself built from IRIS source. `iris-build` is a thin wrapper that resolves imports, then delegates to `iris-native`.
 
-Provide a specification and let the solver evolve a solution:
+## What's next {#next}
 
-```bash
-iris-stage0 run solve_spec.iris
-```
-
-## Observation-Driven Improvement {#improve}
-
-Run any program with `--improve` and the runtime automatically traces function calls, builds test cases from observed I/O, evolves faster implementations, and hot-swaps them in:
-
-```bash
-iris-stage0 run --improve examples/algorithms/factorial.iris 10
-```
-
-No manual specs needed. The program improves itself from its own behavior. See [Evolution & Improvement](/learn/daemon/) for options and details.
-
-## CLI Commands {#cli-commands}
-
-`iris-stage0` is the self-hosted IRIS binary. It supports the following commands:
-
-```bash
-# Compile a program to SemanticGraph
-iris-stage0 compile <file.iris>
-
-# Run a program
-iris-stage0 run <file.iris> [args...]
-
-# Build a native binary
-iris-stage0 build <file.iris>
-
-# Run tests
-iris-stage0 test
-
-# Rebuild the bootstrap binary
-iris-stage0 rebuild
-```
-
-## What's Next {#next}
-
-- Read the [Language Guide](/learn/language/) for full syntax reference
-- Explore the [Standard Library](/learn/stdlib/)
-- Understand the [Architecture](/learn/architecture/)
+- [Language guide](/learn/language/) -- full syntax reference
+- [Standard library](/learn/stdlib/) -- Option, Result, collections, I/O
+- [Type system](/learn/type-system/) -- refinement types and cost annotations
+- [Architecture](/learn/architecture/) -- how the compiler pipeline works
+- Browse [examples/](https://github.com/boj/iris/tree/main/examples) for algorithms, data structures, parsers, and more

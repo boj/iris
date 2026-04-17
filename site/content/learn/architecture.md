@@ -1,176 +1,186 @@
 ---
 title: "Architecture"
-description: "The four-layer IRIS architecture: evolution, semantics, verification, and hardware."
+description: "How IRIS programs are compiled to native x86-64 and executed."
 weight: 80
 ---
 
-IRIS is a four-layer stack. Each layer operates on a single canonical representation: the SemanticGraph.
+IRIS programs are compiled from source to bytecodes and executed by a native
+x86-64 VM. The entire compilation pipeline is written in IRIS and compiles
+itself -- a verified fixed point.
+
+## Compilation Pipeline {#pipeline}
 
 ```
-L0  Evolution        -- population search (NSGA-II + lexicase + novelty)
-L1  Semantics        -- SemanticGraph (20 node kinds, BLAKE3 content-addressed)
-L2  Verification     -- LCF proof kernel (20 inference rules, Lean 4 formalization)
-L3  Hardware         -- iris-stage0 evaluator + native x86-64 + CLCU (AVX-512)
+source.iris
+    |
+    v
+tokenizer.iris      Lexes source into tokens
+    |
+    v
+iris_parser.iris    Parses tokens into an AST
+    |
+    v
+ast_compile.iris    Compiles AST to flat bytecodes
+    |
+    v
+native_vm.iris      Hand-assembled x86-64 VM executes bytecodes
 ```
 
-## SemanticGraph (L1) {#semanticgraph}
+Each stage is a `.iris` program. The tokenizer, parser, and AST compiler are
+compiled to bytecodes by the same AST compiler, then executed by the same
+native VM. This is how the compiler compiles itself.
 
-The SemanticGraph is the canonical program representation. Every program -- whether written by hand, compiled from `.iris` files, or bred by evolution -- is a typed DAG with 20 node kinds.
+### Tokenizer
 
-### Node Kinds {#node-kinds}
+`src/iris-programs/syntax/tokenizer.iris` -- Lexes source text into a token
+stream. Recognizes keywords (`let`, `if`, `then`, `else`, `match`, `with`,
+`import`, `as`, `type`, `rec`), operators, identifiers, integers, strings, and
+comments (`--`).
 
-| Tag | Kind | Purpose |
-|-----|------|---------|
-| `0x00` | Prim | Primitive operation (~50 opcodes) |
-| `0x01` | Apply | Function application |
-| `0x02` | Lambda | Abstraction (closure) |
-| `0x03` | Let | Local binding |
-| `0x04` | Match | Pattern matching |
-| `0x05` | Lit | Literal value |
-| `0x06` | Ref | Cross-fragment call |
-| `0x07` | Neural | Neural computation layer |
-| `0x08` | Fold | Structural recursion (catamorphism) |
-| `0x09` | Unfold | Corecursion (anamorphism) |
-| `0x0A` | Effect | Side effect descriptor |
-| `0x0B` | Tuple | Product constructor |
-| `0x0C` | Inject | Sum constructor |
-| `0x0D` | Project | Product elimination |
-| `0x0E` | TypeAbst | Type abstraction |
-| `0x0F` | TypeApp | Type application |
-| `0x10` | LetRec | Recursive binding (guarded) |
-| `0x11` | Guard | Runtime guard (conditional) |
-| `0x12` | Rewrite | Verified rewrite |
-| `0x13` | Extern | External function |
+### Parser
 
-Each node carries a `NodeId` (64-bit BLAKE3 truncated), a type reference, a cost term, an arity, and operation-specific payload. Nodes are content-addressed -- identical subgraphs share the same ID.
+`src/iris-programs/syntax/iris_parser.iris` -- Recursive-descent parser that
+produces an AST. Handles `let`/`let rec` bindings, lambda expressions, `if`/`then`/`else`,
+`match`/`with` pattern matching, function application, infix operators, tuples,
+imports, and ADT definitions.
 
-### How ADTs Compile {#adt-compilation}
+### AST Compiler
 
-When you write `type Option = Some(Int) | None`, the compiler:
+`src/iris-programs/compiler/ast_compile_single.iris` -- Compiles an AST to a
+flat tuple of bytecodes. Handles multi-binding modules by wrapping prior
+declarations as `Let`/`in` bindings. Supports recursive functions, lambda
+inlining, multi-parameter functions, and scope tracking.
 
-1. Creates a `TypeDef::Sum([(Tag(0), Int), (Tag(1), Unit)])` in the type environment
-2. Binds `Some` as a constructor that emits `Inject { tag: 0 }` nodes
-3. Binds `None` as a bare constructor emitting `Inject { tag: 1 }` with Unit payload
-4. Compiles `match` arms with constructor patterns to `Match` nodes with tag-based dispatch
-5. Arms that bind inner values (e.g., `Some(v)`) are wrapped in `Lambda` nodes so the evaluator can pass the payload
+## Native VM {#native-vm}
 
-## Evolution (L0) {#evolution}
+`src/iris-programs/compiler/native_vm.iris` (~960 lines) -- A bytecode
+interpreter written as hand-assembled x86-64 machine code, emitted as byte
+literals from IRIS code.
 
-Programs are evolved through multi-objective genetic search.
+### Registers
 
-### Mutation Operators {#mutation-operators}
+| Register | Role |
+|----------|------|
+| `r12` | Program counter (index into bytecode) |
+| `r13` | Value stack pointer (grows downward) |
+| `r14` | Bytecode tuple pointer |
+| `r15` | Heap bump allocator |
+| `rbx` | Locals array pointer |
 
-16 mutation operators transform program graphs:
+### Opcodes
 
-| ID | Operator | Description |
-|----|----------|-------------|
-| 0 | `insert_node` | Add a new node to the graph |
-| 1 | `delete_node` | Remove a node |
-| 2 | `rewire_edge` | Rewire edges between nodes |
-| 3 | `replace_kind` | Change a node's kind tag |
-| 4 | `replace_prim` | Change a node's opcode |
-| 5 | `mutate_literal` | Modify a literal value |
-| 6 | `duplicate_subgraph` | Clone a subgraph |
-| 7 | `wrap_in_guard` | Add a conditional guard |
-| 8 | `annotate_cost` | Add cost annotation |
-| 9 | `wrap_in_map` | Wrap in map operation |
-| 10 | `wrap_in_filter` | Wrap in filter operation |
-| 11 | `compose_stages` | Compose pipeline stages |
-| 12 | `insert_zip` | Add zip operation |
-| 13 | `swap_fold_op` | Change fold accumulator |
-| 14 | `add_guard_condition` | Add guard predicate |
-| 15 | `extract_to_ref` | Extract to cross-fragment ref |
+The VM implements 30+ opcodes:
 
-### Selection Strategies {#selection}
+| Code | Name | Code | Name |
+|------|------|------|------|
+| 0 | `HALT` | 16 | `JMP` |
+| 1 | `PUSH` | 17 | `JZ` |
+| 2 | `ADD` | 18 | `MAKE_TUPLE` |
+| 3 | `SUB` | 19 | `TUPLE_GET` |
+| 4 | `MUL` | 21 | `TUPLE_LEN` |
+| 5 | `DIV` | 22 | `LIST_APPEND` |
+| 6 | `MOD` | 23 | `BITAND` |
+| 7 | `NEG` | 24 | `SHR` |
+| 8 | `EQ` | 25 | `FOLD_BEGIN` |
+| 9 | `LT` | 26 | `FOLD_END` |
+| 10 | `GT` | 27 | `LIST_RANGE` |
+| 11 | `NE` | 29 | `PUSH_STR_PTR` |
+| 12 | `LE` | 30 | `STR_LEN` |
+| 13 | `GE` | 31 | `CHAR_AT` |
+| 14 | `LOAD` | 32 | `STR_CONCAT` |
+| 15 | `STORE` | 33 | `STR_SLICE` |
+| | | 34 | `LIST_CONCAT` |
+| | | 39 | `FILE_READ` |
+| | | 40 | `DEBUG_PRINT` |
 
-- **Tournament selection** -- binary tournament on fitness
-- **Lexicase selection** -- sequential filtering on individual test cases
-- **NSGA-II** -- multi-objective Pareto optimization
-- **Novelty search** -- reward behavioral novelty over raw fitness
+The dispatch loop loads an opcode from `bytecode[r12]`, walks a
+compare-and-jump chain, executes the handler, and jumps back to the loop top.
 
-### Population Management {#population}
+### Memory Layout
 
-- **Pareto ranking** -- assign non-dominated rank
-- **Crowding distance** -- maintain population diversity
-- **Elitism** -- preserve top individuals across generations
-- **Death culling** -- remove unfit individuals
+The VM uses a fixed stack frame:
 
-### Crossover {#crossover}
+- **Value stack** (`[rbp-256..rbp-512]`) -- operand stack, grows downward
+- **Locals** (`[rbp-768..rbp-512]`) -- 32 local variable slots (8 bytes each)
+- **Scratch slots** (`[rbp-136..rbp-176]`) -- temporary storage for string/file ops
+- **Heap** -- bump-allocated via `r15`, used for tuples and strings
 
-The Graph-Embedding Codec (GIN-VAE) enables crossover by:
+Tuples and strings share a tagged-pointer format. Strings use tag `1` with
+bytes packed after an 8-byte header.
 
-1. Encoding parent graphs into embedding vectors
-2. Interpolating in embedding space
-3. Decoding back to valid graphs
-4. Running a 10-phase structural repair pipeline
+## Self-Hosting {#self-hosting}
 
-The GIN-VAE is trained on a 1,045-program corpus (all `.iris` programs, evolution Pareto fronts, self-write mutation programs, bootstrap interpreter, and seed generators). The LearnedCodec achieves 0.012 reconstruction loss.
+The compiler compiles itself through this loop:
 
-### Improvement Tracking (PT3) {#improvement-tracking}
+1. `iris-native` loads the tokenizer, parser, and AST compiler as `.iris` source
+2. Each stage is compiled to bytecodes by `ast_compile_single.iris`
+3. The bytecodes are executed by `native_vm.iris` (which is itself compiled the same way)
+4. The output is a new `iris-native` binary
 
-The evolution system tracks improvement dynamics for each component:
+The `bootstrap/build-native-self` script automates this. The only non-IRIS
+dependency is the ELF stub template (frozen x86 machine code for the startup
+sequence). Everything else -- tokenization, parsing, compilation, VM execution
+-- is IRIS compiling IRIS.
 
-- **Improvement rate** -- linear regression over sliding-window latency measurements
-- **Acceleration** -- second derivative of latency; negative acceleration means improvements are compounding
-- **Causal operator attribution** -- per-operator statistics tracking success rate, times used, and average fitness delta across 16 mutation operators
-- **Adaptive weighting** -- mutation operator selection weights adjusted proportional to observed success rate and improvement magnitude
+### Bootstrap Chain
 
-When the tracker detects compounding improvements (acceleration < 0), the daemon increases investment in that component's evolution. When deceleration is detected, it recognizes a plateau and redirects resources.
+```
+iris-stage0 (frozen seed)
+    |  compiles + runs
+    v
+iris-native (self-hosted compiler + VM)
+    |  compiles itself
+    v
+iris-native' (reproduced binary -- fixed point)
+```
 
-## Verification (L2) {#verification}
+`iris-stage0` is the frozen bootstrap binary. It contains a tree-walking
+evaluator and is used only to bootstrap the first `iris-native`. After that,
+`iris-native` can reproduce itself.
 
-The proof kernel is the trusted core. It implements CaCIC (Cost-aware Calculus of Inductive Constructions) with 20 inference rules.
+## SemanticGraph {#semanticgraph}
 
-See the [Verification](/learn/verification/) page for a deep dive into the proof kernel, refinement types, the checker, and the Lean formalization.
+The SemanticGraph is the canonical program representation used by `iris-stage0`.
+It is a typed DAG with 20 node kinds:
 
-### Properties {#verification-properties}
+| Tag | Kind | Tag | Kind |
+|-----|------|-----|------|
+| 0x00 | Prim | 0x0A | Effect |
+| 0x01 | Apply | 0x0B | Tuple |
+| 0x02 | Lambda | 0x0C | Inject |
+| 0x03 | Let | 0x0D | Project |
+| 0x04 | Match | 0x0E | TypeAbst |
+| 0x05 | Lit | 0x0F | TypeApp |
+| 0x06 | Ref | 0x10 | LetRec |
+| 0x07 | Neural | 0x11 | Guard |
+| 0x08 | Fold | 0x12 | Rewrite |
+| 0x09 | Unfold | 0x13 | Extern |
 
-- **LCF-style** -- proofs can only be constructed through the kernel's API; no external code can forge a `Theorem` value
-- **Refinement types** -- predicates on types: `{x: Int | x > 0}`
-- **Cost annotations** -- asymptotic bounds verified by the proof kernel (warnings at Tier 0/1, hard errors at Tier 2+) and used as evolution fitness objectives
-- **Lean 4 formalization** -- the 20 rules are mirrored in Lean 4 with consistency proofs
+Nodes are content-addressed via BLAKE3-truncated 64-bit IDs. Identical
+subgraphs share the same ID automatically.
 
-## Execution (L3) {#execution}
+The native compilation pipeline (`iris-native`) works with bytecodes directly
+and does not use SemanticGraph at runtime. SemanticGraph remains the format for
+`iris-stage0` commands (`compile`, `run`, `direct`, `interp`).
 
-Programs run through `iris-stage0` with optional native compilation and effect dispatch:
+## Four-Layer Model {#layers}
 
-### Bootstrap Evaluator {#evaluator}
+IRIS has additional capabilities organized into four layers:
 
-The `iris-stage0` evaluator handles all 20 node kinds directly. It dispatches primitive operations (50+ opcodes), manages closures, and evaluates fold/unfold recursion. The meta-circular interpreter (`full_interpreter.iris`) can also dispatch on node kind tags via graph introspection.
+```
+L0  Evolution      Population search, mutation, selection
+L1  Semantics      SemanticGraph (20 node kinds, BLAKE3 content-addressed)
+L2  Verification   LCF proof kernel (20 inference rules, Lean 4)
+L3  Hardware       Native x86-64 VM, iris-stage0 evaluator
+```
 
-**Effect Dispatch:** Opcode `0xA1` (`perform_effect`) dispatches all 44 effect tags through an `EffectHandler`. The `RuntimeEffectHandler` implements real I/O (files, TCP, environment, time, random). The `CapabilityGuardHandler` wraps any handler and enforces capability restrictions before each effect call.
+**L0 -- Evolution.** Programs can be evolved through multi-objective genetic
+search (NSGA-II, lexicase selection, novelty search) with 16 mutation operators.
+See `src/iris-programs/evolution/`.
 
-**Performance:** ~200 ns per arithmetic operation (interpreted).
+**L2 -- Verification.** An LCF-style proof kernel implements CaCIC (Cost-aware
+Calculus of Inductive Constructions) with 20 inference rules, formalized in Lean
+4. Runs as an IPC subprocess. See [Verification](/learn/verification/).
 
-### JIT Compiler (x86-64) {#jit}
-
-The JIT generates x86-64 machine code, compiles it via the `mmap_exec` effect (W^X memory mapping), and invokes compiled functions via `call_native` (System V AMD64 ABI, up to 6 i64 arguments).
-
-**W^X enforcement:** Pages are allocated read-write, code bytes are copied in, then `mprotect` flips them to read-execute. Pages are never simultaneously writable and executable. Each region is limited to 1 MiB. All regions are `munmap`'d on cleanup.
-
-**Performance:** JIT `add` runs in ~64 ns (3.1x faster than interpreted). Capability-gated (sandboxes block `MmapExec`/`CallNative`).
-
-### CLCU (AVX-512) {#clcu}
-
-Cache-Line Compute Units: 64-byte containers designed for 16-lane SIMD execution. Includes adaptive prefetch and branch predictor hints.
-
-## Self-Improvement Daemon {#daemon}
-
-The daemon continuously profiles running components, evolves faster replacements, and hot-swaps them in. See [Evolution & Improvement](/learn/daemon/) for the full pipeline.
-
-Key properties:
-- Performance gate: replacements must be 100% correct and within 2x slowdown
-- BLAKE3 Merkle audit chain for tamper-evident modification history
-- Stagnation detection: stops investing in components that plateau
-- State persists to disk; improvements survive restarts
-
-## Component Map {#components}
-
-IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is the sole execution engine, with the Lean 4 proof kernel as an IPC subprocess:
-
-| Component | Purpose |
-|-----------|---------|
-| `bootstrap/iris-stage0` | Frozen self-hosted binary: compiler, evaluator, all CLI commands |
-| `bootstrap/*.json` | Pre-compiled pipeline (tokenizer, parser, lowerer) |
-| `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, runs as IPC subprocess |
-| `src/iris-programs/` | 372 `.iris` programs: stdlib, compiler passes, evolution, LSP, deploy |
+**L3 -- Hardware.** The execution layer: `native_vm.iris` for compiled programs,
+`iris-stage0` for interpreted evaluation, and effect dispatch for I/O.

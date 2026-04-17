@@ -2,58 +2,56 @@
 title: "IRIS Programming Language"
 ---
 
-# A language that evolves itself.
+# A functional language that compiles itself.
 
-IRIS is a self-improving programming language where programs are typed DAGs that can inspect, modify, and optimize themselves at runtime. An evolution engine breeds better implementations. A proof kernel verifies they're correct.
+IRIS is a self-hosted functional programming language with algebraic data types, pattern matching, and native x86-64 compilation. The entire toolchain -- tokenizer, parser, compiler, code generator -- is written in IRIS.
 
 ```iris
--- Evolve a sorting function from a specification
-let rec sort xs : Tuple -> Tuple [cost: NLogN(xs)]
-  requires list_len xs >= 0
-  ensures result == sorted(xs)
-  = if list_len xs <= 1 then xs
-    else let pivot = list_nth xs 0 in
-         let less = filter (\x -> x < pivot) xs in
-         let greater = filter (\x -> x >= pivot) (list_drop xs 1) in
-         list_concat (sort less) (list_append (sort greater) pivot)
+type Tree = Leaf(Int) | Node(Tree, Tree)
+
+let rec depth t : Tree -> Int =
+    match t with
+      | Leaf(_) -> 1
+      | Node(left, right) ->
+          let l = depth left in
+          let r = depth right in
+          1 + if l > r then l else r
+
+let rec sum_tree t : Tree -> Int =
+    match t with
+      | Leaf(n) -> n
+      | Node(left, right) -> sum_tree left + sum_tree right
 ```
 
-## Why IRIS?
+## Features
 
-**Programs as values.** Every IRIS program is a content-addressed SemanticGraph, a typed DAG with 20 node kinds. Programs can reify themselves with `self_graph`, modify their own structure, and evaluate the result. This isn't metaprogramming bolted on. It's the foundation.
+**Self-hosted toolchain.** The IRIS compiler is written in IRIS. The tokenizer, parser, AST compiler, and native code generator are all `.iris` source files compiled by `iris-native` -- which was itself built from those same files. Run `bootstrap/build-native-self` to rebuild the compiler from source.
 
-**Evolution, not just compilation.** The NSGA-II evolution engine breeds program variants across multiple objectives: correctness, performance, and code size. 16 mutation operators transform graphs. Phase-adaptive selection balances exploration and exploitation.
+**Algebraic data types and pattern matching.** Define sum types with constructors and destructure them with exhaustive pattern matching. Option, Result, linked lists, state machines -- the usual functional toolkit, with no special syntax for built-in types.
 
-**Verified by construction.** An LCF-style proof kernel with 20 inference rules checks every candidate. Refinement types express preconditions (`requires`) and postconditions (`ensures`). Algebraic data types with exhaustive pattern matching. A Lean 4 formalization proves the kernel sound.
+**Native x86-64 compilation.** IRIS compiles to native machine code. No interpreter overhead for production use. The compiler handles recursion, higher-order functions, closures, let bindings, and tail calls.
 
-**Modules and imports.** Path-based imports (`import "stdlib/option.iris" as Opt`) let you compose programs from reusable modules. A standard library (Option, Result, Either, Ordering, math, collections, I/O) provides common patterns out of the box. Content-addressed hash imports ensure reproducible builds.
+**Modules and imports.** Organize code across files with path-based imports. `import "stdlib/option.iris" as Opt` brings a module into scope with qualified access. A standard library provides Option, Result, collections, math, and I/O.
 
-## The four layers
-
-```
-L0  Evolution      NSGA-II search: 16 mutation ops, lexicase + novelty selection
-L1  Semantics      SemanticGraph: 20 node kinds, BLAKE3 content-addressed DAGs
-L2  Verification   LCF proof kernel: 20 rules, refinement types, cost analysis
-L3  Hardware       Tree-walker → flat eval → native AVX x86-64 + CLCU (AVX-512)
-```
-
-## Get started
+## Quick start
 
 ```bash
 git clone https://github.com/boj/iris.git && cd iris
+export PATH="$PWD/bootstrap:$PATH"
 
 # Run a program
-iris-stage0 run examples/algorithms/fibonacci.iris
+iris-native examples/algorithms/factorial.iris 12
+# 479001600
 
-# Evolve a solution from test cases
-iris-stage0 run solve_spec.iris
+# Multi-file project with imports
+iris-build run my_project/main.iris
 
-# Run with observation-driven improvement
-iris-stage0 run --improve examples/algorithms/factorial.iris 10
+# Rebuild the compiler from its own source
+bootstrap/build-native-self
 ```
 
 <div class="cta">
 
-[Install →](/learn/get-started/) · [Learn the language →](/learn/language/) · [Architecture →](/learn/architecture/) · [GitHub](https://github.com/boj/iris)
+[Get started -->](/learn/get-started/) · [Language guide -->](/learn/language/) · [Standard library -->](/learn/stdlib/) · [GitHub](https://github.com/boj/iris)
 
 </div>

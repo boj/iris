@@ -1,366 +1,163 @@
 ---
 title: "Tooling"
-description: "CLI commands, REPL, LSP, and editor integration."
+description: "CLI tools for compiling, running, and building IRIS programs."
 weight: 85
 ---
 
-## iris run {#run}
+IRIS ships four tools. Two are self-hosted (written in IRIS, compiled to native x86-64). Two are bootstrap infrastructure.
 
-Execute an IRIS program. Parses the source, compiles to SemanticGraph fragments, and evaluates the `main` binding (or the last definition if no `main` exists).
+## iris-native {#iris-native}
+
+The self-hosted native compiler. Reads IRIS source, tokenizes, parses, compiles to bytecodes, and executes -- all in native machine code. No interpreter, no tree-walker.
+
+### Compile and run {#native-run}
 
 ```bash
-iris run [flags] <file.iris> [args...]
+iris-native <source.iris> <arg>
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--watch` | Re-run automatically when the file changes (polls every 500ms) |
-| `--improve` | Enable observation-driven self-improvement (background daemon) |
-| `--improve-threshold N` | Max slowdown factor for performance gate (default: 2.0) |
-| `--improve-min-traces N` | Min traces before attempting evolution (default: 50) |
-| `--improve-sample-rate N` | Fraction of calls to trace (default: 0.01 = 1%) |
-| `--improve-budget N` | Max seconds per evolution attempt (default: 5) |
-| `--backend MODE` | Execution backend: `auto`, `tree`, `jit`, `aot`, `clcu` (default: `tree`) |
-
-**Examples:**
+The argument is passed to the program's `main` binding. It is parsed as a typed value: integers become `Int`, everything else becomes `String`.
 
 ```bash
-# Run a program with arguments
-iris run examples/algorithms/factorial.iris 10
+iris-native examples/algorithms/factorial.iris 10
 # 3628800
 
-# Watch mode: re-runs on file save
-iris run --watch myprogram.iris
-
-# Self-improvement: evolve faster implementations at runtime
-iris run --improve server.iris
-# [improve] daemon started: min_traces=50, threshold=2.0x, budget=5s
-# [improve] attempting compute (73 test cases, avg 124.3us)
-# [improve] deployed compute (124.3us -> 68.1us, 45% faster)
+iris-native examples/classic-programs/hello_world.iris 0
+# Hello, World!
 ```
 
-CLI arguments are parsed as typed values: integers become `Int`, decimals become `Float64`, `true`/`false` become `Bool`, and everything else becomes `String`.
+### Compile only {#native-compile}
+
+```bash
+iris-native --compile <source.iris>
+```
+
+Outputs the compiled bytecodes to stdout. Used by `build-native-self` to compile pipeline stages.
+
+```bash
+iris-native --compile src/iris-programs/syntax/tokenizer.iris > tokenizer.bin
+```
+
+### How it works {#native-internals}
+
+`iris-native` is a single static ELF binary (~500KB) containing:
+
+| Section | Role |
+|---------|------|
+| Startup stub | x86-64 machine code: reads source file, dispatches to pipeline stages |
+| Native VM | Bytecode interpreter compiled from `native_vm.iris` |
+| Tokenizer | Compiled from `tokenizer.iris` |
+| Parser | Compiled from `iris_parser.iris` |
+| AST compiler | Compiled from `ast_compile_single.iris` |
+
+Every section was compiled from IRIS source. The binary has no Rust, no libc, no external dependencies.
 
 ---
 
-## iris repl {#repl}
+## iris-build {#iris-build}
 
-Interactive read-eval-print loop with persistent history. Definitions accumulate across inputs so you can build up state incrementally.
+Multi-file build tool. Resolves `import` declarations before compiling, so programs can span multiple files.
+
+### Run with imports {#build-run}
 
 ```bash
-iris repl
+iris-build run <source.iris> [args...]
 ```
 
-```
-IRIS REPL v0.1.0
-Type expressions or :help for commands.
+Iteratively resolves all `import "path" as Alias` declarations (up to 8 levels deep), inlines the imported modules, then compiles and runs via `iris-native`.
 
-iris> let x = 42
-42
-iris> x * 2 + 1
-85
-iris> let double = \n -> n * 2
-iris> double x
-84
+```bash
+iris-build run src/iris-programs/test_import.iris 0
 ```
 
-**REPL commands:**
+### Compile with imports {#build-compile}
 
-| Command | Description |
-|---------|-------------|
-| `:type <expr>` | Show the inferred type of an expression |
-| `:load <file>` | Load an `.iris` file into the current session |
-| `:list` | Show all defined names and their types |
-| `:clear` | Reset all accumulated definitions |
-| `:help` | Show available commands |
-| `:quit` | Exit the REPL |
-
-Lines ending with `\` continue on the next line for multi-line input:
-
-```
-iris> let complex = \x -> \
-  ...   let y = x * 2 in \
-  ...   y + 1
-iris> complex 10
-21
+```bash
+iris-build compile <source.iris>
 ```
 
-History is saved to `~/.iris/repl_history` between sessions.
+Same import resolution, but outputs compiled bytecodes instead of executing.
+
+### Import resolution {#import-resolution}
+
+`iris-build` uses `resolve_imports.iris` (itself an IRIS program) to expand imports. Each pass replaces one level of `import` declarations with the contents of the referenced file. Programs with deeply nested imports may require multiple passes -- the tool runs up to 8.
 
 ---
 
-## iris check {#check}
+## build-native-self {#build-native-self}
 
-Type-check and verify a program. Each definition is verified at its auto-detected tier, and the result reports how many type obligations are satisfied.
+Bootstrapping script: the compiler compiles itself. Produces a new `iris-native` binary using the existing `iris-native` as the compiler.
 
 ```bash
-iris check <file.iris>
+bootstrap/build-native-self [-o output]
 ```
 
-**Example output:**
+What it does:
+
+1. Compiles the tokenizer, parser, and AST compiler from `.iris` source using `iris-native --compile`
+2. Compiles `native_vm.iris` to x86-64 machine code by running it through `iris-native`
+3. Compiles `emit_elf_stub.iris` to generate ELF headers and the startup stub
+4. Assembles all sections into a new ELF binary
 
 ```
-[OK] factorial: 3/3 obligations satisfied (score: 1.00)
-[OK] fibonacci: 5/5 obligations satisfied (score: 1.00)
-All 2 definitions verified.
+$ bootstrap/build-native-self
+=== Self-Hosted IRIS Native Build ===
+  Tokenizer...  48152 bytes
+  Parser...     216408 bytes
+  AST compiler... 69200 bytes
+  Native VM...  11904 bytes (compiled from source)
+  ELF + Stub... 908 bytes (compiled from source)
+
+=== Self-hosted binary: bootstrap/iris-native (345672 bytes) ===
 ```
 
-On failure:
+Every byte of the output was produced by IRIS code. The only non-IRIS input is the previous `iris-native` binary used to run the compilation.
 
-```
-[FAIL] broken: 2/4 obligations satisfied (score: 0.50)
-  - node NodeId(3): expected Int, found String
-  - node NodeId(7): type mismatch in branch arms
-```
-
-Exits with code 1 if any definition fails verification.
+There is also `build-native`, which uses `iris-stage0` instead of `iris-native` to compile the pipeline stages. It serves as a fallback path when `iris-native` cannot yet compile a new version of itself.
 
 ---
 
-## iris lint {#lint}
+## iris-stage0 {#iris-stage0}
 
-Static analysis for common issues. Operates on both the AST (name-level analysis) and compiled SemanticGraph (node-count analysis).
+The frozen bootstrap binary. A JIT-based tree-walking evaluator (~8MB) written in Rust, now permanently frozen. It has a larger feature set than `iris-native` -- the goal is for `iris-native` to eventually replace it entirely.
+
+### Commands {#stage0-commands}
 
 ```bash
-iris lint <file.iris>
+iris-stage0 run <source.iris> [args...]        # Run via tree-walker
+iris-stage0 compile <source.iris> -o out.json   # Compile to JSON SemanticGraph
+iris-stage0 build <source.iris> -o binary       # Produce native binary (via stage0)
+iris-stage0 direct <program.json> [args...]     # Evaluate pre-compiled JSON
+iris-stage0 interp <interp.json> <prog.json>    # Run program through interpreter
+iris-stage0 test <dir>                          # Run test suite
 ```
 
-**Lint rules:**
+### When to use stage0 vs iris-native {#stage0-vs-native}
 
-| Code | Name | Description |
-|------|------|-------------|
-| L001 | Unused binding | A `let` binding or function parameter is never referenced |
-| L002 | Shadowed name | A binding shadows an existing name in scope |
-| L003 | Large fragment | Compiled fragment exceeds 200 nodes (complexity threshold) |
-| L004 | Missing type | Top-level function has no return type annotation |
-| L005 | Constant fold | Fold step function ignores its accumulator parameter |
+| | `iris-native` | `iris-stage0` |
+|---|---|---|
+| Written in | IRIS (self-hosted) | Rust (frozen) |
+| Binary size | ~500KB | ~8MB |
+| Multi-file imports | Via `iris-build` | Built-in |
+| Recursion | Tail calls + caller-save convention | Full recursion |
+| Higher-order functions | Supported | Supported |
+| SemanticGraph JSON output | No | Yes |
+| Test runner | No | Yes |
 
-**Example output:**
-
-```
-L001: unused binding 'temp' (line 12)
-L002: shadowed binding 'x' (line 18)
-L004: function 'process' has no return type annotation (line 5)
-L005: fold step function ignores accumulator 'acc' (line 23)
-
-4 warning(s) in myprogram.iris
-```
+Use `iris-native` (via `iris-build` for multi-file programs) for normal development. Use `iris-stage0` when you need JSON output, the test runner, or features not yet implemented in `iris-native`.
 
 ---
 
-## iris solve {#solve}
+## iris (wrapper) {#iris-wrapper}
 
-Evolve a program from test specifications. Provide input-output pairs as `-- test:` comments in the source file, and the evolution engine will synthesize a correct implementation.
-
-```bash
-iris solve [flags] <spec.iris>
-```
-
-| Flag | Description |
-|------|-------------|
-| `--population N` | Population size (default: 64) |
-| `--generations N` | Max generations (default: 500) |
-
-**Spec file format:**
-
-```iris
--- test: 0 -> 0
--- test: 1 -> 1
--- test: 5 -> 25
--- test: 10 -> 100
--- test: (3, 4) -> 7
-```
-
-Each `-- test:` line specifies an input-output mapping. Tuple inputs use `(a, b)` syntax.
-
-**Example:**
+A convenience script at `bootstrap/iris` that dispatches to the right tool:
 
 ```bash
-iris solve square.iris
-# Solving with 4 test cases (population=64, generations=500)...
-# Solution found in 23 generations (0.8s)!
-#   fitness: correctness=1.0000, performance=0.9200
-#   graph: 3 nodes, 2 edges
+iris run <source.iris> [args]          # Tree-walker via stage0
+iris run-native <source.iris> [arg]    # Compile to native, then execute
+iris build <source.iris> -o <output>   # Produce standalone native binary
+iris compile <source.iris> -o <json>   # Compile to JSON SemanticGraph
+iris test <dir>                        # Run test suite
+iris pipeline                          # Compile all pipeline stages
+iris version                           # Show version
 ```
-
----
-
-## iris store {#store}
-
-Manage the fragment cache. Improved fragments (from `--improve` or the daemon) are persisted here as content-addressed binaries.
-
-```bash
-iris store <subcommand>
-```
-
-| Subcommand | Description |
-|------------|-------------|
-| `list` | List all cached fragments with name, generation, and hash |
-| `get <name>` | Show details of a specific cached fragment |
-| `rm <name>` | Remove a cached fragment |
-| `clear` | Clear the entire cache |
-| `path` | Print the cache directory path |
-
-**Examples:**
-
-```bash
-iris store list
-# NAME                           GEN  HASH
-# compute                          3  a1b2c3d4e5f67890
-# transform                        1  f0e1d2c3b4a59687
-#
-# 2 fragment(s)
-
-iris store get compute
-# Name:       compute
-# Generation: 3
-# Hash:       a1b2c3d4e5f67890...
-# File:       /home/user/.iris/cache/a1b2c3d4e5f67890.frag
-# Size:       1248 bytes
-
-iris store path
-# /home/user/.iris/cache
-```
-
----
-
-## iris explain {#explain}
-
-Show detailed explanations for error codes. Useful when the compiler or runtime emits a terse error.
-
-```bash
-iris explain <error-code>
-```
-
-**Available error codes:**
-
-| Code | Summary |
-|------|---------|
-| E001 | Unknown identifier -- typo, missing import, or nonexistent primitive |
-| E002 | Type mismatch -- wrong type in context (wrong arg type, mismatched branches) |
-| E003 | Non-exhaustive pattern match -- missing cases in `match` expression |
-| E004 | Division by zero -- unguarded `/` or `%` with zero divisor |
-| E005 | Step limit exceeded -- infinite recursion or very large input |
-| E006 | Unused binding -- `let` introduces a name that is never used |
-
-**Example:**
-
-```bash
-iris explain E004
-# E004: Division by zero
-#
-# Integer division or modulo by zero. Guard with: if y == 0 then 0 else x / y
-```
-
----
-
-## iris daemon {#daemon}
-
-Run the continuous self-improvement daemon. Monitors the program ecosystem, evolves better implementations, and persists improvements across restarts. State is stored in `.iris-daemon/` in the current directory.
-
-```bash
-iris daemon [N] [flags]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--exec-mode MODE` | `continuous` or `interval:N` (ms). Default: `interval:800` |
-| `--improve-threshold N` | Max slowdown for performance gate (default: 2.0) |
-| `--max-stagnant N` | Give up after N failed improvement attempts (default: 5) |
-| `--max-improve-threads N` | Concurrent improvement threads (default: 2) |
-| `--max-cycles N` | Stop after N cycles (default: unlimited) |
-
-The positional argument `N` is a shorthand for `--max-cycles N`.
-
-**Example:**
-
-```bash
-# Run 100 improvement cycles
-iris daemon 100
-
-# Continuous mode with custom thresholds
-iris daemon --exec-mode continuous --improve-threshold 1.5 --max-improve-threads 4
-```
-
-See the [Evolution & Improvement](/learn/daemon/) guide for details on what the daemon does at each cycle.
-
----
-
-## iris-lsp {#lsp}
-
-Language server providing diagnostics, hover types, and completion for `.iris` files. Communicates via JSON-RPC over stdio (LSP protocol).
-
-**Capabilities:**
-
-| Feature | Description |
-|---------|-------------|
-| Diagnostics | Compile errors shown inline as you type |
-| Hover | Show inferred types on hover |
-| Completion | Keywords, primitives, and import suggestions (triggered by `.`) |
-
-### VS Code
-
-Add to `.vscode/settings.json`:
-
-```json
-{
-  "iris.serverPath": "/path/to/iris/bootstrap/iris-lsp"
-}
-```
-
-Or create a custom language configuration in `.vscode/settings.json`:
-
-```json
-{
-  "[iris]": {
-    "editor.tabSize": 2
-  },
-  "languageServerHaskell.serverExecutablePath": "/path/to/iris/bootstrap/iris-lsp"
-}
-```
-
-### Neovim (nvim-lspconfig)
-
-```lua
-local lspconfig = require('lspconfig')
-local configs = require('lspconfig.configs')
-
-configs.iris = {
-  default_config = {
-    cmd = { '/path/to/iris/bootstrap/iris-lsp' },
-    filetypes = { 'iris' },
-    root_dir = lspconfig.util.root_pattern('.git'),
-    settings = {},
-  },
-}
-
-lspconfig.iris.setup{}
-```
-
-### Helix
-
-Add to `~/.config/helix/languages.toml`:
-
-```toml
-[[language]]
-name = "iris"
-scope = "source.iris"
-file-types = ["iris"]
-comment-token = "--"
-language-servers = ["iris-lsp"]
-
-[language-server.iris-lsp]
-command = "/path/to/iris/bootstrap/iris-lsp"
-```
-
----
-
-## iris fmt {#fmt}
-
-Format IRIS source files with consistent style. Normalizes indentation, spacing, and newlines.
-
-```bash
-iris fmt <file.iris>
-```
-
-The formatter handles `let` declarations, type declarations, imports, `match` expressions, `if`/`then`/`else`, lambdas, and mutual recursion groups (`and` blocks).

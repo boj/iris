@@ -1,173 +1,126 @@
 ---
 title: "Tools"
-description: "IRIS developer tools: CLI, LSP, and more."
+description: "IRIS developer tools: compiler, build system, and bootstrap."
 layout: "single"
 ---
 
-## The `iris` CLI {#cli}
+## iris-native {#iris-native}
 
-The IRIS command-line tool is your primary interface. One binary handles running, checking, evolving, and deploying programs.
-
-| Command | Description |
-|---------|-------------|
-| `iris run` | Execute an IRIS program |
-| `iris solve` | Evolve a solution from a specification |
-| `iris run --improve` | Run with observation-driven improvement |
-| `iris check` | Type-check correctness obligations |
-| `iris repl` | Interactive REPL |
-| `iris deploy` | Generate a standalone native binary |
-
-### Run a Program {#run}
+The self-hosted IRIS compiler and runtime. Compiles `.iris` source files to
+native x86-64 binaries through a pipeline written entirely in IRIS: tokenizer,
+parser, AST compiler, and native VM.
 
 ```bash
-iris run examples/algorithms/factorial.iris 10
-# Output: 3628800
+# Compile and run a program
+bootstrap/iris-native --run src/iris-programs/compiler/ast_compile_single.iris
+
+# Compile a pipeline stage
+bootstrap/iris-native --compile src/iris-programs/syntax/tokenizer.iris
 ```
 
-### Type-Check {#check}
+`iris-native` is itself an x86-64 ELF binary produced by the IRIS compiler. It
+can compile its own pipeline stages, making it a self-hosting compiler.
 
-Verify correctness obligations without executing:
+## iris-build {#iris-build}
+
+Multi-file build tool. Resolves `import` statements, compiles dependencies, and
+produces a single binary.
 
 ```bash
-iris check examples/algorithms/factorial.iris
-# [OK] factorial: 5/5 obligations satisfied (score: 1.00)
+# Run a program with imports
+bootstrap/iris-build run src/myprogram.iris
+
+# Compile to a standalone binary
+bootstrap/iris-build compile src/myprogram.iris -o output
 ```
 
-### Evolve a Solution {#evolve}
+Import syntax in `.iris` files:
 
-Provide a specification and let IRIS breed a correct implementation:
+```iris
+import "stdlib/option.iris" as Opt
+Opt.unwrap_or x 0
+```
+
+## iris (wrapper) {#iris-cli}
+
+Convenience wrapper around `iris-stage0` and `iris-native`. Provides a unified
+CLI for common operations.
 
 ```bash
-iris solve spec.iris
+iris run program.iris [args]          # Run via tree-walker
+iris run-native program.iris [arg]    # Compile to native, then execute
+iris build program.iris -o output     # Produce standalone native binary
+iris pipeline                         # Compile all pipeline stages
+iris compile program.iris -o out.json # Compile to JSON SemanticGraph
+iris test dir/                        # Run test suite
+iris version                          # Show version
 ```
 
-### Interactive REPL {#repl}
+## iris-stage0 {#iris-stage0}
+
+The frozen bootstrap binary. Contains a tree-walking evaluator that operates on
+SemanticGraphs. Used to bootstrap `iris-native` and as a fallback execution
+engine.
 
 ```bash
-iris repl
+iris-stage0 run program.iris [args]        # Execute a program
+iris-stage0 compile source.iris -o out.json # Compile to SemanticGraph
+iris-stage0 build source.iris -o binary    # Build native binary
+iris-stage0 direct program.json [args]     # Run pre-compiled JSON
+iris-stage0 interp interp.json prog.json   # Run program through interpreter
+iris-stage0 test src/iris-programs/        # Run test suite
+iris-stage0 rebuild                        # Rebuild bootstrap pipeline
 ```
 
-### Observation-Driven Improvement {#improve}
+`iris-stage0` is frozen -- it never changes. All improvements happen in `.iris`
+files that run on top of it.
 
-Run any program with automatic tracing, evolution, and hot-swap:
+## build-native-self {#build-native-self}
+
+Self-hosted binary builder. Compiles all pipeline stages using `iris-native`
+itself, then packages them into a new `iris-native` binary.
 
 ```bash
-iris run --improve myprogram.iris 42
+bootstrap/build-native-self -o bootstrap/iris-native
 ```
 
-### Deploy {#deploy}
-
-Generate a standalone native binary:
-
-```bash
-iris-stage0 build examples/algorithms/factorial.iris -o factorial
-./factorial 10
-# Output: 3628800
-```
+This is the self-hosting loop: `iris-native` compiles the tokenizer, parser, AST
+compiler, and native VM from `.iris` source, producing a new copy of itself. The
+only non-IRIS dependency is the ELF stub template.
 
 ## Build from Source {#build}
 
-IRIS is fully self-hosted. The frozen bootstrap binary (`iris-stage0`) is included in the repository -- no external build tools required.
+IRIS is fully self-hosted. The bootstrap binary is included in the repository --
+no external build tools required.
 
 ```bash
-# Clone
 git clone https://github.com/boj/iris.git
 cd iris
 
-# Add iris-stage0 to your PATH
-export PATH="$PWD/bootstrap:$PATH"
-
 # Run a program
-iris-stage0 run examples/algorithms/factorial.iris 10
-
-# Compile a program
-iris-stage0 compile myprogram.iris
+bootstrap/iris-stage0 run examples/algorithms/factorial.iris 10
 
 # Build a native binary
-iris-stage0 build myprogram.iris
+bootstrap/iris build examples/algorithms/factorial.iris -o factorial
+./factorial 10
 
-# Run the test suite
-iris-stage0 test
-
-# Rebuild the bootstrap binary (self-hosted)
-iris-stage0 rebuild
+# Run tests
+bootstrap/iris-stage0 test src/iris-programs/
 ```
 
-### System Requirements {#requirements}
+### Requirements {#requirements}
 
-- x86-64 Linux (for the pre-built bootstrap binary)
-- Lean 4 (optional, for rebuilding the proof kernel)
+- x86-64 Linux
+- Lean 4 (optional -- only needed for the proof kernel)
 
-### Component Structure {#components}
+### Repository Layout {#layout}
 
-IRIS is fully self-hosted with the Lean 4 proof kernel as an IPC subprocess:
-
-| Component | Description |
-|-----------|-------------|
-| `bootstrap/iris-stage0` | Frozen self-hosted binary: compiler, evaluator, all CLI commands |
-| `bootstrap/*.json` | Pre-compiled pipeline (tokenizer, parser, lowerer) |
-| `lean/IrisKernel` (Lean 4) | Proof kernel: 20 inference rules, IPC server |
-| `src/iris-programs/` | 372 `.iris` programs: stdlib, compiler passes, evolution, LSP, deploy |
-
-## Examples {#examples}
-
-The `examples/` directory contains 90+ programs across 20 categories, ported from classic programming language examples:
-
-| Category | Programs | Highlights |
-|----------|----------|------------|
-| **algorithms/sorting** | bubble, insertion, merge, quick, selection | All major O(n^2) and O(n log n) sorts |
-| **algorithms/searching** | binary search, linear search | With lower_bound variant |
-| **algorithms/dynamic-programming** | edit distance, LCS, knapsack, coin change, stairs | Row-by-row DP with scan_left |
-| **algorithms/graph** | DFS, BFS, topological sort, Dijkstra, A* | Adjacency list representation |
-| **algorithms/math** | sieve, prime factors, Newton sqrt, matrix multiply, Pascal's triangle | |
-| **algorithms/** | union-find, KMP string matching, sudoku solver | Complex data structures |
-| **data-structures** | stack, queue, BST, priority queue, trie | Functional implementations |
-| **string-processing** | ROT13, Caesar cipher, RLE, palindrome, anagram, Morse code | Uses str_from_chars for string output |
-| **functional-patterns** | Church encoding, composition, currying, lazy streams, Y combinator, state monad, monad transformers | Writer/Reader/Either/List monads |
-| **classic-programs** | FizzBuzz, hello world, Tower of Hanoi, Roman numerals, temperature converter, base converter, Brainfuck interpreter, Luhn algorithm | |
-| **games-puzzles** | N-queens, Game of Life, tic-tac-toe (with minimax AI), maze solver | |
-| **concurrency** | dining philosophers, pipeline, MapReduce | Concurrent patterns as simulations |
-| **interpreters** | Lisp interpreter, regex matcher | S-expression eval, backtracking regex |
-| **parsers** | arithmetic parser, JSON parser | Recursive descent with fold_while |
-| **compression** | Huffman coding | Full encode pipeline |
-| **numerical** | integration (trapezoidal, Simpson's, midpoint, Monte Carlo) | Float64 math |
-| **simulation** | cellular automata (Rule 110/30), particle physics | 1D CA, N-body gravity |
-| **database** | relational algebra | select, project, join, group_by, order_by, aggregates |
-| **crypto** | hash functions (DJB2, FNV-1a, Jenkins) + Rabin-Karp search | |
-| **design-patterns** | visitor/AST walker | eval, count, depth, pretty-print, constant folding |
-| **knowledge-graph** | taxonomy reasoning | Transitive is_a, property inheritance via kg_* primitives |
-| **self-modifying** | self-inspecting optimizer | Uses self_graph, graph_nodes, graph_get_kind |
-
-```bash
-# Run any example
-iris run examples/algorithms/sorting/quicksort.iris
-iris run examples/games-puzzles/game_of_life.iris
-iris run examples/interpreters/lisp.iris
-```
-
-## Benchmarks {#benchmarks}
-
-IRIS implements all 10 programs from the [Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/):
-
-| Benchmark | Description | IRIS Approach |
-|-----------|-------------|---------------|
-| **n-body** | Planetary orbit simulation | Float64 math, fold, tuples, cross-fragment calls |
-| **spectral-norm** | Spectral norm of infinite matrix | Float64, fold, list_nth |
-| **fannkuch-redux** | Pancake flipping puzzle | Integer lists, fold, list_take/drop/append |
-| **binary-trees** | Tree allocation + checksum | pow, map, fold, list_range |
-| **fasta** | DNA sequence generation | String ops, fold, LCG random |
-| **reverse-complement** | DNA reverse complement | String ops, fold, str_eq, str_slice |
-| **k-nucleotide** | DNA subsequence frequencies | str_slice, fold, map_insert/get |
-| **pidigits** | Compute pi digits | Integer arithmetic, Machin's formula |
-| **regex-redux** | DNA pattern matching | str_contains, str_replace (no regex engine) |
-| **thread-ring** | Token passing ring | fold, modular arithmetic |
-
-### Run the benchmarks
-
-```bash
-# All 10 benchmarks
-iris-stage0 test benchmarks/
-
-# Individual benchmark
-iris-stage0 run benchmark/n-body/n-body.iris
-```
+| Path | Description |
+|------|-------------|
+| `bootstrap/iris-stage0` | Frozen bootstrap binary |
+| `bootstrap/iris-native` | Self-hosted native compiler |
+| `bootstrap/iris-build` | Multi-file build tool |
+| `bootstrap/*.json` | Pre-compiled pipeline stages |
+| `src/iris-programs/` | 290 `.iris` source files |
+| `examples/` | 119 example programs |
+| `lean/` | Lean 4 proof kernel |
