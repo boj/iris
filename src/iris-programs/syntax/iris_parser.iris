@@ -785,7 +785,15 @@ let parse tokens src =
                           else if (list_nth tokens es.0).0 == 35 then (es.0, 1)
                           else (es.0 + 1, 0))
                         dend in
-                      let no = ((6, pl, 0), os) in
+                      -- Collect parameter tokens between name and '='
+                      let n_skip = ep.0 - np - 1 in
+                      let let_params = if n_skip == 0 then 0
+                        else fold mt (\ps j ->
+                          if j >= n_skip then ps
+                          else let pt = list_nth tokens (np + 1 + j) in
+                            if pt.0 == 2 then list_append ps pt.1 else ps
+                        ) n_skip in
+                      let no = ((6, pl, let_params), os) in
                       let no2 = ((9, mbp, 0), no) in
                       (ep.0 + 1, vs, vsp, no2, osp + 2, 0, 0, 0)
                     else (pos, vs, vsp, os, osp, 2, mbp, 1)
@@ -1161,10 +1169,21 @@ let parse tokens src =
                 if rd.3 > 0 then
                   let top = ((rd.2).0) in
                   if top.0 == 6 then
-                    -- let value is on value stack
+                    -- let value is on value stack; wrap in Lambdas if params present
+                    let lp = top.2 in
+                    let new_vs = if lp == 0 then rd.0
+                      else let nlp = tuple_len lp in
+                        let vl_top = (rd.0).0 in
+                        let vl_rest = (rd.0).1 in
+                        let lam = fold vl_top (\acc j ->
+                          let pi = nlp - 1 - j in
+                          if pi < 0 then acc else (13, list_nth lp pi, list_append mt acc)
+                        ) nlp in
+                        let wrapped = if top.1 < 0 then (98, lam) else lam in
+                        (wrapped, vl_rest) in
                     let no = ((11, top.1, 0), ((rd.2).1)) in
                     let no2 = ((9, 0, 0), no) in
-                    (pos + 1, rd.0, rd.1, no2, rd.3 + 1, 0, 0, 0)
+                    (pos + 1, new_vs, rd.1, no2, rd.3 + 1, 0, 0, 0)
                   else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
                 else (pos, rd.0, rd.1, rd.2, rd.3, 2, mbp, 1)
 
