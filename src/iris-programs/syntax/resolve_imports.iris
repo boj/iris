@@ -1,0 +1,80 @@
+-- resolve_imports.iris — Source-level import resolver for iris-native.
+-- Resolves the FIRST import "path" as Alias found anywhere in the file.
+-- Run repeatedly until no imports remain (multi-pass resolution).
+--
+-- Usage: iris-native resolve_imports.iris <source_path>
+-- Output: source with first import inlined and qualifier stripped.
+
+-- Find next newline from pos. Returns position or len.
+let find_nl src pos len =
+  fold len (\r i -> if r < len then r else if i < pos then r else if i >= len then r else if char_at src i == 10 then i else r) len
+
+-- Find closing quote from pos.
+let find_quote src pos len =
+  fold (0 - 1) (\r i -> if r >= 0 then r else if i < pos then r else if i >= len then r else if char_at src i == 34 then i else r) len
+
+-- Check if src[off..] starts with "import " (7 chars)
+let is_import src off len =
+  if off + 7 > len then 0
+  else if char_at src off != 105 then 0 else if char_at src (off + 1) != 109 then 0
+  else if char_at src (off + 2) != 112 then 0 else if char_at src (off + 3) != 111 then 0
+  else if char_at src (off + 4) != 114 then 0 else if char_at src (off + 5) != 116 then 0
+  else if char_at src (off + 6) != 32 then 0 else 1
+
+-- Check if src[off..] starts with " as "
+let is_as src off len =
+  if off + 4 > len then 0
+  else if char_at src off != 32 then 0 else if char_at src (off + 1) != 97 then 0
+  else if char_at src (off + 2) != 115 then 0 else if char_at src (off + 3) != 32 then 0
+  else 1
+
+-- Strip all "prefix." occurrences from src
+let strip_qual src prefix =
+  let slen = str_len src in let plen = str_len prefix in
+  if plen == 0 then src
+  else let result = fold ("", 0) (\state step ->
+    let acc = state.0 in let pos = state.1 in
+    if pos >= slen then state
+    else let matches = fold 1 (\m j ->
+        if m == 0 then 0 else if j >= plen then m
+        else if pos + j >= slen then 0
+        else if char_at src (pos + j) != char_at prefix j then 0 else m) plen in
+      if matches == 1 then
+        if pos + plen < slen then
+          if char_at src (pos + plen) == 46 then (acc, pos + plen + 1)
+          else (str_concat acc (str_slice src pos (pos + 1)), pos + 1)
+        else (str_concat acc (str_slice src pos (pos + 1)), pos + 1)
+      else (str_concat acc (str_slice src pos (pos + 1)), pos + 1)
+  ) slen in result.0
+
+let main path =
+  let src = file_read path in
+  let len = str_len src in
+  -- Find first import line (scan all lines)
+  let found = fold (0, 0 - 1) (\state step ->
+    let pos = state.0 in let imp_at = state.1 in
+    if imp_at >= 0 then state
+    else if pos >= len then state
+    else let nl = find_nl src pos len in
+      if is_import src pos len == 1 then (nl + 1, pos)
+      else (nl + 1, imp_at)
+  ) len in
+  let imp_at = found.1 in
+  if imp_at < 0 then src
+  else
+    let nl = find_nl src imp_at len in
+    let ps = imp_at + 8 in
+    let qc = find_quote src ps len in
+    if qc < 0 then src
+    else
+      let imp_path = str_slice src ps qc in
+      let after_q = qc + 1 in
+      let alias = if is_as src after_q len == 1 then str_slice src (after_q + 4) nl else "" in
+      let imp_src = file_read imp_path in
+      -- Remove the import line: before + after
+      let before = str_slice src 0 imp_at in
+      let after = if nl < len then str_slice src (nl + 1) len else "" in
+      let rest = str_concat before after in
+      -- Strip qualifier
+      let stripped = if str_len alias > 0 then strip_qual rest alias else rest in
+      str_concat imp_src stripped

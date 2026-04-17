@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# iris-build — Build and run multi-file IRIS programs.
+#
+# Resolves imports, then compiles and runs via iris-native.
+#
+# Usage:
+#   iris-build run <source.iris> [args...]     Run a program (resolves imports)
+#   iris-build compile <source.iris> -o out     Compile to native binary
+#
+# Import syntax in .iris files:
+#   import "path/to/module.iris" as Module
+#   Module.func arg   →   func arg (qualifier stripped)
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+IRIS_NATIVE="${IRIS_NATIVE:-$DIR/iris-native}"
+RESOLVE="$DIR/../src/iris-programs/syntax/resolve_imports.iris"
+
+CMD="${1:-run}"
+shift
+
+if [ "$CMD" = "run" ]; then
+  SOURCE="$1"; shift
+  TMPDIR=$(mktemp -d)
+  trap "rm -rf $TMPDIR" EXIT
+
+  # Multi-pass import resolution
+  cp "$SOURCE" "$TMPDIR/current.iris"
+  for pass in 1 2 3 4 5 6 7 8; do
+    if grep -q '^import ' "$TMPDIR/current.iris" 2>/dev/null; then
+      "$IRIS_NATIVE" "$RESOLVE" "$TMPDIR/current.iris" 2>/dev/null > "$TMPDIR/next.iris"
+      mv "$TMPDIR/next.iris" "$TMPDIR/current.iris"
+    else
+      break
+    fi
+  done
+
+  "$IRIS_NATIVE" "$TMPDIR/current.iris" "$@"
+
+elif [ "$CMD" = "compile" ]; then
+  SOURCE="$1"; shift
+  TMPDIR=$(mktemp -d)
+  trap "rm -rf $TMPDIR" EXIT
+
+  cp "$SOURCE" "$TMPDIR/current.iris"
+  for pass in 1 2 3 4 5 6 7 8; do
+    if grep -q '^import ' "$TMPDIR/current.iris" 2>/dev/null; then
+      "$IRIS_NATIVE" "$RESOLVE" "$TMPDIR/current.iris" 2>/dev/null > "$TMPDIR/next.iris"
+      mv "$TMPDIR/next.iris" "$TMPDIR/current.iris"
+    else
+      break
+    fi
+  done
+
+  "$IRIS_NATIVE" --compile "$TMPDIR/current.iris" "$@"
+
+else
+  echo "Usage: iris-build run <source.iris> [args...]"
+  echo "       iris-build compile <source.iris> -o out"
+  exit 1
+fi
