@@ -1,0 +1,43 @@
+-- Float64 standard library
+-- IEEE 754 double-precision floating point via named functions.
+-- All float values use 64-bit representation stored as int64 bit patterns.
+
+-- Arithmetic
+-- float_add a b    : add two floats
+-- float_sub a b    : subtract b from a
+-- float_mul a b    : multiply two floats
+-- float_div a b    : divide a by b
+
+-- Comparison
+-- float_lt a b     : 1 if a < b, else 0
+-- float_gt a b     : 1 if a > b, else 0
+-- float_eq a b     : 1 if a == b, else 0
+
+-- Conversion
+-- float_neg f      : negate a float
+-- float_to_int f   : truncate float to integer
+-- int_to_float n   : convert integer to float
+
+-- Convert a float to its string representation (6 decimal places)
+let float_to_string f =
+  let neg = float_lt f 0.0 in
+  let abs_f = if neg == 1 then float_neg f else f in
+  let int_part = float_to_int abs_f in
+  let frac = float_sub abs_f (int_to_float int_part) in
+  let frac6 = float_to_int (float_mul frac 1000000.0) in
+  let sign = if neg == 1 then str_concat "-" (int_to_string int_part) else int_to_string int_part in
+  let fp = int_to_string frac6 in
+  let pad = fold "" (\s i -> if str_len (str_concat s fp) < 6 then str_concat s "0" else s) 6 in
+  str_concat sign (str_concat "." (str_concat pad fp))
+
+-- Parse a string to float (basic: integer part + optional decimal)
+let string_to_float s =
+  let len = str_len s in
+  let dot_pos = fold (0 - 1) (\r i -> if r >= 0 then r else if char_at s i == 46 then i else r) len in
+  if dot_pos < 0 then int_to_float (fold 0 (\acc i -> acc * 10 + char_at s i - 48) len)
+  else
+    let int_part = fold 0 (\acc i -> if i >= dot_pos then acc else acc * 10 + char_at s i - 48) dot_pos in
+    let frac_digits = len - dot_pos - 1 in
+    let frac_raw = fold 0 (\acc i -> acc * 10 + char_at s (dot_pos + 1 + i) - 48) frac_digits in
+    let scale = fold 1 (\acc i -> acc * 10) frac_digits in
+    float_add (int_to_float int_part) (float_div (int_to_float frac_raw) (int_to_float scale))

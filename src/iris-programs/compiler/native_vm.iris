@@ -915,6 +915,29 @@ let emit_vm_core =
     0x49, 0x89, 0xdc                  -- mov r12, rbx
   ) in
 
+  -- APPLY2 (45): 2-arg indirect call. Pop closure_pc, arg2, arg1, call with both.
+  let op_apply2_body = bytes_from_ints (
+    -- Pop closure PC
+    0x49, 0x8b, 0x5d, 0x00,           -- mov rbx, [r13] (closure_pc)
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    -- Save return state
+    0x49, 0x8d, 0x44, 0x24, 0x01,     -- lea rax, [r12+1]
+    0x50,                              -- push rax
+    0xff, 0xb5, 0x08, 0x00, 0xff, 0xff, -- push [rbp-65528] (save locals[1])
+    0xff, 0xb5, 0x00, 0x00, 0xff, 0xff, -- push [rbp-65536] (save locals[0])
+    0x48, 0xff, 0x85, 0x48, 0xff, 0xff, 0xff, -- inc call depth
+    -- Pop arg2 → locals[1]
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x89, 0x85, 0x08, 0x00, 0xff, 0xff, -- mov [rbp-65528], rax
+    -- Pop arg1 → locals[0]
+    0x49, 0x8b, 0x45, 0x00,           -- mov rax, [r13]
+    0x49, 0x83, 0xc5, 0x08,           -- add r13, 8
+    0x48, 0x89, 0x85, 0x00, 0x00, 0xff, 0xff, -- mov [rbp-65536], rax
+    -- Jump to closure PC
+    0x49, 0x89, 0xdc                  -- mov r12, rbx
+  ) in
+
   -- PUSH_FLOAT (49, scaled): convert scaled_int/1000000 to IEEE 754 double bits. pc += 2
   let op_push_float_body = bytes_from_ints (
     0x49, 0x8d, 0x5c, 0x24, 0x01,     -- lea rbx, [r12+1]
@@ -1036,13 +1059,13 @@ let emit_vm_core =
     (35, op_tget_dyn_body), (36, op_int_to_string_body),
     (39, op_file_read_body), (40, op_debug_print_body),
     (41, op_call_body), (42, op_bytes_from_ints_body),
-    (44, op_apply_body),
+    (44, op_apply_body), (45, op_apply2_body),
     (49, op_push_float_body), (50, op_fadd_body), (51, op_fsub_body),
     (52, op_fmul_body), (53, op_fdiv_body), (54, op_float_lt_body),
     (55, op_float_gt_body), (56, op_float_eq_body), (57, op_float_neg_body),
     (58, op_float_to_int_body), (59, op_int_to_float_body)
   ) in
-  let n_c = 21 in
+  let n_c = 22 in
 
   -- ============================================================
   -- Dispatch builder: uses jne rel32 (0x0f 0x85) to support large handler bodies.

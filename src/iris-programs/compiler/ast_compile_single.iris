@@ -70,8 +70,8 @@ let compile_program tree =
             let fn_idx = fold (0 - 1) (\s i -> if s >= 0 then s else if i >= list_len fns then s else let e = list_nth fns i in if e.0 == payload then i else s) (list_len fns) in
             if fn_idx >= 0 then let lam = (list_nth fns fn_idx).1 in
               if lam.0 == 13 then let ph = lam.1 in let bd = list_nth (lam.2) 0 in
-                -- Compile lambda as code segment, push entry PC
-                (((20, ph, bd), rest), bc, sc, ns, segs, fns)
+                let extra = if tuple_len lam > 3 then lam.3 else 0 in
+                (((20, ph, bd, extra), rest), bc, sc, ns, segs, fns)
               else (((0, lam), rest), bc, sc, ns, segs, fns)
             else (rest, list_concat bc (1, 0), sc, ns, segs, fns)
         else if kind == 5 then (rest, list_concat bc (1, 0), sc, ns, segs, fns)
@@ -239,7 +239,11 @@ let compile_program tree =
                         else let bd2 = il in let p2 = extra2 in let s1 = ns in let s2 = ns + 1 in
                           (((0, ina), ((6, s1), ((0, arg), ((6, s2), ((15, p1, s1), ((15, p2, s2), ((0, bd2), ((11, sc), rest)))))))), bc, sc, s2 + 1, segs, fns)
                     else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
-                  else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
+                  else
+                    -- Check scope for 2-arg dynamic closure call
+                    let f2_slot = fold (0 - 1) (\s i -> if s >= 0 then s else let ri = list_len sc - 1 - i in if ri < 0 then s else let e = list_nth sc ri in if e.0 == fn2 then e.1 else s) (list_len sc) in
+                    if f2_slot >= 0 then (((0, ina), ((0, arg), ((23, f2_slot), rest))), bc, sc, ns, segs, fns)
+                    else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
               else (((0, func), ((0, arg), rest)), bc, sc, ns, segs, fns)
           else if func.0 == 4 then
             let fn1 = func.1 in
@@ -281,7 +285,8 @@ let compile_program tree =
         else if kind == 13 then
           -- Lambda as value: compile as closure (code segment + push entry PC)
           let bd = list_nth (ast.2) 0 in
-          (((20, payload, bd), rest), bc, sc, ns, segs, fns)
+          let extra = if tuple_len ast > 3 then ast.3 else 0 in
+          (((20, payload, bd, extra), rest), bc, sc, ns, segs, fns)
         else if kind == 14 then
           let binding = (ast.2).0 in let bd = (ast.2).1 in let slot = ns in
           if binding.0 == 98 then
@@ -369,7 +374,12 @@ let compile_program tree =
       else if tag == 20 then
         -- MAKE_CLOSURE: compile Lambda body as code segment, push entry PC
         let ph = item.1 in let bd = item.2 in
-        (((0, bd), ((21, 0), rest)), (), ((ph, 0),), 1, ((bc, sc, ns), segs), fns)
+        let extra = if tuple_len item > 3 then item.3 else 0 in
+        if extra != 0 then
+          -- 2-param closure: scope has both params
+          (((0, bd), ((21, 0), rest)), (), ((ph, 0), (extra, 1)), 2, ((bc, sc, ns), segs), fns)
+        else
+          (((0, bd), ((21, 0), rest)), (), ((ph, 0),), 1, ((bc, sc, ns), segs), fns)
       else if tag == 21 then
         -- MAKE_CLOSURE_END: append HALT, merge with JMP skip, push entry PC
         let fbc = list_concat bc (0,) in
@@ -378,8 +388,11 @@ let compile_program tree =
         let entry_pc = sl + 2 in
         (rest, list_concat (list_concat (list_concat sbc (16, 2 + fl)) fbc) (1, entry_pc), ssc, sns, segs.1, fns)
       else if tag == 22 then
-        -- APPLY_VAR: emit LOAD slot, APPLY(44) for dynamic function call
+        -- APPLY_VAR: emit LOAD slot, APPLY(44) for 1-arg dynamic call
         (rest, list_concat bc (14, item.1, 44), sc, ns, segs, fns)
+      else if tag == 23 then
+        -- APPLY2_VAR: emit LOAD slot, APPLY2(45) for 2-arg dynamic call
+        (rest, list_concat bc (14, item.1, 45), sc, ns, segs, fns)
       else (rest, bc, sc, ns, segs, fns)
   ) 5000000 in
   list_concat (final_state.1) (0,)
